@@ -105,6 +105,7 @@ The lead never merges these without the maintainer's explicit yes in the convers
 
 - database migrations
 - changes to the public contracts in `packages/core`
+- changes to `docs/ROLES.md`, authentication, sessions, or row-level security
 - CI secrets, runners, and deployment
 - `LICENSE`, `NOTICE`, `TRADEMARK.md`
 - anything that deletes data
