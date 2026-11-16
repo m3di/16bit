@@ -29,7 +29,12 @@ const marks = {
           type: { const: 'link' },
           attrs: {
             type: 'object',
-            properties: { href: { type: 'string', pattern: '^(https?:|mailto:)' } },
+            properties: {
+              href: {
+                type: 'string',
+                pattern: '^([Hh][Tt][Tt][Pp][Ss]?|[Mm][Aa][Ii][Ll][Tt][Oo]):',
+              },
+            },
             required: ['href'],
             additionalProperties: false,
           },

@@ -270,6 +270,8 @@ describe('rich_text', () => {
     ],
     ['a non-item in a list', doc({ type: 'bulletList', content: [p(t('x'))] }), 'listItem'],
     ['an empty list', doc({ type: 'bulletList', content: [] }), 'Must not be empty'],
+    ['a doc without content', { type: 'doc' }, 'Expected an array at content'],
+    ['a doc with null content', { type: 'doc', content: null }, 'Expected an array at content'],
     ['a non-doc root', p(t('x')), 'Expected a doc'],
     ['a string', 'hello', 'Expected a doc'],
   ])('rejects %s', (_, value, message) => {
@@ -338,11 +340,43 @@ describe('rich_text', () => {
         'const x = 1',
         '```',
         '',
-        'see [docs](https://16bit.info)  ',
+        'see [docs](<https://16bit.info>)  ',
         'end',
       ].join('\n'),
     )
     expect(richTextType.render(null, {})).toBe('')
+  })
+
+  it('escapes text in the Markdown so it cannot form links or markup', () => {
+    const md = (...content: unknown[]) => richTextType.render(doc(p(...content)) as RichTextDoc, {})
+    // A text node that looks like a link stays text, so the href allowlist cannot be skipped.
+    expect(md(t('[x](javascript:alert(1))'))).toBe('\\[x\\](javascript:alert(1))')
+    expect(md(t('<javascript:alert(1)> *a* _b_ `c` \\'))).toBe(
+      '\\<javascript:alert(1)\\> \\*a\\* \\_b\\_ \\`c\\` \\\\',
+    )
+    // Link text is escaped too, and the destination cannot be closed early.
+    const link = (href: string) => [{ type: 'link', attrs: { href } }]
+    expect(md(t('[a]', link('https://a.com/x)y>z')))).toBe('[\\[a\\]](<https://a.com/x)y%3Ez>)')
+    // Code spans and code blocks fence longer than any backtick run inside them.
+    expect(md(t('a ` [b](c)', [{ type: 'code' }, { type: 'bold' }]))).toBe('**``a ` [b](c)``**')
+    expect(md(t('`x', [{ type: 'code' }]))).toBe('`` `x ``')
+    const block = { type: 'codeBlock', content: [t('```\n[x](javascript:1)')] }
+    expect(richTextType.render(doc(block) as RichTextDoc, {})).toBe(
+      '````\n```\n[x](javascript:1)\n````',
+    )
+  })
+
+  it('matches link schemes in the JSON Schema without regard to case, as the validator does', () => {
+    const pattern = new RegExp(
+      JSON.stringify(richTextType.jsonSchema({})).match(/"pattern":"([^"]+)"/)?.[1] ?? '$^',
+    )
+    expect(
+      accepts(schema, doc(p(t('x', [{ type: 'link', attrs: { href: 'HTTPS://a.com' } }])))),
+    ).toBe(true)
+    for (const href of ['HTTPS://a.com', 'http://a.com', 'MailTo:a@b.c']) {
+      expect(pattern.test(href)).toBe(true)
+    }
+    expect(pattern.test('javascript:alert(1)')).toBe(false)
   })
 
   it('emits a closed JSON Schema for agents', () => {

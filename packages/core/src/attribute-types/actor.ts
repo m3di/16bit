@@ -33,8 +33,7 @@ export const actorType: AttributeType<'actor', ActorConfig, string[]> = {
   sortKey: (value) => [...value].sort()[0] ?? '',
   groupKey: (value) => [...value].sort().join(','),
   summaries: [...BASE_SUMMARIES],
-  jsonSchema: (config) => ({
-    ...distinctListJsonSchema({ type: 'string', description: 'Principal ID' }, maxValues(config)),
-  }),
+  jsonSchema: (config) =>
+    distinctListJsonSchema({ type: 'string', description: 'Principal ID' }, maxValues(config)),
   render: (value) => (value === null ? '' : value.join(', ')),
 }

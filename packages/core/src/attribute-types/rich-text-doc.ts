@@ -272,7 +272,9 @@ function utf8Length(text: string): number {
 function checkDoc(value: unknown) {
   if (!isRecord(value) || value.type !== 'doc') throw new Invalid([], 'Expected a doc node')
   keysOnly(value, ['type', 'content'], [])
-  checkBlocks(list(value, 'content', [], false), ['content'], 2)
+  // Required, but may be empty: `{ type: 'doc', content: [] }` is the empty value.
+  if (!Array.isArray(value.content)) throw new Invalid(['content'], 'Expected an array')
+  checkBlocks(value.content as unknown[], ['content'], 2)
   // After the walk, so the depth cap bounds what is serialised.
   if (utf8Length(JSON.stringify(value)) > RICH_TEXT_MAX_BYTES) {
     throw new Invalid([], `Rich text is limited to ${String(RICH_TEXT_MAX_BYTES)} bytes of JSON`)
@@ -313,23 +315,42 @@ export function richTextPlainText(doc: RichTextDoc): string {
   return doc.content.flatMap(blockLines).join('\n')
 }
 
-const MARK_WRAP: Record<Exclude<RichTextMark['type'], 'link'>, string> = {
-  bold: '**',
-  italic: '*',
-  code: '`',
+const MARK_WRAP: Record<'bold' | 'italic', string> = { bold: '**', italic: '*' }
+
+/** Backslash-escapes the characters that could start Markdown links, emphasis, code or HTML. */
+const escapeMarkdown = (text: string) => text.replace(/[\\`*_[\]<>]/g, '\\$&')
+
+/** The longest run of backticks in the text, so a fence or code span can be made longer. */
+const longestBacktickRun = (text: string) =>
+  Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length))
+
+/** A code span that holds any text: backslashes do not escape inside one, so lengthen the fence. */
+function codeSpan(text: string): string {
+  const fence = '`'.repeat(longestBacktickRun(text) + 1)
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : ''
+  return `${fence}${pad}${text}${pad}${fence}`
 }
+
+/** A link destination in angle brackets, with the characters that could end it encoded. */
+const linkDestination = (href: string) =>
+  `<${href.replace(/[\s<>\\]/g, (c) => encodeURIComponent(c))}>`
 
 function markdownInline(nodes: readonly RichTextInline[] | undefined): string {
   return (nodes ?? [])
     .map((node) => {
       if (node.type === 'hardBreak') return '  \n'
-      let text = node.text
+      const marks = node.marks ?? []
+      // Text is escaped so it can never produce a link that skips the href allowlist.
+      let text = marks.some((m) => m.type === 'code')
+        ? codeSpan(node.text)
+        : escapeMarkdown(node.text)
       let href: string | undefined
-      for (const mark of node.marks ?? []) {
+      for (const mark of marks) {
         if (mark.type === 'link') href = mark.attrs.href
-        else text = `${MARK_WRAP[mark.type]}${text}${MARK_WRAP[mark.type]}`
+        else if (mark.type !== 'code')
+          text = `${MARK_WRAP[mark.type]}${text}${MARK_WRAP[mark.type]}`
       }
-      return href === undefined ? text : `[${text}](${href})`
+      return href === undefined ? text : `[${text}](${linkDestination(href)})`
     })
     .join('')
 }
@@ -343,8 +364,12 @@ function markdownBlock(block: RichTextBlock): string[] {
       return [markdownInline(block.content)]
     case 'heading':
       return [`${'#'.repeat(block.attrs.level)} ${markdownInline(block.content)}`]
-    case 'codeBlock':
-      return ['```', (block.content ?? []).map((n) => n.text).join(''), '```']
+    case 'codeBlock': {
+      const code = (block.content ?? []).map((n) => n.text).join('')
+      // Longer than any backtick run inside, so the code cannot close the fence early.
+      const fence = '`'.repeat(Math.max(3, longestBacktickRun(code) + 1))
+      return [fence, code, fence]
+    }
     case 'bulletList':
     case 'orderedList': {
       const start = block.type === 'orderedList' ? (block.attrs?.start ?? 1) : 1
