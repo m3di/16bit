@@ -1,8 +1,9 @@
 import { sql, type Kysely } from 'kysely'
 import { Migrator, NO_MIGRATIONS } from 'kysely/migration'
-import { PALETTE_COLORS } from '@16bit/core'
+import { attributeSchema, indexEntries, PALETTE_COLORS } from '@16bit/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createDb, migrateToLatest, type Database } from './database.ts'
+import { backfill } from './migrations/0002_item_index.ts'
 import { migrations } from './migrations/index.ts'
 import { createTestDatabase } from './test-database.ts'
 
@@ -15,7 +16,8 @@ const M0_TABLES = [
   'revision',
   'workspace',
 ]
-const SCOPED_TABLES = M0_TABLES.filter((t) => t !== 'workspace')
+const TABLES = [...M0_TABLES, 'item_index'].sort()
+const SCOPED_TABLES = TABLES.filter((t) => t !== 'workspace')
 
 let db: Kysely<Database>
 let drop: () => Promise<void>
@@ -81,11 +83,11 @@ async function seedHub(): Promise<void> {
 }
 
 describe('migrations', () => {
-  it('applies to an empty database and creates the M0 tables', async () => {
+  it('applies to an empty database and creates every table', async () => {
     expect(await tables()).toEqual([])
 
-    expect(await migrateToLatest(db)).toEqual(['0001_initial'])
-    expect(await tables()).toEqual(M0_TABLES)
+    expect(await migrateToLatest(db)).toEqual(['0001_initial', '0002_item_index'])
+    expect(await tables()).toEqual(TABLES)
   })
 
   it('is a no-op when already up to date', async () => {
@@ -398,5 +400,171 @@ describe('schema constraints', () => {
       .where('id', '=', 'w1')
       .executeTakeFirstOrThrow()
     expect(ws.next_revision_seq).toBe(1)
+  })
+})
+
+describe('0002_item_index', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+
+  // One indexed attribute per M0 type, two date configs, and one unindexed attribute.
+  const attributes = [
+    { id: 'title', type: 'text', config: {}, indexed: true },
+    { id: 'points', type: 'number', config: {}, indexed: true },
+    { id: 'done', type: 'boolean', config: {}, indexed: true },
+    { id: 'due', type: 'date', config: {}, indexed: true },
+    { id: 'at', type: 'date', config: { includeTime: true }, indexed: true },
+    {
+      id: 'stage',
+      type: 'select',
+      config: { options: [{ id: 'todo', label: 'To do' }] },
+      indexed: true,
+    },
+    { id: 'notes', type: 'text', config: {}, indexed: false },
+  ] as const
+  // Indexed, but not shown on f1: the write path does not index it, so neither does the backfill.
+  const offFolder = { id: 'off', type: 'number', config: {}, indexed: true } as const
+  const items: Record<string, Record<string, unknown>> = {
+    i1: {
+      title: 'Hello',
+      points: 2.5,
+      done: false,
+      due: '2026-11-16',
+      at: '2026-11-16T10:00:00+03:30',
+      stage: 'todo',
+      notes: 'not indexed',
+      off: 1,
+    },
+    i2: { title: 'Other', points: -3, done: true },
+    // Wrong JSON types are skipped instead of failing the migration.
+    i3: { title: 7, points: 'x', done: 'yes' },
+  }
+
+  async function seedItems(): Promise<void> {
+    await seedHub()
+    await db
+      .insertInto('attribute')
+      .values(
+        [...attributes, offFolder].map((a) => ({
+          workspace_id: 'w1',
+          hub_id: 'h1',
+          name: a.id,
+          id: a.id,
+          type: a.type,
+          config: JSON.stringify(a.config),
+          indexed: a.indexed,
+        })),
+      )
+      .execute()
+    await db
+      .insertInto('folder_attribute')
+      .values(
+        attributes.map((a, position) => ({
+          workspace_id: 'w1',
+          hub_id: 'h1',
+          folder_id: 'f1',
+          attribute_id: a.id,
+          position,
+        })),
+      )
+      .execute()
+    await db
+      .insertInto('item')
+      .values(
+        Object.entries(items).map(([id, values], n) => ({
+          workspace_id: 'w1',
+          id,
+          hub_id: 'h1',
+          folder_id: 'f1',
+          seq_id: n + 1,
+          values: JSON.stringify(values),
+          updated_by: 'p1',
+        })),
+      )
+      .execute()
+  }
+
+  /** What the write path writes, from the core projection. */
+  function expected() {
+    const rows: { attribute_id: string; item_id: string; ord: number; value: string }[] = []
+    for (const [itemId, values] of Object.entries(items)) {
+      if (itemId === 'i3') continue
+      for (const a of attributes) {
+        const value = values[a.id]
+        if (value === undefined) continue
+        const attribute = attributeSchema.parse({
+          ...a,
+          workspaceId: 'w1',
+          hubId: 'h1',
+          name: a.id,
+        })
+        for (const e of indexEntries(attribute, value as string | number | boolean)) {
+          rows.push({ attribute_id: a.id, item_id: itemId, ord: e.ord, value: String(e.value) })
+        }
+      }
+    }
+    return rows.sort((x, y) =>
+      `${x.item_id}${x.attribute_id}`.localeCompare(`${y.item_id}${y.attribute_id}`),
+    )
+  }
+
+  async function actual() {
+    const { rows } = await sql<{
+      attribute_id: string
+      item_id: string
+      ord: number
+      value: string
+    }>`
+      SELECT attribute_id, item_id, ord,
+        coalesce(num::text, txt,
+          to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) AS value
+      FROM item_index WHERE workspace_id = 'w1'
+    `.execute(db)
+    return rows.sort((x, y) =>
+      `${x.item_id}${x.attribute_id}`.localeCompare(`${y.item_id}${y.attribute_id}`),
+    )
+  }
+
+  it('backfills existing items exactly as the write path projects them', async () => {
+    expect((await migrator().migrateTo('0001_initial')).error).toBeUndefined()
+    await seedItems()
+    await migrateToLatest(db)
+    expect(await actual()).toEqual(expected())
+  })
+
+  it('backfills a calendar date as UTC midnight in any session time zone', async () => {
+    await migrateToLatest(db)
+    await seedItems()
+    await db.connection().execute(async (conn) => {
+      await sql`SET TIME ZONE 'Pacific/Kiritimati'`.execute(conn)
+      await backfill(conn as unknown as Kysely<unknown>)
+    })
+    expect(await actual()).toEqual(expected())
+  })
+
+  it('removes an item’s index rows with the item, and keeps one typed column per row', async () => {
+    await migrateToLatest(db)
+    await seedItems()
+    await backfill(db as unknown as Kysely<unknown>)
+    await db.deleteFrom('item').where('id', '=', 'i1').execute()
+    expect((await actual()).filter((r) => r.item_id === 'i1')).toEqual([])
+    await expect(
+      sql`INSERT INTO item_index (workspace_id, attribute_id, item_id, num, txt) VALUES ('w1', 'title', 'i2', 1, 'x')`.execute(
+        db,
+      ),
+    ).rejects.toThrow(/item_index_check/)
+  })
+
+  it('allows several rows per item and attribute, numbered by ord', async () => {
+    await migrateToLatest(db)
+    await seedItems()
+    await sql`INSERT INTO item_index (workspace_id, attribute_id, item_id, ord, txt) VALUES ('w1', 'stage', 'i2', 0, 'a'), ('w1', 'stage', 'i2', 1, 'b')`.execute(
+      db,
+    )
+    await expect(
+      sql`INSERT INTO item_index (workspace_id, attribute_id, item_id, ord, txt) VALUES ('w1', 'stage', 'i2', 1, 'c')`.execute(
+        db,
+      ),
+    ).rejects.toThrow(/item_index_pkey/)
   })
 })

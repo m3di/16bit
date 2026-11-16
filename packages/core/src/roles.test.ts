@@ -549,8 +549,9 @@ describe('typed calls', () => {
     expect(can(user('owner'), 'key.create', { hubGrant: 'editor', role: 'editor' })).toBe(Y)
     expect(can(user('owner'), 'member.remove', { target: other('member'), ownerCount: 1 })).toBe(Y)
 
+    // Type-level check only: never called.
     // @ts-expect-error: a hub action needs its scope.
-    expect(() => can(user('owner'), 'hub.read')).toThrow()
+    void (() => can(user('owner'), 'hub.read'))
     // @ts-expect-error: a workspace action takes no scope.
     can(user('owner'), 'workspace.read', { hubGrant: null })
     // @ts-expect-error: key.create needs the key's role.

@@ -14,7 +14,7 @@ export const textType: AttributeType<'text', TextConfig, string> = {
   valueSchema: (config) => z.string().max(config.maxLength ?? TEXT_MAX_LENGTH),
   isEmpty: (value) => value === '',
   indexProjection: 'txt',
-  project: (value) => value,
+  project: (value) => [value],
   filterOperators: ['eq', 'neq', 'contains', 'not_contains', 'starts_with', ...EMPTY_OPERATORS],
   sortKey: (value) => value.toLowerCase(),
   groupKey: (value) => value,

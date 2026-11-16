@@ -3,7 +3,7 @@ import { Migrator } from 'kysely/migration'
 import pg from 'pg'
 import { migrations } from './migrations/index.ts'
 
-// Row types for the M0 tables. Column names are snake_case as in the database;
+// Row types for the tables. Column names are snake_case as in the database;
 // the wire shapes in packages/core are camelCase and mapped at the edge.
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>
@@ -68,6 +68,17 @@ export interface ItemTable {
   updated_by: string
 }
 
+/** Derived typed copies of indexed values (D6). Exactly one of num, txt, ts is set. */
+export interface ItemIndexTable {
+  workspace_id: string
+  attribute_id: string
+  item_id: string
+  ord: Generated<number>
+  num: number | null
+  txt: string | null
+  ts: ColumnType<Date | null, Date | string | null, Date | string | null>
+}
+
 export interface RevisionTable {
   workspace_id: string
   seq: number
@@ -86,6 +97,7 @@ export interface Database {
   attribute: AttributeTable
   folder_attribute: FolderAttributeTable
   item: ItemTable
+  item_index: ItemIndexTable
   revision: RevisionTable
 }
 

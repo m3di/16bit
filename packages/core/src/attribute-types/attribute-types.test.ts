@@ -54,7 +54,7 @@ describe('text', () => {
     expect(textType.isEmpty('', config)).toBe(true)
     expect(textType.isEmpty(' ', config)).toBe(false)
     expect(textType.sortKey('Banana', config) > textType.sortKey('apple', config)).toBe(true)
-    expect(textType.project('Hi', config)).toBe('Hi')
+    expect(textType.project('Hi', config)).toEqual(['Hi'])
   })
 })
 
@@ -103,7 +103,7 @@ describe('number', () => {
 
   it('projects to the num column and sorts numerically', () => {
     expect(numberType.indexProjection).toBe('num')
-    expect(numberType.project(3, plain)).toBe(3)
+    expect(numberType.project(3, plain)).toEqual([3])
     expect(numberType.sortKey(10, plain) > numberType.sortKey(9, plain)).toBe(true)
   })
 
@@ -138,8 +138,8 @@ describe('boolean', () => {
 
   it('projects to 0 or 1 in the number column so it can be filtered (D20)', () => {
     expect(booleanType.indexProjection).toBe('num')
-    expect(booleanType.project(true, config)).toBe(1)
-    expect(booleanType.project(false, config)).toBe(0)
+    expect(booleanType.project(true, config)).toEqual([1])
+    expect(booleanType.project(false, config)).toEqual([0])
   })
 })
 
@@ -165,8 +165,10 @@ describe('date', () => {
   })
 
   it('projects to UTC and sorts by instant, not by string', () => {
-    expect(dateType.project('2026-11-16T10:00:00+02:00', withTime)).toBe('2026-11-16T08:00:00.000Z')
-    expect(dateType.project('2026-11-16', dateOnly)).toBe('2026-11-16T00:00:00.000Z')
+    expect(dateType.project('2026-11-16T10:00:00+02:00', withTime)).toEqual([
+      '2026-11-16T08:00:00.000Z',
+    ])
+    expect(dateType.project('2026-11-16', dateOnly)).toEqual(['2026-11-16T00:00:00.000Z'])
     // Later as a string, earlier as an instant.
     expect(
       dateType.sortKey('2026-11-16T10:00:00+05:00', withTime) <

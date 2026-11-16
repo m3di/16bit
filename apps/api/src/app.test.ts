@@ -674,14 +674,14 @@ describe('query items', () => {
   })
 
   it('returns 404 for a missing folder and 400 for bad input', async () => {
-    expect((await request('POST', '/v1/workspaces/w1/query', { from: 'nope' })).statusCode).toBe(
-      404,
-    )
+    const res404 = await request('POST', '/v1/workspaces/w1/query', { from: 'nope', limit: 5 })
+    expect(res404.statusCode).toBe(404)
     for (const body of [
+      { from: 'build' },
       { from: 'build', limit: 0 },
       { from: 'build', limit: 500 },
-      { from: 'build', cursor: encodeCursor(['not-a-date', 'x']) },
-      { from: 'build', where: {} },
+      { from: 'build', limit: 5, cursor: encodeCursor(['not-a-date', 'x']) },
+      { from: 'build', limit: 5, where: {} },
     ]) {
       const res = await request('POST', '/v1/workspaces/w1/query', body)
       expect(res.statusCode, JSON.stringify(body)).toBe(400)

@@ -31,7 +31,7 @@ export const selectType: AttributeType<'select', SelectConfig, string> = {
   },
   isEmpty: () => false,
   indexProjection: 'txt',
-  project: (value) => value,
+  project: (value) => [value],
   filterOperators: ['eq', 'neq', 'in', 'not_in', ...EMPTY_OPERATORS],
   // Sorts by option order, not by label. A value whose option was deleted sorts last.
   sortKey: (value, config) => {

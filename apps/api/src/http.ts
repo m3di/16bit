@@ -46,7 +46,7 @@ export function parse<T extends z.ZodType>(schema: T, input: unknown): z.output<
 
 // Cursors are opaque to clients: base64url of a JSON tuple of the last row's sort key.
 
-export function encodeCursor(key: readonly (string | number)[]): string {
+export function encodeCursor(key: readonly (string | number | null)[]): string {
   return Buffer.from(JSON.stringify(key)).toString('base64url')
 }
 
