@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "node scripts/dev.ts",
     "db:migrate": "pnpm --filter @16bit/api migrate",
+    "seed:build-hub": "pnpm --filter @16bit/api seed:build-hub",
     "lint": "eslint . --max-warnings=0 && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "tsc -p tsconfig.json && pnpm -r typecheck",
