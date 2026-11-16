@@ -1,5 +1,5 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
 import {
+  createAgentKeySchema,
   createItemSchema,
   deleteItemQuerySchema,
   idSchema,
@@ -9,11 +9,14 @@ import {
   type Folder,
   type HubDescription,
   type Page,
+  type Subject,
   type Workspace,
 } from '@16bit/core'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
+import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
+import { agentHubCheck, authenticator, workspaceActor, type Identity } from './auth.ts'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import { createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
@@ -45,12 +48,14 @@ const nameCursorSchema = z.tuple([z.string(), z.string()])
 const workspaceParams = z.object({ workspaceId: idSchema })
 const hubParams = z.object({ workspaceId: idSchema, hubId: idSchema })
 const itemParams = z.object({ workspaceId: idSchema, itemId: idSchema })
-
-const digest = (value: string) => createHash('sha256').update(value).digest()
+const keyParams = z.object({ workspaceId: idSchema, keyId: idSchema })
 
 declare module 'fastify' {
   interface FastifyRequest {
-    actor: string
+    /** Who sent the request. Set on every /v1 route. */
+    identity: Identity
+    /** The caller as a `can()` subject in the path's workspace. Set on workspace routes. */
+    principal: Subject
   }
 }
 
@@ -59,9 +64,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
   const app = Fastify({ logger: false })
-  const expectedKey = digest(options.devApiKey)
+  const authenticate = authenticator(db, options)
 
-  app.decorateRequest('actor', '')
+  app.decorateRequest('identity', null as never)
+  app.decorateRequest('principal', null as unknown as Subject)
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
@@ -94,20 +100,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   void app.register(
     (v1, _opts, done) => {
-      v1.addHook('onRequest', (request, _reply, next) => {
-        if (options.anonymousAsDevPrincipal && request.headers.authorization === undefined) {
-          request.actor = options.devPrincipalId
-          next()
-          return
-        }
-        const header = request.headers.authorization ?? ''
-        const match = /^Bearer (.+)$/.exec(header)
-        if (!match?.[1] || !timingSafeEqual(digest(match[1]), expectedKey)) {
-          next(new HttpError('unauthorized', 'A valid bearer token is required'))
-          return
-        }
-        request.actor = options.devPrincipalId
-        next()
+      v1.addHook('onRequest', async (request) => {
+        request.identity = await authenticate(request.headers.authorization)
       })
 
       v1.get('/workspaces', async (request): Promise<Page<Workspace>> => {
@@ -116,7 +110,9 @@ export function buildApp(options: AppOptions): FastifyInstance {
           .selectFrom('workspace as w')
           .innerJoin('principal as p', 'p.workspace_id', 'w.id')
           .selectAll('w')
-          .where('p.id', '=', request.actor)
+          .where('p.id', '=', request.identity.principalId)
+        if (request.identity.kind === 'agent')
+          q = q.where('w.id', '=', request.identity.workspaceId)
         if (cursor) {
           const [name, id] = decodeCursor(nameCursorSchema, cursor)
           q = q.where(sql<boolean>`(w.name, w.id) > (${name}, ${id})`)
@@ -134,13 +130,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // A workspace exists for the caller only if the caller is a principal in it.
           ws.addHook('preHandler', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            const member = await db
-              .selectFrom('principal')
-              .select('id')
-              .where('workspace_id', '=', workspaceId)
-              .where('id', '=', request.actor)
-              .executeTakeFirst()
-            if (!member) throw notFound('Workspace')
+            request.principal = await workspaceActor(db, request.identity, workspaceId)
           })
 
           ws.get('/hubs', async (request): Promise<Page<Folder>> => {
@@ -151,6 +141,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
               .selectAll()
               .where('workspace_id', '=', workspaceId)
               .where('parent_id', 'is', null)
+            // An agent sees its one hub (D28). People: hub grants arrive with #43.
+            if (request.identity.kind === 'agent') q = q.where('id', '=', request.identity.hubId)
             if (cursor) {
               const [name, id] = decodeCursor(nameCursorSchema, cursor)
               q = q.where(sql<boolean>`(name, id) > (${name}, ${id})`)
@@ -165,6 +157,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.get('/hubs/:hubId', async (request): Promise<HubDescription> => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
+            agentHubCheck(request.identity, request.principal, hubId, 'hub.read', 'Hub')
             const folders = await db
               .selectFrom('folder')
               .selectAll()
@@ -214,36 +207,69 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            return queryItems(db, workspaceId, parse(itemQuerySchema, request.body))
+            const query = parse(itemQuerySchema, request.body)
+            if (request.identity.kind === 'agent') {
+              const hubId = await folderHub(workspaceId, query.from)
+              agentHubCheck(request.identity, request.principal, hubId, 'hub.read', 'Folder')
+            }
+            return queryItems(db, workspaceId, query)
           })
 
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            const item = await createItem(
-              db,
-              workspaceId,
-              request.actor,
-              parse(createItemSchema, request.body),
-            )
+            const body = parse(createItemSchema, request.body)
+            if (request.identity.kind === 'agent') {
+              const hubId = await folderHub(workspaceId, body.folderId)
+              agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Folder')
+            }
+            const item = await createItem(db, workspaceId, request.principal.id, body)
             return reply.status(201).send(item)
           })
 
           ws.get('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
-            return getItem(db, workspaceId, itemId)
+            const item = await getItem(db, workspaceId, itemId)
+            agentHubCheck(request.identity, request.principal, item.hubId, 'hub.read', 'Item')
+            return item
           })
 
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            return patchItem(db, workspaceId, request.actor, itemId, body)
+            if (request.identity.kind === 'agent') {
+              const hubId = await itemHub(workspaceId, itemId)
+              agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Item')
+            }
+            return patchItem(db, workspaceId, request.principal.id, itemId, body)
           })
 
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { version } = parse(deleteItemQuerySchema, request.query)
-            await deleteItem(db, workspaceId, request.actor, itemId, version)
+            if (request.identity.kind === 'agent') {
+              const hubId = await itemHub(workspaceId, itemId)
+              agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Item')
+            }
+            await deleteItem(db, workspaceId, request.principal.id, itemId, version)
             return reply.status(204).send()
+          })
+
+          ws.post('/hubs/:hubId/agent-keys', async (request, reply) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const body = parse(createAgentKeySchema, request.body)
+            const created = await createAgentKey(db, workspaceId, request.principal, hubId, body)
+            return reply.status(201).header('cache-control', 'no-store').send(created)
+          })
+
+          ws.get('/hubs/:hubId/agent-keys', async (request) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const query = parse(pageQuerySchema, request.query)
+            return listAgentKeys(db, workspaceId, request.principal, hubId, query)
+          })
+
+          ws.post('/agent-keys/:keyId/revoke', async (request) => {
+            const { workspaceId, keyId } = parse(keyParams, request.params)
+            return revokeAgentKey(db, workspaceId, request.principal, keyId)
           })
 
           wsDone()
@@ -255,6 +281,29 @@ export function buildApp(options: AppOptions): FastifyInstance {
     },
     { prefix: '/v1' },
   )
+
+  /** The hub of a folder, or 404. Item hubs never change, so a check before the write holds. */
+  async function folderHub(workspaceId: string, folderId: string): Promise<string> {
+    const row = await db
+      .selectFrom('folder')
+      .select('hub_id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', folderId)
+      .executeTakeFirst()
+    if (!row) throw notFound('Folder')
+    return row.hub_id
+  }
+
+  async function itemHub(workspaceId: string, itemId: string): Promise<string> {
+    const row = await db
+      .selectFrom('item')
+      .select('hub_id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', itemId)
+      .executeTakeFirst()
+    if (!row) throw notFound('Item')
+    return row.hub_id
+  }
 
   return app
 }

@@ -58,6 +58,8 @@ export interface ActionScopes {
   'grant.revoke': HubScope & { target: Subject }
   /** `role` is the hub role the new key gets: at most the creator's effective hub role. */
   'key.create': HubScope & { role: HubRole }
+  /** List the hub's agent keys: whoever may create keys on the hub. */
+  'key.list': HubScope
   'key.revoke': HubScope
 
   // Actions inside a hub: 404 without a grant (D27, D45).
@@ -84,6 +86,7 @@ export const ACTIONS = [
   'grant.set',
   'grant.revoke',
   'key.create',
+  'key.list',
   'key.revoke',
   'hub.read',
   'item.write',
@@ -223,6 +226,8 @@ function decide(actor: Subject, action: Action, scope: ActionScopes[Action]): De
       if (!hubAdmin && !(isOwnerOrAdmin(actor) && hubRole !== null)) return 'forbidden'
       return allowIf(atLeast(hubRole, k.role))
     }
+    case 'key.list':
+      return allowIf(hubAdmin || (isOwnerOrAdmin(actor) && hubRole !== null))
     case 'key.revoke':
       return allowIf(hubAdmin || isOwnerOrAdmin(actor))
   }
