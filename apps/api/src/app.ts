@@ -9,14 +9,22 @@ import {
   type Folder,
   type HubDescription,
   type Page,
-  type Subject,
   type Workspace,
 } from '@16bit/core'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
-import { agentHubCheck, authenticator, workspaceActor, type Identity } from './auth.ts'
+import { agentHubCheck } from './auth/agent-key.ts'
+import {
+  registerAuthHook,
+  requireIdentity,
+  resolvePrincipal,
+  accountMemberships,
+} from './auth/auth.ts'
+import { RateLimiter, type RateLimitPolicy } from './auth/rate-limit.ts'
+import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
+import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import { createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
@@ -39,6 +47,14 @@ export interface AppOptions {
    * serves without the key reaching the bundle. Removed when real auth lands in M1.
    */
   anonymousAsDevPrincipal?: boolean
+  /** Session lifetimes. Defaults to 30 days absolute, 7 days idle. */
+  session?: SessionPolicy
+  /** Adds `Secure` to the session cookie. Off only for plain-HTTP local development. */
+  secureCookies?: boolean
+  /** Sign-in attempts per email. Defaults to 10 per 15 minutes. */
+  loginPerEmail?: RateLimitPolicy
+  /** Sign-in and invite acceptance attempts per client IP. Defaults to 100 per 15 minutes. */
+  loginPerIp?: RateLimitPolicy
 }
 
 /** Default cap on folders and attributes returned by a hub description. */
@@ -50,24 +66,21 @@ const hubParams = z.object({ workspaceId: idSchema, hubId: idSchema })
 const itemParams = z.object({ workspaceId: idSchema, itemId: idSchema })
 const keyParams = z.object({ workspaceId: idSchema, keyId: idSchema })
 
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** Who sent the request. Set on every /v1 route. */
-    identity: Identity
-    /** The caller as a `can()` subject in the path's workspace. Set on workspace routes. */
-    principal: Subject
-  }
-}
-
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
   const app = Fastify({ logger: false })
-  const authenticate = authenticator(db, options)
-
-  app.decorateRequest('identity', null as never)
-  app.decorateRequest('principal', null as unknown as Subject)
+  const auth = {
+    db,
+    devApiKey: options.devApiKey,
+    devPrincipalId: options.devPrincipalId,
+    anonymousAsDevPrincipal: options.anonymousAsDevPrincipal ?? false,
+    session: options.session ?? DEFAULT_SESSION_POLICY,
+    secureCookies: options.secureCookies ?? true,
+  }
+  const emailLimiter = new RateLimiter(options.loginPerEmail ?? { max: 10, windowSeconds: 900 })
+  const ipLimiter = new RateLimiter(options.loginPerIp ?? { max: 100, windowSeconds: 900 })
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
@@ -100,23 +113,41 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   void app.register(
     (v1, _opts, done) => {
-      v1.addHook('onRequest', async (request) => {
-        request.identity = await authenticate(request.headers.authorization)
-      })
+      registerAuthHook(v1, auth)
+      registerAuthRoutes(v1, { ...auth, emailLimiter, ipLimiter })
 
       v1.get('/workspaces', async (request): Promise<Page<Workspace>> => {
+        const identity = requireIdentity(request)
         const { limit, cursor } = parse(pageQuerySchema, request.query)
+        const after = cursor ? decodeCursor(nameCursorSchema, cursor) : null
+        if (identity.kind === 'person') {
+          // Only through the membership lookup: it runs before any workspace is set, so a
+          // direct read of `workspace` here would come back empty under row-level security.
+          let q = accountMemberships(db, identity.accountId)
+          if (after)
+            q = q.where(
+              sql<boolean>`(m.workspace_name, m.workspace_id) > (${after[0]}, ${after[1]})`,
+            )
+          const rows = await q
+            .orderBy('m.workspace_name')
+            .orderBy('m.workspace_id')
+            .limit(limit + 1)
+            .execute()
+          const workspaces = rows.map((r): Workspace => ({
+            id: r.workspace_id,
+            name: r.workspace_name,
+            createdAt: r.workspace_created_at.toISOString(),
+          }))
+          return page(workspaces, limit, (w) => [w.name, w.id])
+        }
         let q = db
           .selectFrom('workspace as w')
           .innerJoin('principal as p', 'p.workspace_id', 'w.id')
           .selectAll('w')
-          .where('p.id', '=', request.identity.principalId)
-        if (request.identity.kind === 'agent')
-          q = q.where('w.id', '=', request.identity.workspaceId)
-        if (cursor) {
-          const [name, id] = decodeCursor(nameCursorSchema, cursor)
-          q = q.where(sql<boolean>`(w.name, w.id) > (${name}, ${id})`)
-        }
+          .where('p.id', '=', identity.principalId)
+        // An agent's principal exists only in its key's workspace; this keeps it explicit.
+        if (identity.kind === 'agent') q = q.where('w.id', '=', identity.workspaceId)
+        if (after) q = q.where(sql<boolean>`(w.name, w.id) > (${after[0]}, ${after[1]})`)
         const rows = await q
           .orderBy('w.name')
           .orderBy('w.id')
@@ -130,8 +161,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // A workspace exists for the caller only if the caller is a principal in it.
           ws.addHook('preHandler', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            request.principal = await workspaceActor(db, request.identity, workspaceId)
+            request.principal = await resolvePrincipal(db, requireIdentity(request), workspaceId)
           })
+
+          registerInviteRoutes(ws, db)
 
           ws.get('/hubs', async (request): Promise<Page<Folder>> => {
             const { workspaceId } = parse(workspaceParams, request.params)
@@ -142,7 +175,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
               .where('workspace_id', '=', workspaceId)
               .where('parent_id', 'is', null)
             // An agent sees its one hub (D28). People: hub grants arrive with #43.
-            if (request.identity.kind === 'agent') q = q.where('id', '=', request.identity.hubId)
+            if (request.identity?.kind === 'agent') q = q.where('id', '=', request.identity.hubId)
             if (cursor) {
               const [name, id] = decodeCursor(nameCursorSchema, cursor)
               q = q.where(sql<boolean>`(name, id) > (${name}, ${id})`)
@@ -208,7 +241,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const query = parse(itemQuerySchema, request.body)
-            if (request.identity.kind === 'agent') {
+            if (request.identity?.kind === 'agent') {
               const hubId = await folderHub(workspaceId, query.from)
               agentHubCheck(request.identity, request.principal, hubId, 'hub.read', 'Folder')
             }
@@ -218,7 +251,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createItemSchema, request.body)
-            if (request.identity.kind === 'agent') {
+            if (request.identity?.kind === 'agent') {
               const hubId = await folderHub(workspaceId, body.folderId)
               agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Folder')
             }
@@ -236,7 +269,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            if (request.identity.kind === 'agent') {
+            if (request.identity?.kind === 'agent') {
               const hubId = await itemHub(workspaceId, itemId)
               agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Item')
             }
@@ -246,7 +279,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { version } = parse(deleteItemQuerySchema, request.query)
-            if (request.identity.kind === 'agent') {
+            if (request.identity?.kind === 'agent') {
               const hubId = await itemHub(workspaceId, itemId)
               agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Item')
             }

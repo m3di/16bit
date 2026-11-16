@@ -39,7 +39,8 @@ describe('upgrading a database already migrated with 0001', () => {
     expect(await migrateToLatest(db)).toEqual([
       '0002_item_index',
       '0003_auth_access',
-      '0004_agent_key_lookup',
+      '0004_auth_functions',
+      '0005_agent_key_lookup',
     ])
 
     const principals = await db

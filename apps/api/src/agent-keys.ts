@@ -12,7 +12,7 @@ import {
 import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { appendAccessLog } from './access-log.ts'
-import { hashAgentSecret, newAgentSecret } from './auth.ts'
+import { hashAgentSecret, newAgentSecret } from './auth/agent-key.ts'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, enforce, HttpError, notFound } from './http.ts'
 

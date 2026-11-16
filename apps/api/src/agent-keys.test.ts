@@ -4,6 +4,7 @@ import {
   agentKeySchema,
   createdAgentKeySchema,
   hubPageSchema,
+  meSchema,
   workspacePageSchema,
   type AgentKey,
   type CreatedAgentKey,
@@ -16,7 +17,8 @@ import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 
 // Integration tests for agent keys (#42, D47, D48, docs/ROLES.md) against a real Postgres.
-// People are authenticated with the dev key, one app per principal, until sessions land (#41).
+// People are authenticated with the dev key, one app per principal: sessions are covered in
+// auth/auth.test.ts and resolve to the same `can()` subject.
 
 const DEV_KEY = 'test-key'
 
@@ -601,5 +603,50 @@ describe('authenticating with a key', () => {
     // A PUBLIC entry in an ACL has an empty grantee: `=X/owner`.
     expect(rows[0]?.acl).not.toMatch(/(^|[{,])=/)
     expect(rows[0]?.config).toEqual(['search_path=public, pg_temp'])
+  })
+})
+
+describe('GET /v1/me with a key', () => {
+  it('returns the key’s principal, workspace, hub and role', async () => {
+    const { key, secret } = await createKey('ha', 'commenter')
+    const res = await agent(secret, 'GET', '/v1/me')
+    expect(res.statusCode).toBe(200)
+    expect(meSchema.parse(res.json())).toEqual({
+      kind: 'agent',
+      principalId: key.id,
+      workspace: { id: 'w1', name: 'Alpha' },
+      hub: { id: 'build', name: 'build' },
+      hubRole: 'commenter',
+    })
+
+    await db
+      .insertInto('hub_grant')
+      .values({ workspace_id: 'w2', hub_id: 'secret', principal_id: 'own2', hub_role: 'editor' })
+      .onConflict((oc) => oc.doNothing())
+      .execute()
+    const other = await createKey('own2', 'viewer', { workspace: 'w2', hub: 'secret' })
+    expect((await agent(other.secret, 'GET', '/v1/me')).json()).toMatchObject({
+      kind: 'agent',
+      principalId: other.key.id,
+      workspace: { id: 'w2', name: 'Other' },
+      hub: { id: 'secret' },
+      hubRole: 'viewer',
+    })
+  })
+
+  it('answers 401 once the key is revoked or expired', async () => {
+    const revoked = await createKey('ha', 'viewer')
+    await person('own', 'POST', `/v1/workspaces/w1/agent-keys/${revoked.key.id}/revoke`)
+    const expired = await createKey('ha', 'viewer')
+    await db
+      .updateTable('agent_key')
+      .set({ expires_at: sql`now() - interval '1 second'` })
+      .where('principal_id', '=', expired.key.id)
+      .execute()
+    for (const { secret } of [revoked, expired]) {
+      const res = await agent(secret, 'GET', '/v1/me')
+      expect(res.statusCode).toBe(401)
+      expect(res.json()).toMatchObject({ error: 'unauthorized' })
+    }
   })
 })

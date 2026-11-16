@@ -32,6 +32,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Create a hub (the creator becomes its hub admin) | ✓ | ✓ | — | — | — | — |
 | Grant or revoke access on any hub | ✓ | ✓ ¹ | — | — | — | — |
 | Create agent keys on a hub they hold a grant on, up to their own hub role ² | ✓ | ✓ | — | — | — | — |
+| List the agent keys of a hub they hold a grant on (same people as create) | ✓ | ✓ | — | — | — | — |
 | Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
 | Delete a hub | ✓ | ✓ | — | — | — | — |
@@ -52,6 +53,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Rename the hub, manage folders and attributes | ✓ | — | — | — |
 | Grant or revoke access on this hub | ✓ ³ | — | — | — |
 | Create and revoke agent keys for this hub | ✓ | — | — | — |
+| List the agent keys of this hub | ✓ | — | — | — |
 
 ³ A hub admin can grant any hub role, including hub admin, to others. They cannot change or revoke their own grant, or the grant of a workspace owner or admin.
 

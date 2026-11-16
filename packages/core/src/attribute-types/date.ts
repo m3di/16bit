@@ -19,10 +19,12 @@ export const dateType: AttributeType<'date', DateConfig, string> = {
   name: 'date',
   configSchema: dateConfigSchema,
   valueSchema: (config) => (config.includeTime ? z.iso.datetime({ offset: true }) : z.iso.date()),
+  readOnly: false,
   isEmpty: () => false,
   indexProjection: 'ts',
   project: (value) => [new Date(toEpoch(value)).toISOString()],
   filterOperators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', ...EMPTY_OPERATORS],
+  sortable: true,
   sortKey: toEpoch,
   // Buckets by UTC calendar day. Per-viewer time zones come with views.
   groupKey: (value) => new Date(toEpoch(value)).toISOString().slice(0, 10),

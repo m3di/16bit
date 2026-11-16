@@ -1,11 +1,31 @@
 import type { z } from 'zod'
+import type { RichTextDoc } from './rich-text-doc.ts'
 
-/** The attribute types implemented so far. D12 lists the full closed set of 13; the rest land later. */
-export const ATTRIBUTE_TYPE_NAMES = ['text', 'number', 'boolean', 'date', 'select'] as const
+/**
+ * The attribute types implemented so far. D12 lists the full closed set of 13; file and
+ * rollup land later (D44).
+ */
+export const ATTRIBUTE_TYPE_NAMES = [
+  'text',
+  'number',
+  'boolean',
+  'date',
+  'select',
+  'multi_select',
+  'url',
+  'actor',
+  'auto_id',
+  'rich_text',
+  'relation',
+] as const
 export type AttributeTypeName = (typeof ATTRIBUTE_TYPE_NAMES)[number]
 
-/** A stored, non-empty value. `null` means "no value" and is handled outside the type. */
-export type ItemValue = string | number | boolean
+/**
+ * A stored, non-empty value. `null` means "no value" and is handled outside the type.
+ * Lists hold option, principal, or item IDs (multi-select, actor, relation); rich text is a
+ * JSON document.
+ */
+export type ItemValue = string | number | boolean | string[] | RichTextDoc
 
 /** Which typed column of `item_index` a value is copied into, if any. */
 export type IndexProjection = 'num' | 'txt' | 'ts' | 'none'
@@ -55,6 +75,11 @@ export interface AttributeType<N extends AttributeTypeName, C, V extends ItemVal
   // 1. JSON shape and validation
   readonly configSchema: z.ZodType<C>
   valueSchema(config: C): z.ZodType<V>
+  /**
+   * True if only the server writes this value (auto ID). Clients get `read_only` for any
+   * value they send, and the type is never `required` on create.
+   */
+  readonly readOnly: boolean
   /** True if a valid value should be stored as `null`, for example an empty string. */
   isEmpty(value: V, config: C): boolean
 
@@ -71,10 +96,20 @@ export interface AttributeType<N extends AttributeTypeName, C, V extends ItemVal
   readonly filterOperators: readonly FilterOperator[]
 
   // 4. Sort key and group buckets
+  /**
+   * False if ordering by this type has no meaning without data the type cannot see, such as
+   * a principal's or linked item's name (actor, relation), or would order whole documents
+   * (rich text). The query layer refuses to sort on it. `sortKey` is still deterministic.
+   */
+  readonly sortable: boolean
   sortKey(value: V, config: C): number | string
+  /**
+   * The bucket a value groups into. A multi-valued type returns its whole combination in a
+   * canonical order; per-value buckets are decided with grouping in views (M4).
+   */
   groupKey(value: V, config: C): string
 
-  // 5. Summary functions
+  // 5. Summary functions (computed from M4, with aggregate; new types list the base set)
   readonly summaries: readonly SummaryFunction[]
 
   // 6. Agent form
