@@ -25,6 +25,7 @@ You need Node.js 26 (see `.nvmrc`), pnpm 12, and either Docker or a Postgres you
 pnpm install
 docker compose up -d db   # Postgres 18 on 127.0.0.1:55432
 pnpm seed                 # optional: demo workspaces, hubs, and items
+pnpm seed:build-hub       # optional: this repository's issues in a "Build" hub (needs gh)
 pnpm dev                  # migrations, then the API on :3000 and the web app on :5173
 ```
 
