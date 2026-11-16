@@ -204,6 +204,11 @@ describe('RichTextView', () => {
             text: 'bad',
             marks: [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }],
           },
+          {
+            type: 'text',
+            text: 'docs',
+            marks: [{ type: 'link', attrs: { href: 'https://16bit.info/docs' } }],
+          },
         ],
       },
       { type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: 'Title' }] },
@@ -226,6 +231,14 @@ describe('RichTextView', () => {
     expect(html).toContain('<h3')
     expect(html).toContain('<ul')
     expect(html).not.toContain('javascript:')
+  })
+
+  it('links safe addresses in a new tab and says so to screen readers', async () => {
+    const html = await render(RichTextView, { doc })
+    expect(html).toContain('href="https://16bit.info/docs"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).toMatch(/<a [^>]*>docs<span class="sr-only"> \(opens in a new tab\)<\/span><\/a>/)
   })
 
   it('escapes text instead of rendering it as markup', async () => {

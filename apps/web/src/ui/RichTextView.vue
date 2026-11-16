@@ -39,7 +39,7 @@ function inline(nodes: RichInline[] | undefined): (VNode | string)[] {
         node = h(
           'a',
           { href: mark.attrs.href, target: '_blank', rel: 'noopener noreferrer', class: C.link },
-          [node],
+          [node, h('span', { class: 'sr-only' }, ' (opens in a new tab)')],
         )
     }
     return node

@@ -30,7 +30,7 @@ const {
     <RouterLink
       v-if="to"
       :to="to"
-      class="truncate border-b border-line2 text-ink no-underline hover:border-ink3"
+      class="truncate border-b border-line2 text-ink no-underline hover:border-line3"
       >{{ target.title }}</RouterLink
     >
     <span v-else class="truncate text-ink">{{ target.title }}</span>

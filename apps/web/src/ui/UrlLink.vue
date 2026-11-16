@@ -21,7 +21,7 @@ const view = computed(() => (value?.trim() ? displayUrl(value) : null))
     :href="view.href"
     target="_blank"
     rel="noopener noreferrer"
-    class="inline-block max-w-full truncate border-b border-line2 align-bottom text-ink no-underline hover:border-ink3"
+    class="inline-block max-w-full truncate border-b border-line2 align-bottom text-ink no-underline hover:border-line3"
     :title="view.href"
     >{{ view.text }}<span class="sr-only"> (opens in a new tab)</span></a
   >

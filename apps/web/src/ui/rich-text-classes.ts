@@ -16,5 +16,5 @@ export const RICH_CLASSES = {
   bold: 'font-medium text-ink',
   italic: 'italic',
   code: 'rounded-chip bg-selected px-1 font-mono text-secondary text-ink',
-  link: 'border-b border-line2 text-ink no-underline hover:border-ink3',
+  link: 'border-b border-line2 text-ink no-underline hover:border-line3',
 } as const
