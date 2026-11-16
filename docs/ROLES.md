@@ -12,7 +12,7 @@ Both kinds are principals and go through the same checks (D25).
 ## Two layers
 
 1. The **workspace role** sets *what* someone can do in the workspace.
-2. A **hub grant** sets *where*. Without a grant on a hub, a principal sees nothing inside it: no folders, attributes or items (D27). Owners and admins see the names of all hubs in the hub list; everyone else sees only the hubs they hold a grant on. **The grant rule binds owners and admins too:** they can grant themselves access to any hub (recorded in `access_log`, D48), but until they do, everything inside the hub returns 404 to them. The hub list marks such hubs as "no access" so the dashboard can offer the self-grant.
+2. A **hub grant** sets *where*. Without a grant on a hub, a principal sees nothing inside it: no folders, attributes or items (D27). Owners and admins see the names of all hubs in the hub list; everyone else sees only the hubs they hold a grant on. **The grant rule binds owners and admins too:** they can grant themselves access to any hub (recorded in `access_log`, D48), but until they do, everything inside the hub returns 404 to them. The hub list marks such hubs as "no access". In M1, self-granting is done through the API only; the dashboard offer comes with settings in M2.
 
 A person's **effective hub role** is their hub grant, capped by their workspace role:
 
@@ -31,7 +31,8 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Invite members and change their roles | ✓ | ✓ ¹ | — | — | — | — |
 | Create a hub (the creator becomes its hub admin) | ✓ | ✓ | — | — | — | — |
 | Grant or revoke access on any hub | ✓ | ✓ | — | — | — | — |
-| Create and revoke agent keys on a hub they hold a grant on ³ | ✓ | ✓ | — | — | — | — |
+| Create agent keys on a hub they hold a grant on ² | ✓ | ✓ | — | — | — | — |
+| Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
 | Delete a hub | ✓ | ✓ | — | — | — | — |
 | Remove a member (revokes their grants in this workspace; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
@@ -39,7 +40,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 
 ¹ An admin cannot change, remove or create an owner. There is always at least one owner.
 
-³ Owners and admins must hold a grant on a hub (self-granting if needed, D45) before creating keys for it, so no key is made for a hub its creator can't see.
+² Owners and admins must hold a grant on a hub (self-granting if needed, D45) before creating keys for it, so no key is made for a hub its creator can't see. Revoking needs no grant: it reveals nothing inside the hub.
 
 ## Hub actions (by effective hub role)
 
@@ -49,10 +50,10 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Create, edit and delete items | ✓ | ✓ | — | — |
 | Comment (when comments exist) | ✓ | ✓ | ✓ | — |
 | Rename the hub, manage folders and attributes | ✓ | — | — | — |
-| Grant or revoke access on this hub | ✓ ² | — | — | — |
+| Grant or revoke access on this hub | ✓ ³ | — | — | — |
 | Create and revoke agent keys for this hub | ✓ | — | — | — |
 
-² A hub admin can grant any hub role, including hub admin, to others. They cannot change or revoke their own grant, or the grant of a workspace owner or admin.
+³ A hub admin can grant any hub role, including hub admin, to others. They cannot change or revoke their own grant, or the grant of a workspace owner or admin.
 
 ## Agent keys
 
