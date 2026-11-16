@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import { PRINCIPAL_KINDS, WORKSPACE_ROLES } from './entities.ts'
 
-// The role matrix in docs/ROLES.md (D25-D28, D45, D47) as one pure function. The API
-// calls `can` before every action; row-level security enforces the same rules underneath.
+// The role matrix in docs/ROLES.md (D25-D28, D45, D47) as one pure function. The API is
+// meant to call `can` before every action, with row-level security enforcing the same
+// rules underneath.
 // A change here is a change to docs/ROLES.md and is gated.
 
 export const workspaceRoleSchema = z.enum(WORKSPACE_ROLES)
@@ -55,7 +56,7 @@ export interface ActionScopes {
   /** Set or change `target`'s grant on this hub. */
   'grant.set': HubScope & { target: Subject; role: HubRole }
   'grant.revoke': HubScope & { target: Subject }
-  /** `role` is the hub role the new key gets. */
+  /** `role` is the hub role the new key gets: at most the creator's effective hub role. */
   'key.create': HubScope & { role: HubRole }
   'key.revoke': HubScope
 
@@ -149,13 +150,16 @@ function changeMember(
 }
 
 /**
- * Owners and admins grant on any hub, themselves included. A hub admin grants any role,
- * hub admin included, but not on their own grant or a workspace owner's or admin's (³).
+ * Owners and admins grant on any hub, themselves included, but an admin cannot touch an
+ * owner's grant (¹). A hub admin grants any role, hub admin included, but not on their own
+ * grant or a workspace owner's or admin's (³).
  */
 function changeGrant(actor: Subject, s: HubScope & { target: Subject }): Decision {
   // An agent's one grant is created and removed with its key (D47).
   if (s.target.kind === 'agent') return 'forbidden'
-  if (isOwnerOrAdmin(actor)) return 'allow'
+  if (isOwnerOrAdmin(actor)) {
+    return allowIf(!(actor.workspaceRole === 'admin' && s.target.workspaceRole === 'owner'))
+  }
   if (effectiveHubRole(actor, s.hubGrant) !== 'hub_admin') return 'forbidden'
   if (s.target.id === actor.id || isOwnerOrAdmin(s.target)) return 'forbidden'
   return 'allow'
@@ -214,8 +218,10 @@ function decide(actor: Subject, action: Action, scope: ActionScopes[Action]): De
     case 'key.create': {
       const k = scope as ActionScopes['key.create']
       if (k.role === 'hub_admin') return 'forbidden'
-      // Footnote ²: owners and admins need a grant on the hub too.
-      return allowIf(hubAdmin || (isOwnerOrAdmin(actor) && s.hubGrant !== null))
+      // Footnote ²: owners and admins need a grant on the hub too, and no key gets more
+      // than its creator's effective hub role (least privilege).
+      if (!hubAdmin && !(isOwnerOrAdmin(actor) && hubRole !== null)) return 'forbidden'
+      return allowIf(atLeast(hubRole, k.role))
     }
     case 'key.revoke':
       return allowIf(hubAdmin || isOwnerOrAdmin(actor))
@@ -233,5 +239,7 @@ function decide(actor: Subject, action: Action, scope: ActionScopes[Action]): De
     case 'hub.manageSchema':
       return allowIf(hubAdmin)
   }
-  return 'forbidden'
+  // Adding an action without a rule fails to compile here instead of silently denying.
+  const unhandled: never = action
+  return unhandled
 }

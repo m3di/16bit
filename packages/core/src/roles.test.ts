@@ -435,8 +435,40 @@ describe('footnote ³: hub admins granting', () => {
       expect(check(a, 'grant.set', { hubGrant: null, target: a, role: 'hub_admin' })).toBe(Y)
       expect(check(a, 'grant.revoke', { hubGrant: 'viewer', target: a })).toBe(Y)
       expect(
-        check(a, 'grant.set', { hubGrant: null, target: other('owner'), role: 'viewer' }),
+        check(a, 'grant.set', { hubGrant: null, target: other('admin'), role: 'viewer' }),
       ).toBe(Y)
+    }
+  })
+})
+
+describe("footnote ¹: an admin cannot touch an owner's hub grant", () => {
+  const admin = user('admin')
+  const owner = user('owner')
+  // Columns: the actor holds no grant, viewer, hub admin.
+  const own = [null, 'viewer', 'hub_admin'] as const
+
+  it('admin sets, changes or revokes an owner grant', () => {
+    expect(
+      own.map((g) =>
+        can(admin, 'grant.set', { hubGrant: g, target: other('owner'), role: 'viewer' }),
+      ),
+    ).toEqual([F, F, F])
+    expect(
+      own.map((g) => can(admin, 'grant.revoke', { hubGrant: g, target: other('owner') })),
+    ).toEqual([F, F, F])
+  })
+
+  it("owner sets or revokes another owner's grant", () => {
+    expect(
+      can(owner, 'grant.set', { hubGrant: null, target: other('owner'), role: 'editor' }),
+    ).toBe(Y)
+    expect(can(owner, 'grant.revoke', { hubGrant: null, target: other('owner') })).toBe(Y)
+  })
+
+  it("admin sets or revokes another admin's or a member's grant", () => {
+    for (const target of [other('admin'), other('member')]) {
+      expect(can(admin, 'grant.set', { hubGrant: null, target, role: 'hub_admin' })).toBe(Y)
+      expect(can(admin, 'grant.revoke', { hubGrant: null, target })).toBe(Y)
     }
   })
 })
@@ -450,6 +482,27 @@ describe('agent keys (ROLES.md "Agent keys", D28, D47)', () => {
     for (const role of ['editor', 'commenter', 'viewer'] as const) {
       expect(check(user('member'), 'key.create', { hubGrant: 'hub_admin', role })).toBe(Y)
     }
+  })
+
+  it("a key's role is capped at its creator's effective hub role", () => {
+    // Rows: the creator's grant. Columns: key role editor, commenter, viewer.
+    const roles = ['editor', 'commenter', 'viewer'] as const
+    const table: [HubRole, Decision[]][] = [
+      ['hub_admin', [Y, Y, Y]],
+      ['editor', [Y, Y, Y]],
+      ['commenter', [F, Y, Y]],
+      ['viewer', [F, F, Y]],
+    ]
+    for (const r of ['owner', 'admin'] as const) {
+      for (const [grant, expected] of table) {
+        expect(
+          roles.map((role) => can(user(r), 'key.create', { hubGrant: grant, role })),
+          `${r} with ${grant}`,
+        ).toEqual(expected)
+      }
+    }
+    // A hub admin grant capped to viewer by the workspace role creates no keys at all.
+    expect(can(user('viewer'), 'key.create', { hubGrant: 'hub_admin', role: 'viewer' })).toBe(F)
   })
 
   // Columns: agent granted editor, commenter, viewer.
@@ -486,6 +539,24 @@ describe('agent keys (ROLES.md "Agent keys", D28, D47)', () => {
       check(agent, 'grant.set', { hubGrant: 'hub_admin', target: other('member'), role: 'viewer' }),
     ).toBe(F)
     expect(check(agent, 'key.create', { hubGrant: 'hub_admin', role: 'viewer' })).toBe(F)
+  })
+})
+
+describe('typed calls', () => {
+  it('each action takes exactly its own scope', () => {
+    expect(can(user('owner'), 'workspace.read')).toBe(Y)
+    expect(can(user('member'), 'hub.read', { hubGrant: 'viewer' })).toBe(Y)
+    expect(can(user('owner'), 'key.create', { hubGrant: 'editor', role: 'editor' })).toBe(Y)
+    expect(can(user('owner'), 'member.remove', { target: other('member'), ownerCount: 1 })).toBe(Y)
+
+    // @ts-expect-error: a hub action needs its scope.
+    expect(() => can(user('owner'), 'hub.read')).toThrow()
+    // @ts-expect-error: a workspace action takes no scope.
+    can(user('owner'), 'workspace.read', { hubGrant: null })
+    // @ts-expect-error: key.create needs the key's role.
+    can(user('owner'), 'key.create', { hubGrant: 'editor' })
+    // @ts-expect-error: member.changeRole needs ownerCount.
+    can(user('owner'), 'member.changeRole', { target: other('member'), role: 'viewer' })
   })
 })
 

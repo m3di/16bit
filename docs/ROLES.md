@@ -30,15 +30,15 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | See hubs they hold a grant on | ✓ | ✓ | ✓ | ✓ | ✓ | its one hub |
 | Invite members and change their roles | ✓ | ✓ ¹ | — | — | — | — |
 | Create a hub (the creator becomes its hub admin) | ✓ | ✓ | — | — | — | — |
-| Grant or revoke access on any hub | ✓ | ✓ | — | — | — | — |
-| Create agent keys on a hub they hold a grant on ² | ✓ | ✓ | — | — | — | — |
+| Grant or revoke access on any hub | ✓ | ✓ ¹ | — | — | — | — |
+| Create agent keys on a hub they hold a grant on, up to their own hub role ² | ✓ | ✓ | — | — | — | — |
 | Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
 | Delete a hub | ✓ | ✓ | — | — | — | — |
 | Remove a member (revokes their grants in this workspace; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
 | Rename or delete the workspace | ✓ | — | — | — | — | — |
 
-¹ An admin cannot change, remove or create an owner. There is always at least one owner.
+¹ An admin cannot change, remove or create an owner, and cannot set, change or revoke an owner's hub grants. There is always at least one owner.
 
 ² Owners and admins must hold a grant on a hub (self-granting if needed, D45) before creating keys for it, so no key is made for a hub its creator can't see. Revoking needs no grant: it reveals nothing inside the hub.
 
@@ -58,6 +58,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 ## Agent keys
 
 - Scoped to one hub, with role `editor`, `commenter` or `viewer`. Never `hub admin` (D28).
+- A key's role is at most its creator's effective hub role on that hub (least privilege). An owner holding a viewer grant can only create viewer keys.
 - They can never manage members, grants, keys, folders or attributes, and never touch billing.
 - Shown once when created and stored hashed. They can be revoked, and an optional expiry date can be set. Creating or revoking a key is recorded in `access_log`.
 - Writes are recorded with the key's principal as `updated_by`.
