@@ -31,12 +31,18 @@ const options = [
 
 describe('ValueState', () => {
   it.each([
-    ['loading', 'role="status"'],
+    ['loading', 'data-state="loading"'],
     ['empty', 'Empty'],
     ['error', 'Could not load'],
     ['no-permission', 'No access'],
   ])('renders %s with text', async (state, text) => {
     expect(await render(ValueState, { state })).toContain(text)
+  })
+
+  it('is not a live region while loading, so a table of cells stays quiet', async () => {
+    const html = await render(ValueState, { state: 'loading', label: 'Loading Done' })
+    expect(html).not.toContain('role="status"')
+    expect(html).toContain('Loading Done')
   })
 })
 
@@ -65,6 +71,14 @@ describe('CheckboxField', () => {
     const html = await render(CheckboxField, { label: 'Done', state: 'loading' })
     expect(html).not.toContain('type="checkbox"')
     expect(html).toContain('Loading Done')
+  })
+
+  it('shows a load failure with no box to tick', async () => {
+    const html = await render(CheckboxField, { label: 'Done', state: 'error', error: 'x' })
+    expect(html).not.toContain('<input')
+    expect(html).toContain('Done')
+    expect(html).toContain('Could not load')
+    expect(html).not.toContain('aria-invalid')
   })
 })
 
@@ -101,7 +115,7 @@ describe('ChipList', () => {
     [{ value: [] }, 'Empty'],
     [{ value: [], state: 'no-permission' }, 'No access'],
     [{ value: [], state: 'error' }, 'Could not load'],
-    [{ value: [], state: 'loading' }, 'role="status"'],
+    [{ value: [], state: 'loading' }, 'data-state="loading"'],
   ])('renders states: %j', async (props, text) => {
     expect(await render(ChipList, { options, label: 'Platforms', ...props })).toContain(text)
   })
@@ -142,6 +156,8 @@ describe('ActorChip', () => {
   it.each([
     [{ actor: null }, 'Empty'],
     [{ actor: null, state: 'no-permission' }, 'No access'],
+    [{ actor: null, state: 'error' }, 'Could not load'],
+    [{ actor: null, state: 'loading' }, 'data-state="loading"'],
   ])('renders states: %j', async (props, text) => {
     expect(await render(ActorChip, props)).toContain(text)
   })
@@ -168,7 +184,7 @@ describe('RelationChip', () => {
   it.each([
     [{ target: null }, 'Empty'],
     [{ target: null, state: 'error' }, 'Could not load'],
-    [{ target: null, state: 'loading' }, 'role="status"'],
+    [{ target: null, state: 'loading' }, 'data-state="loading"'],
   ])('renders states: %j', async (props, text) => {
     expect(await render(RelationChip, props)).toContain(text)
   })
@@ -261,8 +277,20 @@ describe('RichTextEditor', () => {
 
   it('shows a placeholder while loading', async () => {
     const html = await render(RichTextEditor, { label: 'Description', state: 'loading' })
-    expect(html).toContain('role="status"')
+    expect(html).toContain('data-state="loading"')
     expect(html).not.toContain('role="toolbar"')
+  })
+
+  it('shows a load failure with no editor to type into', async () => {
+    const html = await render(RichTextEditor, {
+      label: 'Description',
+      state: 'error',
+      modelValue: 'Hello',
+    })
+    expect(html).toContain('Could not load')
+    expect(html).not.toContain('role="toolbar"')
+    expect(html).not.toContain('role="textbox"')
+    expect(html).not.toContain('Hello')
   })
 })
 

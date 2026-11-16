@@ -99,6 +99,7 @@ const failed = ref<unknown>(null)
       <CheckboxField :model-value="false" label="Blocked" error="Could not save. Try again." />
       <CheckboxField :model-value="true" label="Approved" state="no-permission" />
       <CheckboxField :model-value="false" label="Archived" state="loading" />
+      <CheckboxField :model-value="false" label="Reviewed" state="error" />
       <CheckboxField :model-value="false" label="Disabled" disabled />
     </div>
   </section>
@@ -235,6 +236,7 @@ const failed = ref<unknown>(null)
       />
       <RichTextEditor :model-value="description" label="Read only" state="no-permission" />
       <RichTextEditor :model-value="null" label="Loading" state="loading" />
+      <RichTextEditor :model-value="null" label="Failed to load" state="error" />
     </div>
   </section>
 

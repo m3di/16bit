@@ -65,19 +65,6 @@ export interface RichDoc {
 export const HEADING_LEVELS = [3, 4] as const
 export type RichHeadingLevel = (typeof HEADING_LEVELS)[number]
 
-export const RICH_NODES = [
-  'doc',
-  'paragraph',
-  'heading',
-  'codeBlock',
-  'bulletList',
-  'orderedList',
-  'listItem',
-  'text',
-  'hardBreak',
-] as const
-export const RICH_MARKS = ['bold', 'italic', 'code', 'link'] as const
-
 /** Nesting deeper than this is flattened away, so a hostile document cannot blow the stack. */
 const MAX_LIST_DEPTH = 6
 

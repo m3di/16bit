@@ -5,7 +5,7 @@ Reference screens are in `design/mockups/`. They are the agreed direction: light
 ## Principles
 
 1. **Quiet.** Hairline borders, generous white space, no boxes around blocks unless the block is a card.
-2. **Thin.** Two font weights only. Nothing bold.
+2. **Thin.** Two font weights only, 400 and 500. Nothing heavier: bold in rich text is shown at 500.
 3. **Dense but calm.** Desktop first. Rows are 32 to 38px high.
 4. **Always designed.** Every block and screen has loading, empty, error, and no-permission states.
 5. **Two surfaces.** Presentation has no schema or filter chrome. Settings is a separate area.
@@ -74,7 +74,11 @@ Used for hub and folder colours, select options, and avatars. Each colour has a 
 | Numbers in number blocks | Space Grotesk | 26px | 500 |
 | IDs, versions, raw values | JetBrains Mono | 12px | 400 |
 
-Line height 1.45 for interface text and 1.6 for long text.
+Line height 1.45 for interface text and 1.6 for long text. Rich text (descriptions, comments) is long text: 13px body at weight 400 in `--ink2`, line height 1.6. Headings inside a document are h3 (14px) and h4 (13px) at 500, because the item title owns h1 and h2.
+
+### Links
+
+Links are `--ink` text with a 1px `--line2` bottom border instead of an underline, and the border darkens to `--line3` on hover. This applies to relations (a linked item is shown as its mono ID and its title as a link), URL values, and links inside rich text. A relation the reader cannot see is never a link and never shows its title. External links open in a new tab with `rel="noopener noreferrer"` and say so to screen readers.
 
 ### Shape and space
 
@@ -93,6 +97,8 @@ Material Symbols, outlined, light weight, 18px. The package is added with the fi
 - Status is never colour alone: a dot always has a text label.
 - Real elements: `button`, `a`, `input` with `label`, `select`. Icon-only buttons have an `aria-label`.
 - Everything is reachable and usable by keyboard.
+- A toolbar is one tab stop. Arrow keys move between its controls and wrap, Home and End jump to the ends, and toggles use `aria-pressed`.
+- Loading values inside cells and fields are not live regions; only the block or page that is loading announces it.
 
 ## Components for M0
 
@@ -111,6 +117,8 @@ Material Symbols, outlined, light weight, 18px. The package is added with the fi
 
 ## Components for M1
 
+Editable values (CheckboxField, RichTextEditor) have a load-failure `error` state separate from the save-error message. In that state no input is rendered, so a value that failed to load cannot be overwritten by saving a blank one.
+
 | Component | Notes |
 |---|---|
 | ValueState | Inline loading, empty, error, and no-access states for one value. Every value component uses it. |
@@ -121,6 +129,13 @@ Material Symbols, outlined, light weight, 18px. The package is added with the fi
 | RelationChip | Linked item as mono ID and hairline-underlined title, as in the task mockup. A target the reader cannot see shows "No access", never its title or a link. |
 | RichTextView, RichTextEditor | Rich text for a small closed node set: paragraph, headings (h3, h4), bulleted and numbered lists, code block, line break; bold (shown at weight 500), italic, inline code, and http, https, or mailto links. Long text at 13px with 1.6 line height. The editor uses Tiptap and is imported directly, not from the `ui` barrel, so it stays out of the main bundle. |
 | AuthLayout, SignInForm | Pages outside a workspace: brand bar and a narrow column, no card. The form has empty, submitting, error, and no-permission states and never says which credential was wrong. |
+
+## Screens without a mockup
+
+The sign-in page and the rich text toolbar have no mockup. They follow the general rules, and the maintainer has accepted that:
+
+- **Sign-in.** A brand bar with the theme switch, then one narrow column (340px at most) with the page title in Space Grotesk 24px, the form, and a hairline-separated footer. No card, no shadow, no illustration.
+- **Rich text toolbar.** A quiet row of text buttons at 12px, 28px high, with no border. The active toggle uses the `--selected` fill and `--ink`. It wraps at narrow widths.
 
 ## Responsiveness
 

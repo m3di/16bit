@@ -18,10 +18,12 @@ const {
   /** Shown under the box. Marks it invalid. */
   error?: string
   /**
-   * loading: a placeholder until the value arrives. no-permission: shown but read-only, with
-   * the reason in text. A boolean is never empty (core), so unset reads as unchecked.
+   * loading: a placeholder until the value arrives. error: the value failed to load, so there
+   * is no box to tick (saving a guessed value would overwrite the real one). no-permission:
+   * shown but read-only, with the reason in text. A boolean is never empty (core), so unset
+   * reads as unchecked.
    */
-  state?: 'ready' | 'loading' | 'no-permission'
+  state?: 'ready' | 'loading' | 'error' | 'no-permission'
   disabled?: boolean
 }>()
 
@@ -29,6 +31,7 @@ const id = useId()
 const hintId = `${id}-hint`
 const errorId = `${id}-error`
 const readOnly = computed(() => state === 'no-permission')
+const noInput = computed(() => state === 'loading' || state === 'error')
 const shownHint = computed(() =>
   readOnly.value ? hint || 'You can view this but not change it.' : hint,
 )
@@ -41,6 +44,10 @@ const describedBy = computed(
   <div class="flex flex-col gap-1">
     <span v-if="state === 'loading'" class="flex min-h-8 items-center gap-2">
       <ValueState state="loading" :label="`Loading ${label}`" />
+    </span>
+    <span v-else-if="state === 'error'" class="flex min-h-8 items-center gap-2">
+      <span class="text-ink3">{{ label }}</span>
+      <ValueState state="error" />
     </span>
     <span v-else class="flex min-h-8 items-center gap-2">
       <input
@@ -59,10 +66,10 @@ const describedBy = computed(
         >{{ label }}</label
       >
     </span>
-    <span v-if="shownHint && state !== 'loading'" :id="hintId" class="text-secondary text-ink3">{{
+    <span v-if="shownHint && !noInput" :id="hintId" class="text-secondary text-ink3">{{
       shownHint
     }}</span>
-    <span v-if="error && state !== 'loading'" :id="errorId" class="text-secondary text-danger">{{
+    <span v-if="error && !noInput" :id="errorId" class="text-secondary text-danger">{{
       error
     }}</span>
   </div>

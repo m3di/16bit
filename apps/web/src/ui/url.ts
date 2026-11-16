@@ -12,8 +12,17 @@ export function displayUrl(value: string): UrlDisplay {
   const href = safeHref(value)
   if (!href) return { href: null, text: value.trim() }
   const url = new URL(href)
-  if (url.protocol === 'mailto:') return { href, text: decodeURIComponent(url.pathname) }
+  if (url.protocol === 'mailto:') return { href, text: decodeOr(url.pathname) }
   const host = url.host.replace(/^www\./, '')
   const rest = `${url.pathname}${url.search}${url.hash}`.replace(/\/$/, '')
   return { href, text: `${host}${rest}` }
+}
+
+/** A malformed escape (`%E0%A4%A`) would throw, so it is shown as written. */
+function decodeOr(text: string): string {
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
+  }
 }

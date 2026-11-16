@@ -9,6 +9,7 @@ describe('displayUrl', () => {
     ['https://example.com', 'example.com'],
     ['http://example.com/a?b=1#c', 'example.com/a?b=1#c'],
     ['mailto:sara@example.com', 'sara@example.com'],
+    ['mailto:%E0%A4%A', '%E0%A4%A'],
   ])('shows %s as %s', (value, text) => {
     expect(displayUrl(value)).toMatchObject({ text })
     expect(displayUrl(value).href).not.toBeNull()

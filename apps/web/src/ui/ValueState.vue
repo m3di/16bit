@@ -4,6 +4,8 @@ import { computed } from 'vue'
 import type { ValueStateName } from './value-types.ts'
 
 // D18 for a single value: the inline counterpart of StateBlock, sized for cells and fields.
+// Loading is plain screen-reader text, not a live region: a table of loading cells would
+// otherwise announce every cell. The surrounding StateBlock or page owns the announcement.
 
 const { state, label = '' } = defineProps<{
   state: ValueStateName
@@ -21,13 +23,7 @@ const text = computed(() => label || defaults[state])
 </script>
 
 <template>
-  <span
-    v-if="state === 'loading'"
-    role="status"
-    aria-busy="true"
-    class="inline-flex min-h-5 items-center"
-    data-state="loading"
-  >
+  <span v-if="state === 'loading'" class="inline-flex min-h-5 items-center" data-state="loading">
     <span class="sr-only">{{ text }}</span>
     <span
       aria-hidden="true"

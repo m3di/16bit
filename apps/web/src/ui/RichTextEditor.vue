@@ -12,7 +12,7 @@ import Paragraph from '@tiptap/extension-paragraph'
 import Text from '@tiptap/extension-text'
 import { Placeholder, UndoRedo } from '@tiptap/extensions'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
-import { computed, onBeforeUnmount, useId, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, useTemplateRef, watch } from 'vue'
 import { HEADING_LEVELS, normalizeRichText, safeHref, type RichDoc } from './rich-text.ts'
 import { RICH_CLASSES as C } from './rich-text-classes.ts'
 import RichTextView from './RichTextView.vue'
@@ -34,8 +34,12 @@ const {
   error?: string
   /** Shown while the document is empty: the editor's empty state. */
   placeholder?: string
-  /** loading: a placeholder until the value arrives. no-permission: the document, read-only. */
-  state?: 'ready' | 'loading' | 'no-permission'
+  /**
+   * loading: a placeholder until the value arrives. error: the value failed to load, so there
+   * is no editor (saving into a blank one would overwrite the real document). no-permission:
+   * the document, read-only.
+   */
+  state?: 'ready' | 'loading' | 'error' | 'no-permission'
 }>()
 
 const emit = defineEmits<{ blur: [] }>()
@@ -44,6 +48,7 @@ const id = useId()
 const labelId = `${id}-label`
 const hintId = `${id}-hint`
 const errorId = `${id}-error`
+const noInput = computed(() => state === 'loading' || state === 'error')
 const shownHint = computed(() =>
   state === 'no-permission' ? hint || 'You can view this but not change it.' : hint,
 )
@@ -174,16 +179,15 @@ const tools: Tool[] = [
   },
 ]
 
-// One tab stop for the toolbar; arrow keys move inside it.
+// One tab stop for the toolbar; arrow keys move inside it. `focused` owns the tab stop.
 const toolbar = useTemplateRef<HTMLElement>('toolbar')
+const focused = ref(0)
 function onToolbarKey(event: KeyboardEvent) {
-  const buttons = [...(toolbar.value?.querySelectorAll('button') ?? [])]
-  const current = buttons.indexOf(event.target as HTMLButtonElement)
-  const next = rovingIndex(current, event.key, buttons.length)
+  const next = rovingIndex(focused.value, event.key, tools.length)
   if (next === null) return
   event.preventDefault()
-  buttons.forEach((b, i) => (b.tabIndex = i === next ? 0 : -1))
-  buttons[next]?.focus()
+  focused.value = next
+  void nextTick(() => toolbar.value?.querySelectorAll('button')[next]?.focus())
 }
 </script>
 
@@ -192,6 +196,9 @@ function onToolbarKey(event: KeyboardEvent) {
     <span :id="labelId" class="text-secondary text-ink3">{{ label }}</span>
     <template v-if="state === 'loading'">
       <ValueState state="loading" :label="`Loading ${label}`" />
+    </template>
+    <template v-else-if="state === 'error'">
+      <ValueState state="error" />
     </template>
     <template v-else-if="state === 'no-permission'">
       <div class="py-1.5">
@@ -211,7 +218,7 @@ function onToolbarKey(event: KeyboardEvent) {
           v-for="(tool, i) in tools"
           :key="tool.label"
           type="button"
-          :tabindex="i === 0 ? 0 : -1"
+          :tabindex="i === focused ? 0 : -1"
           :aria-label="tool.label"
           :aria-pressed="tool.active() ? 'true' : 'false'"
           :disabled="!editor"
@@ -221,6 +228,7 @@ function onToolbarKey(event: KeyboardEvent) {
             tool.text === 'B' && 'font-medium',
             tool.text === 'I' && 'italic',
           ]"
+          @focus="focused = i"
           @mousedown.prevent
           @click="tool.run"
         >
@@ -237,10 +245,10 @@ function onToolbarKey(event: KeyboardEvent) {
         <EditorContent :editor="editor" />
       </div>
     </template>
-    <span v-if="shownHint && state !== 'loading'" :id="hintId" class="text-secondary text-ink3">{{
+    <span v-if="shownHint && !noInput" :id="hintId" class="text-secondary text-ink3">{{
       shownHint
     }}</span>
-    <span v-if="error && state !== 'loading'" :id="errorId" class="text-secondary text-danger">{{
+    <span v-if="error && !noInput" :id="errorId" class="text-secondary text-danger">{{
       error
     }}</span>
   </div>

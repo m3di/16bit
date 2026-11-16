@@ -1,13 +1,9 @@
-<script setup lang="ts">
-const { size = 16 } = defineProps<{ size?: number }>()
-</script>
-
 <template>
   <svg
     aria-hidden="true"
     focusable="false"
-    :width="size"
-    :height="size"
+    width="16"
+    height="16"
     viewBox="0 0 4 4"
     shape-rendering="crispEdges"
     class="shrink-0"
