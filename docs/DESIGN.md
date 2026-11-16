@@ -109,6 +109,19 @@ Material Symbols, outlined, light weight, 18px. The package is added with the fi
 | StateBlock | Loading skeleton, empty, error, no permission |
 | AppShell | Top bar on the main dashboard; light sidebar with folders inside a hub |
 
+## Components for M1
+
+| Component | Notes |
+|---|---|
+| ValueState | Inline loading, empty, error, and no-access states for one value. Every value component uses it. |
+| CheckboxField | Native checkbox with label, hint, and error. Read-only with a stated reason when the reader cannot edit. |
+| ChipList | Multi-select values as palette chips, in value order. Optional remove buttons and a "+N" limit. Deleted options show as a dashed "Deleted option" chip. |
+| UrlLink | Web and mail addresses as a hairline-underlined link without the scheme, opening in a new tab. Other schemes are shown as text, never linked. |
+| ActorChip | PixelAvatar and name. Agents carry an "Agent" label. |
+| RelationChip | Linked item as mono ID and hairline-underlined title, as in the task mockup. A target the reader cannot see shows "No access", never its title or a link. |
+| RichTextView, RichTextEditor | Rich text for a small closed node set: paragraph, headings (h3, h4), bulleted and numbered lists, code block, line break; bold (shown at weight 500), italic, inline code, and http, https, or mailto links. Long text at 13px with 1.6 line height. The editor uses Tiptap and is imported directly, not from the `ui` barrel, so it stays out of the main bundle. |
+| AuthLayout, SignInForm | Pages outside a workspace: brand bar and a narrow column, no card. The form has empty, submitting, error, and no-permission states and never says which credential was wrong. |
+
 ## Responsiveness
 
 Layouts are built from flex and grid with wrapping, never fixed widths. At phone width the sidebar stacks above the content, toolbars wrap, and wide tables scroll inside their own box.
