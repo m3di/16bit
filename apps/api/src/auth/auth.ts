@@ -125,13 +125,16 @@ export function requireIdentity(request: FastifyRequest): Identity {
 export interface MembershipRow {
   workspace_id: string
   workspace_name: string
+  workspace_created_at: Date
   principal_id: string
   workspace_role: WorkspaceRole
 }
 
 /**
  * An account's memberships, through the SECURITY DEFINER lookup (it keeps working under
- * row-level security, #44). Ordered by workspace name, then ID.
+ * row-level security, #44). Ordered by workspace name, then ID. Don't join `workspace` onto
+ * it: before a workspace is set with `SET LOCAL`, RLS hides every row. Add the column to the
+ * function instead.
  */
 export function accountMemberships(db: Kysely<Database>, accountId: string) {
   return db.selectFrom(sql<MembershipRow>`account_memberships(${accountId})`.as('m')).selectAll()

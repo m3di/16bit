@@ -117,10 +117,9 @@ export function buildApp(options: AppOptions): FastifyInstance {
         const { limit, cursor } = parse(pageQuerySchema, request.query)
         const after = cursor ? decodeCursor(nameCursorSchema, cursor) : null
         if (identity.kind === 'person') {
-          // Through the membership lookup, which keeps working under row-level security.
+          // Only through the membership lookup: it runs before any workspace is set, so a
+          // direct read of `workspace` here would come back empty under row-level security.
           let q = accountMemberships(db, identity.accountId)
-            .innerJoin('workspace as w', 'w.id', 'm.workspace_id')
-            .select('w.created_at')
           if (after)
             q = q.where(
               sql<boolean>`(m.workspace_name, m.workspace_id) > (${after[0]}, ${after[1]})`,
@@ -133,7 +132,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           const workspaces = rows.map((r): Workspace => ({
             id: r.workspace_id,
             name: r.workspace_name,
-            createdAt: r.created_at.toISOString(),
+            createdAt: r.workspace_created_at.toISOString(),
           }))
           return page(workspaces, limit, (w) => [w.name, w.id])
         }

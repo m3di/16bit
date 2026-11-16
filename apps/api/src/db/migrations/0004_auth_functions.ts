@@ -15,12 +15,15 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await sql`
     -- An account's workspaces and the principal it acts as in each (GET /v1/me, the
     -- workspace list, and resolving a session to a principal for the workspace in the path).
+    -- It returns every workspace column those need, so the API never joins the workspace table
+    -- itself: under row-level security that join would see no rows before SET LOCAL.
     CREATE FUNCTION account_memberships(p_account_id text)
-    RETURNS TABLE (workspace_id text, workspace_name text, principal_id text, workspace_role text)
+    RETURNS TABLE (workspace_id text, workspace_name text, workspace_created_at timestamptz,
+                   principal_id text, workspace_role text)
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path = public, pg_temp
     AS $$
-      SELECT w.id, w.name, p.id, p.workspace_role
+      SELECT w.id, w.name, w.created_at, p.id, p.workspace_role
       FROM principal p
       JOIN workspace w ON w.id = p.workspace_id
       WHERE p.account_id = p_account_id AND p.kind = 'user'
@@ -50,7 +53,11 @@ export async function up(db: Kysely<unknown>): Promise<void> {
         RAISE EXCEPTION 'invite not found' USING ERRCODE = '16B01';
       END IF;
 
-      SELECT a.name INTO acct_name FROM account a WHERE a.id = p_account_id;
+      -- Locking the account serialises concurrent redeems by the same account, so two
+      -- invites to one workspace can't both pass the membership check below: the second
+      -- waits, then sees the first's principal and raises 16B02 instead of a unique violation.
+      SELECT a.name INTO acct_name FROM account a WHERE a.id = p_account_id
+      FOR NO KEY UPDATE;
       IF NOT FOUND THEN
         RAISE EXCEPTION 'account not found' USING ERRCODE = 'no_data_found';
       END IF;

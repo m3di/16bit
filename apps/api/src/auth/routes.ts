@@ -3,6 +3,7 @@ import {
   acceptInviteSchema,
   can,
   createInviteSchema,
+  idSchema,
   inviteTokenSchema,
   loginRequestSchema,
   MAX_ME_MEMBERSHIPS,
@@ -39,7 +40,7 @@ export interface AuthRouteOptions extends AuthOptions {
 
 const optional = { config: { auth: 'optional' as const } }
 const tokenParams = z.object({ token: inviteTokenSchema })
-const workspaceParams = z.object({ workspaceId: z.string() })
+const workspaceParams = z.object({ workspaceId: idSchema })
 
 /** Postgres error code, from the custom SQLSTATEs raised by `redeem_invite`. */
 const pgCode = (error: unknown) => (error as { code?: unknown }).code

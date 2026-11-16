@@ -140,6 +140,19 @@ async function inviteToken(workspaceId = 'w1', workspaceRole = 'member'): Promis
 const accept = (token: string, payload: object = {}, headers = {}) =>
   app.inject({ method: 'POST', url: `/v1/auth/invites/${token}`, payload, headers })
 
+/** Resolves once another connection to this database is blocked on a lock. */
+async function waitForLockWait(): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const { rows } = await sql<{ n: number }>`
+      SELECT count(*)::int AS n FROM pg_stat_activity
+      WHERE datname = current_database() AND wait_event_type = 'Lock'
+    `.execute(db)
+    if ((rows[0]?.n ?? 0) > 0) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('no connection waited on a lock')
+}
+
 const newAccount = { name: 'Erin', email: 'Erin@Example.com ', password: 'a long new password' }
 
 describe('POST /v1/auth/login', () => {
@@ -323,6 +336,13 @@ describe('sessions', () => {
       ).json(),
     )
     expect(second).toMatchObject({ items: [{ id: 'w2', name: 'Beta' }], nextCursor: null })
+    // The creation time comes from account_memberships, not a direct read of workspace.
+    const created = await db
+      .selectFrom('workspace')
+      .select('created_at')
+      .where('id', '=', 'w2')
+      .executeTakeFirstOrThrow()
+    expect(second.items[0]?.createdAt).toBe(created.created_at.toISOString())
   })
 
   it('ends after the idle timeout', async () => {
@@ -550,6 +570,31 @@ describe('POST /v1/auth/invites/:token', () => {
     expect(res.json()).toMatchObject({ error: 'already_member' })
     const invite = await db.selectFrom('invite').select('used_at').executeTakeFirstOrThrow()
     expect(invite.used_at).toBeNull()
+  })
+
+  it('is a 409, not a 500, when one account redeems two invites to a workspace at once', async () => {
+    const first = await inviteToken('w2')
+    const second = await inviteToken('w2')
+    const carol = await session('carol@example.com')
+    let racing: ReturnType<typeof accept> | undefined
+    await db.transaction().execute(async (trx) => {
+      // The first redeem holds its transaction open while the second request runs.
+      await sql`SELECT * FROM redeem_invite(${hashToken(first)}, 'carol')`.execute(trx)
+      racing = accept(second, {}, carol)
+      await waitForLockWait()
+    })
+    const res = await racing
+    expect(res?.statusCode).toBe(409)
+    expect(res?.json()).toMatchObject({ error: 'already_member' })
+    const invites = await db
+      .selectFrom('invite')
+      .select(['token_hash', 'used_at'])
+      .where('workspace_id', '=', 'w2')
+      .execute()
+    const usedAt = (token: string) =>
+      invites.find((i) => i.token_hash === hashToken(token))?.used_at
+    expect(usedAt(first)).not.toBeNull()
+    expect(usedAt(second)).toBeNull()
   })
 
   it('says an email is taken only to a holder of a valid invite, and changes nothing', async () => {
