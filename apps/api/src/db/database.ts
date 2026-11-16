@@ -9,19 +9,86 @@ import { migrations } from './migrations/index.ts'
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>
 type Json<T> = ColumnType<T, T | string, T | string>
 
+type WorkspaceRole = 'owner' | 'admin' | 'member' | 'viewer' | 'finance'
+type PrincipalKind = 'user' | 'agent'
+
+// Installation-level, outside row-level security (D46).
+export interface AccountTable {
+  id: string
+  /** Trimmed and lowercased. */
+  email: string
+  /** argon2id PHC string. */
+  password_hash: string
+  name: string
+  created_at: Timestamp
+}
+
+export interface SessionTable {
+  id_hash: string
+  account_id: string
+  created_at: Timestamp
+  last_seen_at: Timestamp
+  expires_at: Timestamp
+}
+
 export interface WorkspaceTable {
   id: string
   name: string
   created_at: Timestamp
   next_revision_seq: Generated<number>
+  next_access_seq: Generated<number>
 }
 
 export interface PrincipalTable {
   workspace_id: string
   id: string
-  kind: 'user' | 'agent'
+  kind: PrincipalKind
   name: string
-  workspace_role: 'owner' | 'admin' | 'member' | 'viewer' | 'finance'
+  workspace_role: WorkspaceRole
+  /** Users only. Null for agents and for users created before M1. */
+  account_id: Generated<string | null>
+}
+
+export interface InviteTable {
+  workspace_id: string
+  id: string
+  token_hash: string
+  workspace_role: WorkspaceRole
+  created_by: string
+  created_at: Timestamp
+  expires_at: Timestamp
+  used_at: Timestamp | null
+}
+
+/** One key per agent principal; its hub and role are its single hub_grant (D47). */
+export interface AgentKeyTable {
+  workspace_id: string
+  principal_id: string
+  principal_kind: Generated<'agent'>
+  secret_hash: string
+  created_by: string
+  created_at: Timestamp
+  expires_at: Timestamp | null
+  revoked_at: Timestamp | null
+}
+
+export interface HubGrantTable {
+  workspace_id: string
+  hub_id: string
+  principal_id: string
+  /** Must match principal.kind; defaults to 'user'. */
+  principal_kind: Generated<PrincipalKind>
+  hub_role: 'hub_admin' | 'editor' | 'commenter' | 'viewer'
+}
+
+export interface AccessLogTable {
+  workspace_id: string
+  seq: number
+  actor: string
+  action: string
+  target: string
+  detail: Json<Record<string, unknown>>
+  at: Timestamp
 }
 
 export interface FolderTable {
@@ -91,6 +158,8 @@ export interface RevisionTable {
 }
 
 export interface Database {
+  account: AccountTable
+  session: SessionTable
   workspace: WorkspaceTable
   principal: PrincipalTable
   folder: FolderTable
@@ -99,6 +168,10 @@ export interface Database {
   item: ItemTable
   item_index: ItemIndexTable
   revision: RevisionTable
+  invite: InviteTable
+  agent_key: AgentKeyTable
+  hub_grant: HubGrantTable
+  access_log: AccessLogTable
 }
 
 // bigint (int8) columns hold versions, counters, and sequence numbers, all far below 2^53.

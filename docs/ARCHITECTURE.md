@@ -41,8 +41,9 @@ session          (id_hash, account_id, created_at, last_seen_at, expires_at) -- 
 workspace        (id, name, created_at, next_revision_seq, next_access_seq)
 principal        (workspace_id, id, kind,           -- 'user' | 'agent'
                   name, workspace_role, account_id) -- account_id for users only
-invite           (workspace_id, id, token_hash, workspace_role, created_by, expires_at, used_at)
-agent_key        (workspace_id, principal_id, secret_hash, expires_at, revoked_at)  -- one agent principal per key (D47)
+invite           (workspace_id, id, token_hash, workspace_role, created_by, created_at, expires_at, used_at)
+agent_key        (workspace_id, principal_id, secret_hash, created_by, created_at,
+                  expires_at, revoked_at)  -- one agent principal per key; no hub or role (D47)
 access_log       (workspace_id, seq, actor, action, target, detail jsonb, at)       -- grants, roles, keys, members (D48)
 folder           (workspace_id, id, hub_id, parent_id,   -- hub: parent_id is null, hub_id = id
                   name, color, id_prefix, item_count, version, next_seq)
@@ -63,6 +64,8 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `item.values` is keyed by attribute ID.
 - A person has one `account` and one `principal` per workspace they belong to. An agent key is a `principal` of kind `agent` with workspace role `member` and exactly one `hub_grant` (D47); `agent_key` only holds its secret hash and lifecycle.
 - `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`. Each attribute type's `project` returns a list of values, one row each, numbered by `ord`; a write replaces all of an item's rows for the attributes it touches. An empty value has no row. Sorting reads the `ord = 0` row.
+- `agent_key` and `hub_grant` also carry `principal_kind`, a copy of `principal.kind` held in step by a `(workspace_id, principal_id, principal_kind)` foreign key. It lets the database refuse a key on a person, a second grant for an agent, and `hub_admin` for an agent (D28, D47). `account.email` is stored trimmed and lowercased, and `password_hash` must be an argon2id string.
+- The only indexes on workspace-scoped tables that do not lead with `workspace_id` are the three lookups that run before a principal is known: `agent_key.secret_hash`, `invite.token_hash` (both unique), and `principal.account_id`.
 - `access_log.seq` is taken from `workspace.next_access_seq` in the same transaction as the access change.
 - `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.

@@ -34,7 +34,8 @@ interface HubSeed extends FolderSeed {
   attributes: AttributeSeed[]
 }
 
-type Person = Omit<PrincipalTable, 'workspace_id'>
+// Seeded people have no account yet; accounts arrive with the M1 people seed (#51).
+type Person = Omit<PrincipalTable, 'workspace_id' | 'account_id'>
 
 interface WorkspaceSeed {
   id: string
