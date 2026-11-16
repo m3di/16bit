@@ -56,3 +56,46 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  image:
+    name: Container image
+    # GitHub-hosted only, for the same reason as above. Builds and smoke-tests; never pushes.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Loaded into the local Docker engine under the tag compose.yaml uses, not pushed.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: 16bit:local
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
+
+      # The same stack as `docker compose up`: Postgres, migrations, then the app.
+      - name: Start the stack
+        run: docker compose up --detach --no-build --wait --wait-timeout 120
+
+      - name: Smoke test
+        run: |
+          set -eu
+          base=http://127.0.0.1:8080
+          curl --fail --silent --show-error "$base/health"
+          curl --fail --silent --show-error -H 'Accept: text/html' "$base/" | grep -q '<div id="app">'
+          curl --fail --silent --show-error -H 'Accept: text/html' "$base/hubs/any" | grep -q '<div id="app">'
+          curl --fail --silent --show-error "$base/v1/workspaces" | grep -q '"items"'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
