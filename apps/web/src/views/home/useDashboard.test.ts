@@ -107,28 +107,47 @@ describe('useDashboard', () => {
     expect(d.workspaces.value).toMatchObject({ state: 'error', error: { code: 'network' } })
   })
 
-  it('ignores a slower, older load', async () => {
+  it('joins a load that is already running instead of sending another', async () => {
     let release: (() => void) | undefined
     let calls = 0
     const d = useDashboard((input) => {
       const path = new URL(urlOf(input), 'http://x').pathname
       if (path !== '/v1/workspaces') return Promise.resolve(page([]))
       calls++
-      if (calls === 1) {
-        return new Promise((resolve) => {
-          release = () => {
-            resolve(page([ws('old')]))
-          }
-        })
-      }
-      return Promise.resolve(page([ws('new')]))
+      return new Promise((resolve) => {
+        release = () => {
+          resolve(page([ws('a')]))
+        }
+      })
     })
     const first = d.load()
-    await d.load()
+    const second = d.load()
     release?.()
-    await first
-    const value = d.workspaces.value
-    if (value.state !== 'ready') throw new Error(value.state)
-    expect(value.data.map((e) => e.workspace.id)).toEqual(['new'])
+    await Promise.all([first, second])
+    expect(calls).toBe(1)
+    expect(d.workspaces.value.state).toBe('ready')
+
+    // Once it has finished, a new load sends a new request.
+    const third = d.load()
+    release?.()
+    await third
+    expect(calls).toBe(2)
+  })
+
+  it('sends one hubs request for two quick retries', async () => {
+    let hubCalls = 0
+    const d = useDashboard(
+      api({
+        '/v1/workspaces': () => page([ws('a')]),
+        '/v1/workspaces/a/hubs': () => {
+          hubCalls++
+          return page([])
+        },
+      }),
+    )
+    await d.load()
+    hubCalls = 0
+    await Promise.all([d.reloadHubs('a'), d.reloadHubs('a')])
+    expect(hubCalls).toBe(1)
   })
 })

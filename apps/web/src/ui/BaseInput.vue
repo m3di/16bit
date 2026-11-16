@@ -16,7 +16,7 @@ const {
 } = defineProps<{
   /** Always required. Use labelHidden when the context makes it obvious, as in a search box. */
   label: string
-  type?: 'text' | 'search' | 'email' | 'url' | 'number' | 'password'
+  type?: 'text' | 'search' | 'email' | 'url' | 'number' | 'password' | 'date' | 'datetime-local'
   hint?: string
   /** Shown under the field. Marks the input invalid. */
   error?: string

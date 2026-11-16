@@ -1,6 +1,6 @@
-import { workspacePageSchema } from '@16bit/core'
+import { itemSchema, workspacePageSchema } from '@16bit/core'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiRequestError, getAllPages, getJson, MAX_PAGES, type Fetch } from './client.ts'
+import { ApiRequestError, getAllPages, getJson, MAX_PAGES, sendJson, type Fetch } from './client.ts'
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -83,5 +83,58 @@ describe('getAllPages', () => {
       code: 'bad_response',
     })
     expect(fetchFn).toHaveBeenCalledTimes(MAX_PAGES)
+  })
+
+  it('keeps a query string already on the path', async () => {
+    const fetchFn = vi.fn<Fetch>((input) => {
+      const url = new URL(urlOf(input), 'http://x')
+      return Promise.resolve(
+        url.searchParams.get('cursor') === 'c1'
+          ? json({ items: [ws('b')], nextCursor: null })
+          : json({ items: [ws('a')], nextCursor: 'c1' }),
+      )
+    })
+    await getAllPages('/v1/x?folder=f1', workspacePageSchema, fetchFn)
+    expect(fetchFn.mock.calls.map(([input]) => urlOf(input))).toEqual([
+      '/v1/x?folder=f1&limit=200',
+      '/v1/x?folder=f1&limit=200&cursor=c1',
+    ])
+  })
+
+  it('respects a limit the caller set', async () => {
+    const fetchFn = vi.fn<Fetch>(() => Promise.resolve(json({ items: [], nextCursor: null })))
+    await getAllPages('/v1/x?limit=10', workspacePageSchema, fetchFn)
+    expect(urlOf(fetchFn.mock.calls[0]?.[0] ?? '')).toBe('/v1/x?limit=10')
+  })
+})
+
+const item = {
+  workspaceId: 'w',
+  id: 'i1',
+  hubId: 'h',
+  folderId: 'h',
+  seqId: 1,
+  values: {},
+  version: 2,
+  updatedAt: '2026-11-16T00:00:00.000Z',
+  updatedBy: 'p',
+}
+
+describe('sendJson', () => {
+  it('sends the body as JSON with the method', async () => {
+    const fetchFn = vi.fn<Fetch>(() => Promise.resolve(json(item)))
+    expect(await sendJson('PATCH', '/v1/i', { version: 1 }, itemSchema, fetchFn)).toEqual(item)
+    const init = fetchFn.mock.calls[0]?.[1]
+    expect(init?.method).toBe('PATCH')
+    expect(init?.body).toBe('{"version":1}')
+    expect(init?.headers).toMatchObject({ 'Content-Type': 'application/json' })
+  })
+
+  it('keeps the error body, so a conflict carries the current item', async () => {
+    const fetchFn: Fetch = () =>
+      Promise.resolve(json({ error: 'conflict', message: 'Changed', current: item }, 409))
+    const error = await sendJson('PATCH', '/v1/i', {}, itemSchema, fetchFn).catch((e: unknown) => e)
+    expect(error).toMatchObject({ code: 'conflict', status: 409 })
+    expect((error as ApiRequestError).body).toMatchObject({ current: item })
   })
 })

@@ -1,7 +1,16 @@
 import { createRouter, createWebHistory, type RouteRecordRaw, type RouterHistory } from 'vue-router'
 import HomeView from './views/HomeView.vue'
 
-const routes: RouteRecordRaw[] = [{ path: '/', name: 'home', component: HomeView }]
+const routes: RouteRecordRaw[] = [
+  { path: '/', name: 'home', component: HomeView },
+  {
+    // The selected folder is optional: without it the hub's own items show. `?item=` opens
+    // the item panel, so a selected item can be linked and survives a reload.
+    path: '/w/:workspaceId/hubs/:hubId/:folderId?',
+    name: 'hub',
+    component: () => import('./views/HubView.vue'),
+  },
+]
 
 // The component kit is a local tool. It is left out of production builds.
 if (import.meta.env.DEV) {
