@@ -116,6 +116,8 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 
 Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE /v1/items/:id`.
 
+**M0 routes.** Every route except `/health` is scoped to a workspace: `/v1/workspaces/:workspaceId/...`, so the table's `/v1/items/:id` is `/v1/workspaces/:workspaceId/items/:id`. `GET /v1/workspaces` and `GET /v1/workspaces/:workspaceId/hubs` list what the caller can see. `DELETE` takes the expected version as `?version=`. Request and response shapes are in `packages/core/src/api.ts`. A stale version returns 409 `{ error: "conflict", message, current: Item }`. A revision's `patch` is `{ op: "create", folderId, values }`, `{ op: "update", values }`, or `{ op: "delete" }`. Not yet in M0: client mutation IDs and `POST /v1/items/get`.
+
 **M0 auth:** a single development API key from the environment, sent as a bearer token, mapped to a seeded owner. Real authentication, sessions, and agent keys arrive in M1.
 
 ## Client data layer (from M3)

@@ -1,14 +1,26 @@
 import { buildApp } from './app.ts'
+import { createDb } from './db/database.ts'
 
 const port = Number(process.env['PORT'] ?? 3000)
 const host = process.env['HOST'] ?? '127.0.0.1'
+const databaseUrl = process.env['DATABASE_URL']
+const devApiKey = process.env['DEV_API_KEY']
+const devPrincipalId = process.env['DEV_PRINCIPAL_ID'] ?? 'dev-owner'
 
-const app = buildApp()
+if (!databaseUrl || !devApiKey) {
+  console.error('api: DATABASE_URL and DEV_API_KEY must be set. See .env.example.')
+  process.exit(1)
+}
+
+// The pool connects lazily, so the server starts even while Postgres is still coming up.
+const db = createDb(databaseUrl)
+const app = buildApp({ db, devApiKey, devPrincipalId })
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`api received ${signal}, closing`)
   try {
     await app.close()
+    await db.destroy()
     process.exit(0)
   } catch (error) {
     console.error(error)
