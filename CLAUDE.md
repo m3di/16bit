@@ -17,10 +17,11 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 | `docs/DESIGN.md` | Before writing any UI |
 | `docs/ROADMAP.md` | To know the current milestone and its exit criteria |
 | `docs/WORKFLOW.md` | Always. It defines stages, handoffs, and the sprint loop. |
+| `docs/ROLES.md` | Before touching auth, permissions, or anything a role can see or do |
 
 ## Current milestone
 
-**M0, first look: complete, waiting for the maintainer's feedback** (see `docs/reports/M0.md`). Do not start M1 until the maintainer has looked. Exit criteria were: CI is green on `main`, `pnpm dev` runs the API and web app against a local Postgres, the dashboard shows hubs and a table of items, and the team's own issues are visible inside a local "Build" hub. Full list in `docs/ROADMAP.md`.
+**M1, data API and access.** Exit: two people and one agent key with different roles see and can do exactly what `docs/ROLES.md` says, proven by end-to-end tests. Full list in `docs/ROADMAP.md`. M0 is done (`docs/reports/M0.md`).
 
 ## Rules that always apply
 
@@ -30,6 +31,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 - **The reviewer is never the author.** QA adds or extends an end-to-end test for every user-visible feature.
 - **Stop for the maintainer** on anything labelled `needs-human`: database migrations, changes to `packages/core` contracts, CI secrets, deployment, licence files, deleting data, and any decision not covered by `docs/DECISIONS.md`.
 - **No secrets in the repository.** Use `.env` locally and `.env.example` in git.
+- **Migrations:** apply them only to your own throwaway databases, never to the shared dev database. Never edit a merged migration; add a new one.
 - **Stay inside this repository.** No destructive commands outside it, no force pushes, no rewriting published history.
 - **Pin and check versions.** When adding a dependency, use the current stable release and read its current documentation instead of relying on memory.
 
