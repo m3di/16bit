@@ -29,7 +29,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 - **Worktrees.** Every subagent works in its own git worktree under `.worktrees/`, never in the main checkout.
 - **Everything is written down.** Each claim, handoff, question, review, and decision is a comment on the issue or pull request, prefixed with the role, for example `**[backend]**`.
 - **The reviewer is never the author.** QA adds or extends an end-to-end test for every user-visible feature.
-- **Stop for the maintainer** on anything labelled `needs-human`: database migrations, changes to `packages/core` contracts, CI secrets, deployment, licence files, deleting data, and any decision not covered by `docs/DECISIONS.md`.
+- **Stop for the maintainer** on anything labelled `needs-human`: database migrations, changes to `packages/core` contracts, `docs/ROLES.md`, authentication or row-level security, CI secrets, deployment, licence files, deleting data, and any decision not covered by `docs/DECISIONS.md`.
 - **No secrets in the repository.** Use `.env` locally and `.env.example` in git.
 - **Migrations:** apply them only to your own throwaway databases, never to the shared dev database. Never edit a merged migration; add a new one.
 - **Stay inside this repository.** No destructive commands outside it, no force pushes, no rewriting published history.

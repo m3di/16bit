@@ -4,7 +4,7 @@ The initial plan for M1. Each entry became a GitHub issue during planning; after
 
 **Sprint goal:** people sign in, agent keys work, every request is checked against `docs/ROLES.md` in the API and again by row-level security, items can be filtered and sorted, the new attribute types and relations work end to end, and an end-to-end suite proves the role matrix.
 
-**Decisions this plan rests on:** D42 (email and password, sessions in Postgres), D43 (invite-only), D44 (no file or rollup in M1), D45 (role matrix, strict hub grants).
+**Decisions this plan rests on:** D42 to D48. After the review of the planning PR, the issues were adjusted: account and session are installation-level (D46), an agent key is a principal with one hub grant (D47), access changes go to `access_log` (D48), removing the dev key moved from M1-05 to M1-13, #47 and #50 depend on M1-05, and every issue that changes core contracts, auth, RLS or CI is gated. The GitHub issues hold the final text.
 
 ---
 

@@ -5,14 +5,14 @@ The role matrix for M1. It applies D25 to D28. The API enforces it through one f
 ## Principals
 
 - A **person** signs in with email and password and gets a session (D42).
-- An **agent key** is a bearer token scoped to exactly one hub (D28). It has no workspace role beyond `member`.
+- An **agent key** is a bearer token. Each key is its own principal of kind `agent`, with workspace role `member` and exactly one hub grant (D28, D47). Being an agent removes every workspace action, whatever the role says.
 
 Both kinds are principals and go through the same checks (D25).
 
 ## Two layers
 
 1. The **workspace role** sets *what* someone can do in the workspace.
-2. A **hub grant** sets *where*. Without a grant on a hub, a principal sees nothing inside it: no folders, attributes or items (D27). Hub names show only in the hub list, and only to owners and admins. **This applies to owners and admins too:** they can grant themselves access to any hub, and the grant is recorded in the revision log, but until they do they cannot read inside it.
+2. A **hub grant** sets *where*. Without a grant on a hub, a principal sees nothing inside it: no folders, attributes or items (D27). Owners and admins see the names of all hubs in the hub list; everyone else sees only the hubs they hold a grant on. **The grant rule binds owners and admins too:** they can grant themselves access to any hub (recorded in `access_log`, D48), but until they do, everything inside the hub returns 404 to them. The hub list marks such hubs as "no access" so the dashboard can offer the self-grant.
 
 A person's **effective hub role** is their hub grant, capped by their workspace role:
 
@@ -33,6 +33,8 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Grant or revoke access on any hub | ✓ | ✓ | — | — | — | — |
 | Create and revoke agent keys on any hub | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
+| Delete a hub | ✓ | ✓ | — | — | — | — |
+| Remove a member (revokes their grants in this workspace; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
 | Rename or delete the workspace | ✓ | — | — | — | — | — |
 
 ¹ An admin cannot change, remove or create an owner. There is always at least one owner.
@@ -44,22 +46,26 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Describe the hub, read and query items | ✓ | ✓ | ✓ | ✓ |
 | Create, edit and delete items | ✓ | ✓ | — | — |
 | Comment (when comments exist) | ✓ | ✓ | ✓ | — |
-| Manage folders and attributes | ✓ | — | — | — |
+| Rename the hub, manage folders and attributes | ✓ | — | — | — |
 | Grant or revoke access on this hub | ✓ ² | — | — | — |
 | Create and revoke agent keys for this hub | ✓ | — | — | — |
 
-² A hub admin cannot grant a role above their own, and cannot change their own grant.
+² A hub admin cannot change or revoke their own grant, or the grant of a workspace owner or admin.
 
 ## Agent keys
 
 - Scoped to one hub, with role `editor`, `commenter` or `viewer`. Never `hub admin` (D28).
 - They can never manage members, grants, keys, folders or attributes, and never touch billing.
-- Shown once when created and stored hashed. They can be revoked, and an optional expiry date can be set.
+- Shown once when created and stored hashed. They can be revoked, and an optional expiry date can be set. Creating or revoking a key is recorded in `access_log`.
 - Writes are recorded with the key's principal as `updated_by`.
 
 ## Relations across hubs
 
 A relation attribute can point outside its hub only when that attribute allows it (D11). Even then, a principal sees a linked item only if they could read it directly: otherwise the link shows as "no access", never its values.
+
+## Passwords
+
+There is no password reset in the API. The installation operator resets a password with a CLI command (D42).
 
 ## Not in M1
 
