@@ -12,6 +12,7 @@ import {
   StatusDot,
   paletteVar,
 } from '../../ui/index.ts'
+import KitValues from './KitValues.vue'
 
 const { theme } = defineProps<{ theme: 'light' | 'dark' }>()
 
@@ -211,5 +212,7 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
         </div>
       </div>
     </section>
+
+    <KitValues />
   </div>
 </template>
