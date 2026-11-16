@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - apps/*
+  - e2e
+
+# Record exact versions when running `pnpm add`.
+savePrefix: ''
+engineStrict: true
