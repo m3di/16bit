@@ -28,8 +28,11 @@ export type RevisionPatch =
 /** Postgres NOTIFY channel. The payload is `<workspaceId>:<seq>`, read by the M3 change feed. */
 export const REVISION_CHANNEL = 'revision'
 
-// Lock order inside write transactions, to rule out deadlocks:
-// item row, then hub row, then folder row, then workspace row (for the revision seq).
+// Lock order inside write transactions, to rule out deadlocks: item row, then hub row, then
+// folder row, then workspace row (for the revision seq). Patch and delete lock the existing item
+// row first. Create locks the hub row (next_seq), the hub and folder rows (counts), then inserts
+// the new item row and takes the workspace row. The new row is invisible to other transactions,
+// so taking it after the hub and folder cannot deadlock with them.
 
 async function appendRevision(
   trx: Trx,
@@ -203,12 +206,14 @@ export async function patchItem(
     input.values,
     true,
   )
+  const cleared = Object.keys(patch).filter((key) => patch[key] === null)
 
   return db.transaction().execute(async (trx) => {
     const row = await trx
       .updateTable('item')
       .set({
-        values: sql`jsonb_strip_nulls(${sql.ref('values')} || ${JSON.stringify(patch)}::jsonb)`,
+        // `null` clears a value: drop those top-level keys only. Nested nulls are data.
+        values: sql`(${sql.ref('values')} || ${JSON.stringify(patch)}::jsonb) - ${cleared}::text[]`,
         version: sql`version + 1`,
         updated_at: sql`now()`,
         updated_by: actor,
