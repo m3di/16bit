@@ -411,9 +411,19 @@ const CURSOR_VALUE: Record<KeyKind, z.ZodType> = {
 /**
  * Rows after the cursor in `ORDER BY k0, k1, ..., id` with nulls last:
  * OR over i of (k0..k(i-1) equal to the cursor, and ki after it).
+ *
+ * When no key is nullable and every key runs in the ID's direction (the default order), this
+ * is a row comparison instead, which Postgres matches to a btree index such as
+ * item_folder_updated_idx. The OR form cannot use the index and sorts the whole folder.
  */
 function afterCursor(keys: SortKey[], idDesc: boolean, cursor: unknown[]): RawBuilder<unknown> {
   const ref = (i: number) => sql.ref(`q.k${String(i)}`)
+  if (keys.every((key) => !key.nullable && key.desc === idDesc)) {
+    const values = keys.map((key, i) => typed(key.kind, cursor[i] as string | number))
+    const row = sql`(${sql.join([...keys.map((_, i) => ref(i)), sql.ref('q.id')])})`
+    const at = sql`(${sql.join([...values, sql`${cursor.at(-1) as string}`])})`
+    return idDesc ? sql`${row} < ${at}` : sql`${row} > ${at}`
+  }
   const equal = (key: SortKey, i: number, c: unknown) =>
     c === null ? sql`${ref(i)} IS NULL` : sql`${ref(i)} = ${typed(key.kind, c as string | number)}`
   const after = (key: SortKey, i: number, c: unknown) => {
@@ -437,6 +447,14 @@ function afterCursor(keys: SortKey[], idDesc: boolean, cursor: unknown[]): RawBu
 
 type QueryRow = Parameters<typeof toItem>[0] & Record<string, unknown>
 
+export interface ItemQuery {
+  from: string
+  where: Filter | null
+  sort: { attribute: string; direction: 'asc' | 'desc' }[]
+  limit: number
+  cursor: string | null
+}
+
 /**
  * A folder's items, filtered and sorted on indexed attributes, keyset-paged. With no `sort`,
  * newest update first. The cursor holds the last row's sort values and ID.
@@ -444,14 +462,33 @@ type QueryRow = Parameters<typeof toItem>[0] & Record<string, unknown>
 export async function queryItems(
   db: Db,
   workspaceId: string,
-  query: {
-    from: string
-    where: Filter | null
-    sort: { attribute: string; direction: 'asc' | 'desc' }[]
-    limit: number
-    cursor: string | null
-  },
+  query: ItemQuery,
 ): Promise<Page<Item>> {
+  const { statement, keys } = await itemQueryStatement(db, workspaceId, query)
+  const { rows } = await statement.execute(db)
+  const page = rows.slice(0, query.limit)
+  const last = page.at(-1)
+  return {
+    items: page.map((row) => toItem(row)),
+    nextCursor:
+      rows.length > query.limit && last
+        ? encodeCursor([
+            ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
+            last.id,
+          ])
+        : null,
+  }
+}
+
+/**
+ * The SQL for one page of `queryItems`, fetching one row past the limit. Exported so tests can
+ * EXPLAIN it: the default order must stay an index scan on item_folder_updated_idx (D20).
+ */
+export async function itemQueryStatement(
+  db: Db,
+  workspaceId: string,
+  query: ItemQuery,
+): Promise<{ statement: RawBuilder<QueryRow>; keys: SortKey[] }> {
   const folder = await db
     .selectFrom('folder')
     .select('id')
@@ -501,7 +538,7 @@ export async function queryItems(
       ? sql`to_char(${sql.ref(`q.k${String(i)}`)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
       : sql.ref(`q.k${String(i)}`)
 
-  const { rows } = await sql<QueryRow>`
+  const statement = sql<QueryRow>`
     SELECT q.*, ${sql.join(keys.map((k, i) => sql`${cursorForm(k, i)} AS ${sql.id(`c${String(i)}`)}`))}
     FROM (
       SELECT i.*, ${sql.join(keys.map((k, i) => sql`${k.expr} AS ${sql.id(`k${String(i)}`)}`))}
@@ -513,23 +550,14 @@ export async function queryItems(
     WHERE ${cursor ? afterCursor(keys, idDesc, cursor) : sql`TRUE`}
     ORDER BY ${sql.join([
       ...keys.map(
-        (k, i) => sql`${sql.ref(`q.k${String(i)}`)} ${k.desc ? sql`DESC` : sql`ASC`} NULLS LAST`,
+        // NULLS LAST only where nulls occur: on a NOT NULL key it would still stop the planner
+        // from matching a DESC index, which keeps nulls first.
+        (k, i) =>
+          sql`${sql.ref(`q.k${String(i)}`)} ${k.desc ? sql`DESC` : sql`ASC`}${k.nullable ? sql` NULLS LAST` : sql``}`,
       ),
       idDesc ? sql`q.id DESC` : sql`q.id ASC`,
     ])}
     LIMIT ${query.limit + 1}
-  `.execute(db)
-
-  const page = rows.slice(0, query.limit)
-  const last = page.at(-1)
-  return {
-    items: page.map((row) => toItem(row)),
-    nextCursor:
-      rows.length > query.limit && last
-        ? encodeCursor([
-            ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
-            last.id,
-          ])
-        : null,
-  }
+  `
+  return { statement, keys }
 }

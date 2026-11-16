@@ -1,11 +1,12 @@
 import { itemPageSchema, type Filter, type Sort } from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
-import type { Kysely } from 'kysely'
+import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { encodeCursor } from './http.ts'
+import { itemQueryStatement, type ItemQuery } from './items.ts'
 
 // Integration tests for item_index, filters, and sorts (D6, D19, D20) against a real Postgres.
 
@@ -68,15 +69,22 @@ beforeEach(async () => {
   drop = test.drop
   db = createDb(test.url)
   await migrateToLatest(db)
-  await db.insertInto('workspace').values({ id: 'w1', name: 'W' }).execute()
+  await seedWorkspace('w1')
+  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
+  for (const [id, values] of Object.entries(ITEMS)) await createIn('w1', id, values)
+})
+
+/** Workspace `ws` with hub `h` and the attributes above, and no items. */
+async function seedWorkspace(ws: string): Promise<void> {
+  await db.insertInto('workspace').values({ id: ws, name: 'W' }).execute()
   await db
     .insertInto('principal')
-    .values({ workspace_id: 'w1', id: ACTOR, kind: 'user', name: 'Dev', workspace_role: 'owner' })
+    .values({ workspace_id: ws, id: ACTOR, kind: 'user', name: 'Dev', workspace_role: 'owner' })
     .execute()
   await db
     .insertInto('folder')
     .values({
-      workspace_id: 'w1',
+      workspace_id: ws,
       id: 'h',
       hub_id: 'h',
       parent_id: null,
@@ -86,7 +94,7 @@ beforeEach(async () => {
     })
     .execute()
   const attribute = (id: string, type: string, config: object, indexed = true) => ({
-    workspace_id: 'w1',
+    workspace_id: ws,
     id,
     hub_id: 'h',
     name: id,
@@ -117,7 +125,7 @@ beforeEach(async () => {
     .insertInto('folder_attribute')
     .values(
       attributes.map((a, position) => ({
-        workspace_id: 'w1',
+        workspace_id: ws,
         hub_id: 'h',
         folder_id: 'h',
         attribute_id: a.id,
@@ -125,12 +133,12 @@ beforeEach(async () => {
       })),
     )
     .execute()
-  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
-  for (const [id, values] of Object.entries(ITEMS)) {
-    const res = await post('/v1/workspaces/w1/items', { id, folderId: 'h', values })
-    expect(res.statusCode, res.body).toBe(201)
-  }
-})
+}
+
+async function createIn(ws: string, id: string, values: object): Promise<void> {
+  const res = await post(`/v1/workspaces/${ws}/items`, { id, folderId: 'h', values })
+  expect(res.statusCode, res.body).toBe(201)
+}
 
 afterEach(async () => {
   await app.close()
@@ -142,8 +150,8 @@ function post(url: string, payload: object) {
   return app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${KEY}` }, payload })
 }
 
-function query(body: object) {
-  return post('/v1/workspaces/w1/query', { from: 'h', limit: 50, ...body })
+function query(body: object, ws = 'w1') {
+  return post(`/v1/workspaces/${ws}/query`, { from: 'h', limit: 50, ...body })
 }
 
 /** IDs in result order. */
@@ -435,5 +443,53 @@ describe('paging', () => {
       { sort: [{ attribute: 'points' }], cursor: encodeCursor(['x', 'a']) },
       'Invalid cursor',
     )
+  })
+})
+
+describe('workspace isolation', () => {
+  it('matches only the queried workspace’s rows, even with the same folder, attribute, and item IDs', async () => {
+    await seedWorkspace('w2')
+    await createIn('w2', 'a', { title: 'Zebra', points: 99 })
+    await createIn('w2', 'z', { title: 'Apple', points: 3 })
+    const idsIn = async (ws: string, body: object) => {
+      const res = await query(body, ws)
+      expect(res.statusCode, res.body).toBe(200)
+      return itemPageSchema.parse(res.json()).items.map((i) => `${i.workspaceId}/${i.id}`)
+    }
+    expect(await idsIn('w2', {})).toEqual(['w2/z', 'w2/a'])
+    expect(await idsIn('w2', { where: cond('title', 'contains', 'apple') })).toEqual(['w2/z'])
+    expect(await idsIn('w2', { where: cond('points', 'eq', 3) })).toEqual(['w2/z'])
+    expect(await idsIn('w2', { where: cond('done', 'is_not_empty') })).toEqual([])
+    expect(await idsIn('w1', { where: cond('title', 'eq', 'Zebra') })).toEqual([])
+    expect(await idsIn('w2', { sort: [{ attribute: 'points', direction: 'desc' }] })).toEqual([
+      'w2/a',
+      'w2/z',
+    ])
+  })
+})
+
+describe('query plans (D20)', () => {
+  /** EXPLAIN of one page, with sorting priced out so only an index can supply the order. */
+  async function plan(query: Partial<ItemQuery>): Promise<string> {
+    const full: ItemQuery = { from: 'h', where: null, sort: [], limit: 50, cursor: null, ...query }
+    const { statement } = await itemQueryStatement(db, 'w1', full)
+    return db.transaction().execute(async (trx) => {
+      await sql`SET LOCAL enable_sort = off`.execute(trx)
+      await sql`SET LOCAL enable_seqscan = off`.execute(trx)
+      const { rows } = await sql<{ 'QUERY PLAN': string }>`EXPLAIN ${statement}`.execute(trx)
+      return rows.map((r) => r['QUERY PLAN']).join('\n')
+    })
+  }
+
+  it('serves the default order from item_folder_updated_idx without a sort, on every page', async () => {
+    const first = await plan({})
+    expect(first).toContain('item_folder_updated_idx')
+    expect(first).not.toMatch(/Sort/)
+
+    const res = await query({ limit: 2 })
+    const { nextCursor } = itemPageSchema.parse(res.json())
+    const next = await plan({ limit: 2, cursor: nextCursor })
+    expect(next).toContain('item_folder_updated_idx')
+    expect(next).not.toMatch(/Sort/)
   })
 })

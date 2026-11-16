@@ -422,6 +422,8 @@ describe('0002_item_index', () => {
     },
     { id: 'notes', type: 'text', config: {}, indexed: false },
   ] as const
+  // Indexed, but not shown on f1: the write path does not index it, so neither does the backfill.
+  const offFolder = { id: 'off', type: 'number', config: {}, indexed: true } as const
   const items: Record<string, Record<string, unknown>> = {
     i1: {
       title: 'Hello',
@@ -431,6 +433,7 @@ describe('0002_item_index', () => {
       at: '2026-11-16T10:00:00+03:30',
       stage: 'todo',
       notes: 'not indexed',
+      off: 1,
     },
     i2: { title: 'Other', points: -3, done: true },
     // Wrong JSON types are skipped instead of failing the migration.
@@ -442,7 +445,7 @@ describe('0002_item_index', () => {
     await db
       .insertInto('attribute')
       .values(
-        attributes.map((a) => ({
+        [...attributes, offFolder].map((a) => ({
           workspace_id: 'w1',
           hub_id: 'h1',
           name: a.id,
@@ -450,6 +453,18 @@ describe('0002_item_index', () => {
           type: a.type,
           config: JSON.stringify(a.config),
           indexed: a.indexed,
+        })),
+      )
+      .execute()
+    await db
+      .insertInto('folder_attribute')
+      .values(
+        attributes.map((a, position) => ({
+          workspace_id: 'w1',
+          hub_id: 'h1',
+          folder_id: 'f1',
+          attribute_id: a.id,
+          position,
         })),
       )
       .execute()

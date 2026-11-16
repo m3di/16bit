@@ -44,6 +44,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
  * Fills item_index from every item's stored values for indexed attributes. Mirrors `project`
  * of each M0 type in packages/core, in SQL so the migration stays fixed even as core changes.
  * A test compares its output with the write path's. Values of the wrong JSON type are skipped.
+ * Like the write path, it indexes only attributes shown on the item's folder.
  */
 export async function backfill(db: Kysely<unknown>): Promise<void> {
   await sql`
@@ -64,6 +65,8 @@ export async function backfill(db: Kysely<unknown>): Promise<void> {
     FROM item i
     CROSS JOIN LATERAL jsonb_each(i.values) AS v (key, value)
     JOIN attribute a ON a.workspace_id = i.workspace_id AND a.id = v.key
+    JOIN folder_attribute fa
+      ON fa.workspace_id = i.workspace_id AND fa.folder_id = i.folder_id AND fa.attribute_id = a.id
     WHERE a.indexed
       AND CASE a.type
         WHEN 'number' THEN jsonb_typeof(v.value) = 'number'
@@ -71,7 +74,6 @@ export async function backfill(db: Kysely<unknown>): Promise<void> {
         WHEN 'text' THEN jsonb_typeof(v.value) = 'string' AND v.value <> '""'::jsonb
         ELSE jsonb_typeof(v.value) = 'string'
       END
-    ON CONFLICT DO NOTHING
   `.execute(db)
 }
 
