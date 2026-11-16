@@ -20,7 +20,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 
 ## Current milestone
 
-**M0, first look.** Exit criteria: CI is green on `main`, `pnpm dev` runs the API and web app against a local Postgres, the dashboard shows hubs and a table of items, and the team's own issues are visible inside a local "Build" hub. Full list in `docs/ROADMAP.md`.
+**M0, first look: complete, waiting for the maintainer's feedback** (see `docs/reports/M0.md`). Do not start M1 until the maintainer has looked. Exit criteria were: CI is green on `main`, `pnpm dev` runs the API and web app against a local Postgres, the dashboard shows hubs and a table of items, and the team's own issues are visible inside a local "Build" hub. Full list in `docs/ROADMAP.md`.
 
 ## Rules that always apply
 
@@ -58,5 +58,6 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm seed`: load the demo workspaces (`demo`, `acme`). Safe to re-run. Refuses `NODE_ENV=production` without `--force`.
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
 - `pnpm e2e`: Playwright end-to-end tests in `e2e`. Needs a seeded database; reuses a running `pnpm dev` or starts the API and web app itself.
+- `docker compose up --build`: the whole stack from the container image on http://localhost:8080 (D41: anonymous dev owner, loopback only).
 
 Keep this list up to date as scripts land.
