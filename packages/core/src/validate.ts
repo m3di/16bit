@@ -12,7 +12,7 @@ export interface FolderAttributeDefinition {
   required: boolean
 }
 
-export type ValueErrorCode = 'unknown_attribute' | 'required' | 'invalid_value'
+export type ValueErrorCode = 'unknown_attribute' | 'required' | 'invalid_value' | 'read_only'
 
 export interface ValueError {
   attributeId: string
@@ -27,6 +27,7 @@ export interface ValidateItemValuesOptions {
   /**
    * `false` (create): every required attribute must be present and non-empty.
    * `true` (patch): only the given keys are checked, but a required attribute cannot be cleared.
+   * Either way, a value for a read-only attribute (auto ID) is refused with `read_only`.
    */
   partial?: boolean
 }
@@ -58,6 +59,18 @@ function parseValue(attribute: Attribute, input: unknown): ParseResult {
       return parseWith(attributeTypes.date, attribute.config, input)
     case 'select':
       return parseWith(attributeTypes.select, attribute.config, input)
+    case 'multi_select':
+      return parseWith(attributeTypes.multi_select, attribute.config, input)
+    case 'url':
+      return parseWith(attributeTypes.url, attribute.config, input)
+    case 'actor':
+      return parseWith(attributeTypes.actor, attribute.config, input)
+    case 'auto_id':
+      return parseWith(attributeTypes.auto_id, attribute.config, input)
+    case 'rich_text':
+      return parseWith(attributeTypes.rich_text, attribute.config, input)
+    case 'relation':
+      return parseWith(attributeTypes.relation, attribute.config, input)
   }
 }
 
@@ -84,6 +97,10 @@ export function validateItemValues(
       })
       continue
     }
+    if (attributeTypes[definition.attribute.type].readOnly) {
+      errors.push({ attributeId, code: 'read_only', message: 'Assigned by the server' })
+      continue
+    }
     const parsed = parseValue(definition.attribute, input)
     if (!parsed.ok) {
       errors.push({ attributeId, code: 'invalid_value', message: parsed.message })
@@ -96,6 +113,8 @@ export function validateItemValues(
 
   if (!options.partial) {
     for (const { attribute, required } of folderAttributes) {
+      // The server fills read-only values, so they are never missing from a client's create.
+      if (attributeTypes[attribute.type].readOnly) continue
       if (required && !Object.hasOwn(values, attribute.id)) {
         errors.push({ attributeId: attribute.id, code: 'required', message: 'A value is required' })
       }

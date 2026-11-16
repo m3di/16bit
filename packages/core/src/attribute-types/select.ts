@@ -29,11 +29,13 @@ export const selectType: AttributeType<'select', SelectConfig, string> = {
     const ids = optionIds(config)
     return z.string().refine((v) => ids.includes(v), { message: 'Unknown option' })
   },
+  readOnly: false,
   isEmpty: () => false,
   indexProjection: 'txt',
   project: (value) => [value],
   filterOperators: ['eq', 'neq', 'in', 'not_in', ...EMPTY_OPERATORS],
   // Sorts by option order, not by label. A value whose option was deleted sorts last.
+  sortable: true,
   sortKey: (value, config) => {
     const index = optionIds(config).indexOf(value)
     return index === -1 ? config.options.length : index
