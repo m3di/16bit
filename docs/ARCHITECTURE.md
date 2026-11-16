@@ -132,13 +132,14 @@ A normalised store keyed by item ID sits between the server and every component.
 - `pnpm dev` runs migrations, then the API and the web dev server.
 - `pnpm seed` loads a demo workspace.
 - `pnpm seed:build-hub` imports this repository's GitHub issues into a local "Build" hub.
+- `docker compose up --build` runs the whole stack from the container image: Postgres, a one-shot migration service, then the app serving the API and the built dashboard on one port. The browser has no key in M0, so this stack sets `DEV_ANONYMOUS_AS_OWNER=true` (requests without an `Authorization` header act as the dev owner, as through the Vite dev proxy) and publishes the port on 127.0.0.1 only. The API refuses to start with that flag on a non-loopback `HOST` unless `DEV_ANONYMOUS_ALLOW_NONLOCAL=1` is also set, which compose sets because the container binds 0.0.0.0 behind the loopback-only port (D41). It goes away with real auth in M1.
 - `.env.example` documents every variable.
 
 It must also run without Docker for anyone who has Postgres installed, by pointing `DATABASE_URL` at it.
 
 ## CI
 
-On every pull request and on `main`: install, lint, typecheck, unit tests, build, then end-to-end tests with a Postgres service container. M0 uses GitHub-hosted runners only. End-to-end tests are written so they can be sharded across runners later.
+On every pull request and on `main`: install, lint, typecheck, unit tests, build, then end-to-end tests with a Postgres service container. A parallel job builds the container image (never pushed) and smoke-tests it with `docker compose up`. M0 uses GitHub-hosted runners only. End-to-end tests are written so they can be sharded across runners later.
 
 ## Deployment target (M7)
 

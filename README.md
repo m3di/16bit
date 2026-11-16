@@ -32,6 +32,8 @@ On its first run `pnpm dev` copies `.env.example` to `.env`. Every variable is d
 
 If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` from `.env.example`; the API will not start without the key.
 
+**Only Docker.** `docker compose up --build` builds the image and starts the whole stack: Postgres, migrations, then the API and the built dashboard on http://localhost:8080 (`APP_PORT` changes the port). No Node.js needed. Load demo data with `docker compose run --rm app node src/seed.ts --force` (`--force` because the image runs with `NODE_ENV=production`; this database is your local one). This stack is for trying the app; for working on it, use `pnpm dev`. It runs with `DEV_ANONYMOUS_AS_OWNER=true`, so anyone who can reach the port acts as the dev owner, like the Vite dev server; the port is bound to 127.0.0.1 for that reason. The API refuses to start with that flag on any non-loopback `HOST` unless `DEV_ANONYMOUS_ALLOW_NONLOCAL=1` is also set; compose sets both, together with the loopback port binding (D41). If you change the binding in `compose.yaml`, remove both.
+
 **Without Docker.** Create a database in your own Postgres, set `DATABASE_URL` in `.env` (or export it in your shell, which takes precedence), and run `pnpm dev`.
 
 | Command | What it does |
@@ -42,7 +44,8 @@ If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` 
 | `pnpm seed:build-hub` | Imports this repository's GitHub issues into the "Build" hub of a local `team` workspace, one item per issue. Needs `gh` signed in. Re-running updates items in place; GitHub wins over local edits of imported values, and items you delete stay deleted. An issue the hub rejects (version conflict, invalid value) is listed at the end and the rest still import; the command then exits non-zero. |
 | `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `DATABASE_URL`; API integration tests create and drop a throwaway database there. |
 | `pnpm e2e` | Playwright end-to-end tests in `e2e`, also run in CI. Needs a migrated and seeded database (`pnpm seed`). Reuses a running `pnpm dev`, or starts the API and web app itself. One-time setup: `pnpm --filter @16bit/e2e exec playwright install chromium`. If port 5173 is taken, set `E2E_WEB_PORT`; set `E2E_BASE_URL` to test an app that is already running elsewhere. Each test creates its own items, in the seeded workspaces. |
-| `docker compose down` | Stops Postgres. Add `-v` to delete its data. |
+| `docker compose up --build` | Builds the image and runs the whole stack on :8080. |
+| `docker compose down` | Stops Postgres (and the app, if running). Add `-v` to delete its data. |
 
 ### Installing Node.js and pnpm
 

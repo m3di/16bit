@@ -1,0 +1,24 @@
+# Keep the build context to what the image needs. Mirrors .gitignore, plus repo-only folders.
+**/node_modules
+**/dist
+**/coverage
+**/*.test.ts
+**/vitest.config.ts
+**/test-results
+**/playwright-report
+.git
+.github
+.worktrees
+.pnpm-store
+.claude
+.env
+.env.*
+design
+docs
+team
+scripts
+e2e
+!e2e/package.json
+*.md
+*.log
+.DS_Store

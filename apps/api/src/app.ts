@@ -18,6 +18,7 @@ import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import { createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toWorkspace } from './mappers.ts'
+import { isAppRoute, registerWeb, sendAppShell } from './web.ts'
 
 export interface AppOptions {
   db: Kysely<Database>
@@ -27,6 +28,14 @@ export interface AppOptions {
   devPrincipalId: string
   /** Cap on folders and on attributes in a hub description. Folder attributes get 10 times it. */
   maxHubEntries?: number
+  /** Directory of the built web app. When set, the API also serves the dashboard (D34). */
+  webRoot?: string
+  /**
+   * Local only. A request with no Authorization header acts as the development principal,
+   * as the Vite dev proxy does in `pnpm dev`. Lets the browser use the dashboard the image
+   * serves without the key reaching the bundle. Removed when real auth lands in M1.
+   */
+  anonymousAsDevPrincipal?: boolean
 }
 
 /** Default cap on folders and attributes returned by a hub description. */
@@ -66,9 +75,13 @@ export function buildApp(options: AppOptions): FastifyInstance {
     console.error(error)
     return reply.status(500).send({ error: 'internal', message: 'Internal error' })
   })
-  app.setNotFoundHandler((_request, reply) =>
-    reply.status(404).send({ error: 'not_found', message: 'Route not found' }),
-  )
+  const webRoot = options.webRoot
+  if (webRoot) registerWeb(app, webRoot)
+
+  app.setNotFoundHandler((request, reply) => {
+    if (webRoot && isAppRoute(request)) return sendAppShell(reply)
+    return reply.status(404).send({ error: 'not_found', message: 'Route not found' })
+  })
 
   app.get('/health', async (_request, reply) => {
     try {
@@ -82,6 +95,11 @@ export function buildApp(options: AppOptions): FastifyInstance {
   void app.register(
     (v1, _opts, done) => {
       v1.addHook('onRequest', (request, _reply, next) => {
+        if (options.anonymousAsDevPrincipal && request.headers.authorization === undefined) {
+          request.actor = options.devPrincipalId
+          next()
+          return
+        }
         const header = request.headers.authorization ?? ''
         const match = /^Bearer (.+)$/.exec(header)
         if (!match?.[1] || !timingSafeEqual(digest(match[1]), expectedKey)) {
