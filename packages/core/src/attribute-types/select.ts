@@ -1,10 +1,11 @@
 import { z } from 'zod'
+import { paletteColorSchema } from '../palette.ts'
 import { type AttributeType, BASE_SUMMARIES, EMPTY_OPERATORS } from './contract.ts'
 
 export const selectOptionSchema = z.strictObject({
   id: z.string().min(1).max(64),
   label: z.string().min(1).max(200),
-  color: z.string().min(1).max(32).optional(),
+  color: paletteColorSchema.optional(),
 })
 export type SelectOption = z.infer<typeof selectOptionSchema>
 
@@ -32,8 +33,11 @@ export const selectType: AttributeType<'select', SelectConfig, string> = {
   indexProjection: 'txt',
   project: (value) => value,
   filterOperators: ['eq', 'neq', 'in', 'not_in', ...EMPTY_OPERATORS],
-  // Sorts by option order, not by label.
-  sortKey: (value, config) => optionIds(config).indexOf(value),
+  // Sorts by option order, not by label. A value whose option was deleted sorts last.
+  sortKey: (value, config) => {
+    const index = optionIds(config).indexOf(value)
+    return index === -1 ? config.options.length : index
+  },
   groupKey: (value) => value,
   summaries: [...BASE_SUMMARIES, 'count_unique'],
   jsonSchema: (config) => ({

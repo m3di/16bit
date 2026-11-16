@@ -6,11 +6,19 @@ import {
   selectConfigSchema,
   textConfigSchema,
 } from './attribute-types/index.ts'
+import { paletteColorSchema } from './palette.ts'
 
 // Wire shapes shared by `apps/api` and `apps/web`: camelCase, timestamps as ISO strings,
 // versions and counters as numbers. Columns are described in docs/ARCHITECTURE.md.
 
-export const idSchema = z.string().min(1).max(64)
+/**
+ * Safe as a JSONB key, an object key, and in URLs. `__proto__` passes the character set
+ * but would be dropped when assigned to a plain object, so it is rejected by name.
+ */
+export const idSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/)
+  .refine((id) => id !== '__proto__', { message: 'Reserved ID' })
 export const timestampSchema = z.iso.datetime({ offset: true })
 
 export const workspaceSchema = z.strictObject({
@@ -39,7 +47,7 @@ export const folderSchema = z.strictObject({
   hubId: idSchema,
   parentId: idSchema.nullable(),
   name: z.string().min(1).max(200),
-  color: z.string().min(1).max(32),
+  color: paletteColorSchema,
   idPrefix: z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/),
   itemCount: z.int().min(0),
   version: z.int().min(0),

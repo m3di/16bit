@@ -9,9 +9,9 @@ export const booleanType: AttributeType<'boolean', BooleanConfig, boolean> = {
   configSchema: booleanConfigSchema,
   valueSchema: () => z.boolean(),
   isEmpty: () => false,
-  // Booleans are cheap to filter straight from `item.values`; they get no index column.
-  indexProjection: 'none',
-  project: () => null,
+  // Stored as 0/1 in the number column so indexed booleans are filterable (D20).
+  indexProjection: 'num',
+  project: (value) => (value ? 1 : 0),
   filterOperators: ['eq', 'neq', ...EMPTY_OPERATORS],
   sortKey: (value) => (value ? 1 : 0),
   groupKey: (value) => String(value),

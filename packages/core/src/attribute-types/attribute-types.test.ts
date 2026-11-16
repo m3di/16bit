@@ -134,7 +134,12 @@ describe('boolean', () => {
     expect(booleanType.render(true, config)).toBe('yes')
     expect(booleanType.render(false, config)).toBe('no')
     expect(booleanType.groupKey(false, config)).toBe('false')
-    expect(booleanType.indexProjection).toBe('none')
+  })
+
+  it('projects to 0 or 1 in the number column so it can be filtered (D20)', () => {
+    expect(booleanType.indexProjection).toBe('num')
+    expect(booleanType.project(true, config)).toBe(1)
+    expect(booleanType.project(false, config)).toBe(0)
   })
 })
 
@@ -214,6 +219,19 @@ describe('select', () => {
     expect(selectType.sortKey('done', config)).toBe(1)
     expect(selectType.render('done', config)).toBe('Done')
     expect(selectType.render(null, config)).toBe('')
+  })
+
+  it('sorts a value whose option was deleted after every real option', () => {
+    const orphan = selectType.sortKey('deleted', config)
+    expect(orphan).toBe(config.options.length)
+    expect(orphan > selectType.sortKey('done', config)).toBe(true)
+  })
+
+  it('accepts palette colour names and rejects hex', () => {
+    const withColor = (color: string) => ({ options: [{ id: 'a', label: 'A', color }] })
+    expect(accepts(selectType.configSchema, withColor('violet'))).toBe(true)
+    expect(accepts(selectType.configSchema, withColor('#ff0000'))).toBe(false)
+    expect(accepts(selectType.configSchema, withColor('purple'))).toBe(false)
   })
 
   it('emits an enum for agents', () => {
