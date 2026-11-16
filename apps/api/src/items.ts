@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import {
+  compileItemQuery,
+  indexEntries,
   validateItemValues,
+  type CompiledFilter,
+  type CompiledSort,
+  type Filter,
   type FolderAttributeDefinition,
   type Item,
   type ItemValues,
   type Page,
   type PatchItem,
 } from '@16bit/core'
-import { sql, type Kysely, type Transaction } from 'kysely'
+import { sql, type Kysely, type RawBuilder, type Transaction } from 'kysely'
 import { z } from 'zod'
 import type { Database } from './db/database.ts'
 import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
@@ -32,7 +37,8 @@ export const REVISION_CHANNEL = 'revision'
 // folder row, then workspace row (for the revision seq). Patch and delete lock the existing item
 // row first. Create locks the hub row (next_seq), the hub and folder rows (counts), then inserts
 // the new item row and takes the workspace row. The new row is invisible to other transactions,
-// so taking it after the hub and folder cannot deadlock with them.
+// so taking it after the hub and folder cannot deadlock with them. An item's item_index rows
+// are written while its item row is held, before the workspace row.
 
 async function appendRevision(
   trx: Trx,
@@ -79,6 +85,49 @@ async function bumpCounts(
       .where('id', '=', id)
       .execute()
   }
+}
+
+/**
+ * Keeps item_index in step with `values` for the indexed attributes among them (D6): every row
+ * of the item for each such attribute is replaced, so a multi-valued type can shrink or grow.
+ * `null` in `values` clears the attribute's rows. Runs in the item's write transaction.
+ */
+async function writeIndex(
+  trx: Trx,
+  workspaceId: string,
+  itemId: string,
+  definitions: FolderAttributeDefinition[],
+  values: ItemValues,
+  replace: boolean,
+): Promise<void> {
+  const touched = definitions
+    .map((d) => d.attribute)
+    .filter((a) => a.indexed && Object.hasOwn(values, a.id))
+  if (touched.length === 0) return
+  if (replace) {
+    await trx
+      .deleteFrom('item_index')
+      .where('workspace_id', '=', workspaceId)
+      .where('item_id', '=', itemId)
+      .where(
+        'attribute_id',
+        'in',
+        touched.map((a) => a.id),
+      )
+      .execute()
+  }
+  const rows = touched.flatMap((attribute) =>
+    indexEntries(attribute, values[attribute.id] ?? null).map((entry) => ({
+      workspace_id: workspaceId,
+      attribute_id: attribute.id,
+      item_id: itemId,
+      ord: entry.ord,
+      num: entry.column === 'num' ? (entry.value as number) : null,
+      txt: entry.column === 'txt' ? (entry.value as string) : null,
+      ts: entry.column === 'ts' ? (entry.value as string) : null,
+    })),
+  )
+  if (rows.length > 0) await trx.insertInto('item_index').values(rows).execute()
 }
 
 /** The attributes a folder shows, with its `required` flags, for `validateItemValues`. */
@@ -140,9 +189,8 @@ export async function createItem(
     .where('id', '=', input.folderId)
     .executeTakeFirst()
   if (!folder) throw notFound('Folder')
-  const values = stripNulls(
-    validate(await folderDefinitions(db, workspaceId, folder.id), input.values, false),
-  )
+  const definitions = await folderDefinitions(db, workspaceId, folder.id)
+  const values = stripNulls(validate(definitions, input.values, false))
   const id = input.id ?? randomUUID()
 
   return db.transaction().execute(async (trx) => {
@@ -181,6 +229,7 @@ export async function createItem(
       .executeTakeFirst()
     if (!row) throw new HttpError('id_taken', 'This item ID is already used')
 
+    await writeIndex(trx, workspaceId, id, definitions, values, false)
     await appendRevision(
       trx,
       workspaceId,
@@ -201,11 +250,8 @@ export async function patchItem(
   input: PatchItem,
 ): Promise<Item> {
   const before = await getItem(db, workspaceId, id)
-  const patch = validate(
-    await folderDefinitions(db, workspaceId, before.folderId),
-    input.values,
-    true,
-  )
+  const definitions = await folderDefinitions(db, workspaceId, before.folderId)
+  const patch = validate(definitions, input.values, true)
   const cleared = Object.keys(patch).filter((key) => patch[key] === null)
 
   return db.transaction().execute(async (trx) => {
@@ -226,6 +272,8 @@ export async function patchItem(
     // Zero rows: the item was deleted (404) or its version moved (409 with the current item).
     if (!row) throw conflict(await getItem(trx, workspaceId, id))
 
+    // The item cannot change folder, so the definitions read before the transaction still apply.
+    await writeIndex(trx, workspaceId, id, definitions, patch, true)
     await appendRevision(trx, workspaceId, id, row.version, { op: 'update', values: patch }, actor)
     return toItem(row)
   })
@@ -248,19 +296,161 @@ export async function deleteItem(
       .executeTakeFirst()
     if (!row) throw conflict(await getItem(trx, workspaceId, id))
 
+    // item_index rows go with the item (ON DELETE CASCADE).
     await bumpCounts(trx, workspaceId, row.hub_id, row.folder_id, -1)
     // The delete is the item's last version, so `(item_id, version)` stays unique in the log.
     await appendRevision(trx, workspaceId, id, row.version + 1, { op: 'delete' }, actor)
   })
 }
 
-const itemCursorSchema = z.tuple([z.iso.datetime(), z.string().min(1).max(64)])
+// Queries (D19, D20): one folder, `where` and `sort` on item_index, keyset paging.
 
-/** A folder's items, newest update first, keyset-paged on `(updated_at, id)`. */
+/** How a sort key is typed, for its SQL casts and its cursor form. */
+type KeyKind = 'num' | 'txt' | 'ts'
+
+/** One ORDER BY key, computed per item as `k<i>` in the inner query. */
+interface SortKey {
+  expr: RawBuilder<unknown>
+  kind: KeyKind
+  desc: boolean
+  /** Items with no value have `null` and sort last in either direction. */
+  nullable: boolean
+}
+
+const CAST: Record<KeyKind, RawBuilder<unknown>> = {
+  num: sql`double precision`,
+  txt: sql`text`,
+  ts: sql`timestamptz`,
+}
+const typed = (kind: KeyKind, value: string | number) => sql`${value}::${CAST[kind]}`
+
+/** `% _ \` are literal in the search text, not ILIKE wildcards. */
+const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`)
+
+function conditionSql(filter: CompiledFilter): RawBuilder<unknown> {
+  if ('and' in filter || 'or' in filter) {
+    const children = 'and' in filter ? filter.and : filter.or
+    if (children.length === 0) return 'and' in filter ? sql`TRUE` : sql`FALSE`
+    return sql`(${sql.join(children.map(conditionSql), 'and' in filter ? sql` AND ` : sql` OR `)})`
+  }
+  const { attributeId, column, op, operands } = filter.condition
+  const col = sql.ref(`x.${column}`)
+  const one = operands[0] ?? ''
+  const exists = (predicate: RawBuilder<unknown>) =>
+    sql`EXISTS (SELECT 1 FROM item_index x WHERE x.workspace_id = i.workspace_id AND x.attribute_id = ${attributeId} AND x.item_id = i.id AND ${predicate})`
+  const eq =
+    column === 'txt'
+      ? // Lets item_index_txt_idx narrow the rows before the full comparison.
+        sql`left(x.txt, 256) = left(${one}::text, 256) AND x.txt = ${one}::text`
+      : sql`${col} = ${typed(column, one)}`
+  const inList = sql`${col} = ANY(${operands}::${CAST[column]}[])`
+  const contains = sql`x.txt ILIKE ${`%${escapeLike(String(one))}%`}`
+
+  switch (op) {
+    case 'eq':
+      return exists(eq)
+    case 'neq':
+      return sql`NOT ${exists(eq)}`
+    case 'gt':
+      return exists(sql`${col} > ${typed(column, one)}`)
+    case 'gte':
+      return exists(sql`${col} >= ${typed(column, one)}`)
+    case 'lt':
+      return exists(sql`${col} < ${typed(column, one)}`)
+    case 'lte':
+      return exists(sql`${col} <= ${typed(column, one)}`)
+    case 'in':
+      return exists(inList)
+    case 'not_in':
+      return sql`NOT ${exists(inList)}`
+    case 'contains':
+      return exists(contains)
+    case 'not_contains':
+      return sql`NOT ${exists(contains)}`
+    case 'starts_with':
+      return exists(sql`x.txt ILIKE ${`${escapeLike(String(one))}%`}`)
+    case 'is_empty':
+      return sql`NOT ${exists(sql`TRUE`)}`
+    case 'is_not_empty':
+      return exists(sql`TRUE`)
+  }
+}
+
+function sortKey(sort: CompiledSort): SortKey {
+  // The ord 0 row: a multi-valued attribute sorts by its first value.
+  const value = (expr: RawBuilder<unknown>) =>
+    sql`(SELECT ${expr} FROM item_index s WHERE s.workspace_id = i.workspace_id AND s.attribute_id = ${sort.attributeId} AND s.item_id = i.id AND s.ord = 0)`
+  const desc = sort.direction === 'desc'
+  switch (sort.key.by) {
+    case 'value':
+      return { expr: value(sql.ref(`s.${sort.column}`)), kind: sort.column, desc, nullable: true }
+    case 'lower':
+      return { expr: value(sql`lower(s.txt)`), kind: 'txt', desc, nullable: true }
+    case 'position': {
+      // Option order; a value whose option was deleted sorts after every option.
+      const { order } = sort.key
+      const position = sql`coalesce(array_position(${order}::text[], s.txt) - 1, ${order.length})`
+      return { expr: value(position), kind: 'num', desc, nullable: true }
+    }
+  }
+}
+
+const NEWEST_FIRST: SortKey = {
+  expr: sql`i.updated_at`,
+  kind: 'ts',
+  desc: true,
+  nullable: false,
+}
+
+const CURSOR_VALUE: Record<KeyKind, z.ZodType> = {
+  num: z.number(),
+  txt: z.string().max(20_000),
+  ts: z.iso.datetime(),
+}
+
+/**
+ * Rows after the cursor in `ORDER BY k0, k1, ..., id` with nulls last:
+ * OR over i of (k0..k(i-1) equal to the cursor, and ki after it).
+ */
+function afterCursor(keys: SortKey[], idDesc: boolean, cursor: unknown[]): RawBuilder<unknown> {
+  const ref = (i: number) => sql.ref(`q.k${String(i)}`)
+  const equal = (key: SortKey, i: number, c: unknown) =>
+    c === null ? sql`${ref(i)} IS NULL` : sql`${ref(i)} = ${typed(key.kind, c as string | number)}`
+  const after = (key: SortKey, i: number, c: unknown) => {
+    // Null is last, so nothing comes after it on this key; ties fall to the next key.
+    if (c === null) return sql`FALSE`
+    const value = typed(key.kind, c as string | number)
+    const beyond = key.desc ? sql`${ref(i)} < ${value}` : sql`${ref(i)} > ${value}`
+    return key.nullable ? sql`(${beyond} OR ${ref(i)} IS NULL)` : beyond
+  }
+
+  const id = cursor.at(-1) as string
+  const branches: RawBuilder<unknown>[] = []
+  for (let i = 0; i <= keys.length; i++) {
+    const prefix = keys.slice(0, i).map((key, j) => equal(key, j, cursor[j]))
+    const key = keys[i]
+    const last = key ? after(key, i, cursor[i]) : idDesc ? sql`q.id < ${id}` : sql`q.id > ${id}`
+    branches.push(sql`(${sql.join([...prefix, last], sql` AND `)})`)
+  }
+  return sql`(${sql.join(branches, sql` OR `)})`
+}
+
+type QueryRow = Parameters<typeof toItem>[0] & Record<string, unknown>
+
+/**
+ * A folder's items, filtered and sorted on indexed attributes, keyset-paged. With no `sort`,
+ * newest update first. The cursor holds the last row's sort values and ID.
+ */
 export async function queryItems(
   db: Db,
   workspaceId: string,
-  query: { from: string; limit: number; cursor: string | null },
+  query: {
+    from: string
+    where: Filter | null
+    sort: { attribute: string; direction: 'asc' | 'desc' }[]
+    limit: number
+    cursor: string | null
+  },
 ): Promise<Page<Item>> {
   const folder = await db
     .selectFrom('folder')
@@ -270,31 +460,76 @@ export async function queryItems(
     .executeTakeFirst()
   if (!folder) throw notFound('Folder')
 
-  let q = db
-    .selectFrom('item')
-    .selectAll()
-    // Microsecond text form: a JS Date would drop precision and skip or repeat rows.
-    .select(
-      sql<string>`to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`.as(
-        'cursor_at',
-      ),
+  let where: CompiledFilter | null = null
+  let sorts: CompiledSort[] = []
+  if (query.where || query.sort.length > 0) {
+    const definitions = await folderDefinitions(db, workspaceId, folder.id)
+    const compiled = compileItemQuery(
+      definitions.map((d) => d.attribute),
+      { where: query.where, sort: query.sort },
     )
-    .where('workspace_id', '=', workspaceId)
-    .where('folder_id', '=', folder.id)
-  if (query.cursor) {
-    const [at, id] = decodeCursor(itemCursorSchema, query.cursor)
-    q = q.where(sql<boolean>`(updated_at, id) < (${at}::timestamptz, ${id})`)
+    if (!compiled.ok) {
+      throw new HttpError(
+        'invalid_request',
+        compiled.errors.map((e) => `${e.path}: ${e.message}`).join('; '),
+        {
+          errors: compiled.errors,
+        },
+      )
+    }
+    where = compiled.where
+    sorts = compiled.sort
   }
-  const rows = await q
-    .orderBy('updated_at', 'desc')
-    .orderBy('id', 'desc')
-    .limit(query.limit + 1)
-    .execute()
+
+  const keys = sorts.length > 0 ? sorts.map(sortKey) : [NEWEST_FIRST]
+  // Ties end on the ID, in the direction of the default order when there is no sort.
+  const idDesc = sorts.length === 0
+
+  let cursor: unknown[] | null = null
+  if (query.cursor) {
+    const schema = z.tuple([
+      ...keys.map((k) => (k.nullable ? CURSOR_VALUE[k.kind].nullable() : CURSOR_VALUE[k.kind])),
+      z.string().min(1).max(64),
+    ] as unknown as [z.ZodType, ...z.ZodType[]])
+    cursor = decodeCursor(schema, query.cursor)
+  }
+
+  // Timestamps go into the cursor in microsecond text form: a JS Date would drop precision and
+  // skip or repeat rows.
+  const cursorForm = (key: SortKey, i: number) =>
+    key.kind === 'ts'
+      ? sql`to_char(${sql.ref(`q.k${String(i)}`)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
+      : sql.ref(`q.k${String(i)}`)
+
+  const { rows } = await sql<QueryRow>`
+    SELECT q.*, ${sql.join(keys.map((k, i) => sql`${cursorForm(k, i)} AS ${sql.id(`c${String(i)}`)}`))}
+    FROM (
+      SELECT i.*, ${sql.join(keys.map((k, i) => sql`${k.expr} AS ${sql.id(`k${String(i)}`)}`))}
+      FROM item i
+      WHERE i.workspace_id = ${workspaceId}
+        AND i.folder_id = ${folder.id}
+        AND ${where ? conditionSql(where) : sql`TRUE`}
+    ) q
+    WHERE ${cursor ? afterCursor(keys, idDesc, cursor) : sql`TRUE`}
+    ORDER BY ${sql.join([
+      ...keys.map(
+        (k, i) => sql`${sql.ref(`q.k${String(i)}`)} ${k.desc ? sql`DESC` : sql`ASC`} NULLS LAST`,
+      ),
+      idDesc ? sql`q.id DESC` : sql`q.id ASC`,
+    ])}
+    LIMIT ${query.limit + 1}
+  `.execute(db)
 
   const page = rows.slice(0, query.limit)
   const last = page.at(-1)
   return {
     items: page.map((row) => toItem(row)),
-    nextCursor: rows.length > query.limit && last ? encodeCursor([last.cursor_at, last.id]) : null,
+    nextCursor:
+      rows.length > query.limit && last
+        ? encodeCursor([
+            ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
+            last.id,
+          ])
+        : null,
   }
 }

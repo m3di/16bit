@@ -7,6 +7,7 @@ import {
   itemSchema,
   workspaceSchema,
 } from './entities.ts'
+import { boundedFilterSchema, sortSchema } from './query.ts'
 
 // Request and response shapes of the HTTP API (v1), shared by `apps/api` and `apps/web`.
 // Every route is scoped to a workspace: `/v1/workspaces/:workspaceId/...`.
@@ -59,12 +60,16 @@ export const hubDescriptionSchema = z.strictObject({
 export type HubDescription = z.infer<typeof hubDescriptionSchema>
 
 /**
- * `POST /v1/workspaces/:workspaceId/query`. The M0 subset of the query shape in
- * docs/ARCHITECTURE.md: one folder, newest update first. Filters and sorts arrive in M1.
+ * `POST /v1/workspaces/:workspaceId/query`. The query shape in docs/ARCHITECTURE.md, M1 subset:
+ * items of one folder, filtered and sorted on indexed attributes (D20), with a required limit
+ * and cursor paging. With no `sort`, items come newest update first. `where` and `sort` are
+ * checked against the folder's attributes with `compileItemQuery`.
  */
 export const itemQuerySchema = z.strictObject({
   from: idSchema,
-  limit: z.int().min(1).max(MAX_PAGE_LIMIT).default(DEFAULT_PAGE_LIMIT),
+  where: boundedFilterSchema.nullable().default(null),
+  sort: sortSchema.default([]),
+  limit: z.int().min(1).max(MAX_PAGE_LIMIT),
   cursor: cursorSchema.nullable().default(null),
 })
 export type ItemQuery = z.input<typeof itemQuerySchema>

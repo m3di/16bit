@@ -10,20 +10,23 @@ export type ItemValue = string | number | boolean
 /** Which typed column of `item_index` a value is copied into, if any. */
 export type IndexProjection = 'num' | 'txt' | 'ts' | 'none'
 
-export type FilterOperator =
-  | 'eq'
-  | 'neq'
-  | 'contains'
-  | 'not_contains'
-  | 'starts_with'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'in'
-  | 'not_in'
-  | 'is_empty'
-  | 'is_not_empty'
+/** Every filter operator. Each type lists the ones it supports in `filterOperators`. */
+export const FILTER_OPERATORS = [
+  'eq',
+  'neq',
+  'contains',
+  'not_contains',
+  'starts_with',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'in',
+  'not_in',
+  'is_empty',
+  'is_not_empty',
+] as const
+export type FilterOperator = (typeof FILTER_OPERATORS)[number]
 
 export type SummaryFunction =
   | 'count'
@@ -57,8 +60,12 @@ export interface AttributeType<N extends AttributeTypeName, C, V extends ItemVal
 
   // 2. Index projection
   readonly indexProjection: IndexProjection
-  /** The value written to the `item_index` column named by `indexProjection`. */
-  project(value: V, config: C): number | string | null
+  /**
+   * The values written to the `item_index` column named by `indexProjection`, one row each
+   * (numbered by `ord`). Empty for no row. Single-valued types return at most one value;
+   * multi-valued types such as multi-select return one per selected value.
+   */
+  project(value: V, config: C): (number | string)[]
 
   // 3. Filter operators
   readonly filterOperators: readonly FilterOperator[]

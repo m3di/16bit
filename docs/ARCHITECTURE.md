@@ -45,7 +45,7 @@ attribute        (workspace_id, id, hub_id, name, type, config jsonb, indexed bo
 folder_attribute (workspace_id, hub_id, folder_id, attribute_id, position, required)
 item             (workspace_id, id, hub_id, folder_id, seq_id,
                   values jsonb, version bigint, updated_at, updated_by)
-item_index       (workspace_id, attribute_id, item_id, num, txt, ts)   -- derived
+item_index       (workspace_id, attribute_id, item_id, ord, num, txt, ts)   -- derived; several rows per item for multi-valued types
 link             (workspace_id, from_item, attribute_id, to_item)
 view             (workspace_id, id, hub_id, folder_id, tree jsonb, version)
 revision         (workspace_id, seq bigint, item_id, version, patch jsonb, actor, cause, at)
@@ -56,13 +56,13 @@ folder_grant     (workspace_id, folder_id, principal_id)
 ```
 
 - `item.values` is keyed by attribute ID.
-- `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`.
+- `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`. Each attribute type's `project` returns a list of values, one row each, numbered by `ord`; a write replaces all of an item's rows for the attributes it touches. An empty value has no row. Sorting reads the `ord = 0` row.
 - `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.
 - `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
 - `folder.item_count` on a hub is a counter kept in the write transaction, so the main dashboard never counts items.
 
-**M0 scope:** `workspace`, `principal`, `folder`, `attribute`, `folder_attribute`, `item`, `revision`. No `item_index` yet; M0 lists items by folder with cursor paging and sorts by update time.
+**M0 scope:** `workspace`, `principal`, `folder`, `attribute`, `folder_attribute`, `item`, `revision`. `item_index` arrives in M1 (#45).
 
 ## Writes
 
@@ -100,6 +100,13 @@ Rendering (cell and editor components) lives in `apps/web`, registered against t
 ```
 
 Rules: indexed attributes only for filter and sort, one level of expansion, a required limit, cursor paging.
+
+**M1 scope (#45):** `from`, `where`, `sort`, `limit` (required, 1 to 200), `cursor`. Shapes are in `packages/core/src/query.ts`.
+
+- `where` is a tree of `{ and: [...] }`, `{ or: [...] }`, and conditions `{ attribute, op, value }`: at most 20 conditions, 3 levels deep. `op` must be one of the attribute type's `filterOperators`; `value` is checked with the type's value schema (number bounds excepted) and projected like a stored value. `in`/`not_in` take an array of up to 100; `is_empty`/`is_not_empty` take none. `contains`, `not_contains`, `starts_with` ignore case; `eq` on text is exact. The negative operators also match items with no value.
+- `sort` is up to 3 `{ attribute, direction }`. Text sorts case-insensitively, select by option order. Empty values sort last in both directions, and ties end on the item ID. With no `sort`, items come newest update first.
+- Only indexed attributes shown on the `from` folder can be filtered or sorted. Anything else is a 400 `invalid_request` whose `message` names the path, attribute, and operator, with every problem listed in `errors: [{ path, message }]`.
+- The cursor holds the last row's sort values and ID, so it only fits the sort it came from.
 
 ## API
 
