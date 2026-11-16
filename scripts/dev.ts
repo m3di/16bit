@@ -71,6 +71,20 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  // Installed before any child starts, so a signal during the database wait or the
+  // migration never leaves a child behind. Ctrl-C already reaches every process in the
+  // terminal's group, so SIGINT only marks the stop. SIGTERM is usually sent to this
+  // process alone, so pass it on to whichever child is running.
+  let child: ChildProcess | undefined
+  const state = { stopping: false }
+  const stop = (signal: NodeJS.Signals): void => {
+    state.stopping = true
+    if (!child) process.exit(signal === 'SIGINT' ? 130 : 143)
+    if (signal === 'SIGTERM') child.kill('SIGTERM')
+  }
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
+
   try {
     console.log('dev: waiting for Postgres')
     await waitForDatabase(databaseUrl, 30_000)
@@ -80,15 +94,14 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const migrated = await exitCode(run(['--filter', '@16bit/api', 'migrate']))
+  child = run(['--filter', '@16bit/api', 'migrate'])
+  const migrated = await exitCode(child)
+  child = undefined
   if (migrated !== 0) process.exit(migrated)
+  if (state.stopping) process.exit(0)
 
-  const servers = run(['--parallel', '--filter', '@16bit/api', '--filter', '@16bit/web', 'dev'])
-  // Ctrl-C already reaches every process in the terminal's group, so only wait.
-  // SIGTERM is usually sent to this process alone, so pass it on.
-  process.on('SIGINT', () => undefined)
-  process.on('SIGTERM', () => servers.kill('SIGTERM'))
-  process.exit(await exitCode(servers))
+  child = run(['--parallel', '--filter', '@16bit/api', '--filter', '@16bit/web', 'dev'])
+  process.exit(await exitCode(child))
 }
 
 if (import.meta.main) await main()

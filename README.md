@@ -35,7 +35,7 @@ On its first run `pnpm dev` copies `.env.example` to `.env`. Every variable is d
 |---|---|
 | `pnpm dev` | Waits for Postgres, runs migrations, starts the API and the web dev server. Ctrl-C stops both. |
 | `pnpm db:migrate` | Runs migrations only. |
-| `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. |
+| `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `DATABASE_URL`; API integration tests create and drop a throwaway database there. |
 | `docker compose down` | Stops Postgres. Add `-v` to delete its data. |
 
 ### Installing Node.js and pnpm

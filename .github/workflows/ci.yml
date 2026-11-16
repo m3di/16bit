@@ -20,6 +20,23 @@ jobs:
     # it runs code from pull requests, including forks.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # API integration tests run against a real Postgres. Same image as compose.yaml.
+    services:
+      db:
+        image: postgres:18.7-alpine3.24
+        env:
+          POSTGRES_USER: sixteenbit
+          POSTGRES_PASSWORD: sixteenbit
+          POSTGRES_DB: sixteenbit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sixteenbit -d sixteenbit"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

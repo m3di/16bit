@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { folderSchema, idSchema, PALETTE_COLORS } from './index.ts'
+import { folderAttributeSchema, folderSchema, idSchema, PALETTE_COLORS } from './index.ts'
 
 const accepts = (schema: { safeParse(v: unknown): { success: boolean } }, v: unknown) =>
   schema.safeParse(v).success
@@ -44,5 +44,21 @@ describe('folderSchema.color', () => {
       expect(accepts(folderSchema, { ...folder, color })).toBe(true)
     expect(accepts(folderSchema, { ...folder, color: '#ff0000' })).toBe(false)
     expect(accepts(folderSchema, { ...folder, color: 'purple' })).toBe(false)
+  })
+})
+
+describe('folderAttributeSchema', () => {
+  const placement = {
+    workspaceId: 'w1',
+    hubId: 'h1',
+    folderId: 'f1',
+    attributeId: 'a1',
+    position: 0,
+    required: false,
+  }
+
+  it('requires hubId', () => {
+    expect(accepts(folderAttributeSchema, placement)).toBe(true)
+    expect(accepts(folderAttributeSchema, { ...placement, hubId: undefined })).toBe(false)
   })
 })
