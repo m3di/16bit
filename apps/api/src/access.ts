@@ -42,19 +42,17 @@ export async function hubGrants(
 }
 
 /**
- * The hubs among `hubIds` whose items the principal may read (`hub.read`). Owners and admins
- * need a grant too (D45), so a hub without one is never readable.
+ * The hubs among `hubIds` whose items `subject` may read (`hub.read`). Owners and admins need
+ * a grant too (D45), so a hub without one is never readable.
  */
 export async function readableHubs(
   db: Db,
   workspaceId: string,
-  principalId: string,
+  subject: Subject | null,
   hubIds: readonly string[],
 ): Promise<Set<string>> {
-  if (hubIds.length === 0) return new Set()
-  const subject = await loadSubject(db, workspaceId, principalId)
-  if (!subject) return new Set()
-  const grants = await hubGrants(db, workspaceId, principalId, hubIds)
+  if (!subject || hubIds.length === 0) return new Set()
+  const grants = await hubGrants(db, workspaceId, subject.id, hubIds)
   return new Set(
     hubIds.filter(
       (hubId) => can(subject, 'hub.read', { hubGrant: grants.get(hubId) ?? null }) === 'allow',

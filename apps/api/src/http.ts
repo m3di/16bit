@@ -3,11 +3,15 @@ import { z } from 'zod'
 
 const STATUS: Record<ApiErrorCode, number> = {
   unauthorized: 401,
+  forbidden: 403,
   not_found: 404,
   invalid_request: 400,
   invalid_values: 422,
   conflict: 409,
   id_taken: 409,
+  email_taken: 409,
+  already_member: 409,
+  rate_limited: 429,
   internal: 500,
 }
 

@@ -15,11 +15,12 @@ import {
   type LinkedItem,
   type Page,
   type PatchItem,
+  type Subject,
   type ValueError,
 } from '@16bit/core'
 import { sql, type Kysely, type RawBuilder, type Transaction } from 'kysely'
 import { z } from 'zod'
-import { readableHubs } from './access.ts'
+import { loadSubject, readableHubs } from './access.ts'
 import type { Database } from './db/database.ts'
 import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
 import { toAttribute, toItem } from './mappers.ts'
@@ -183,7 +184,7 @@ async function checkTargets(
   const readable = await readableHubs(
     trx,
     workspaceId,
-    actor,
+    await loadSubject(trx, workspaceId, actor),
     rows.map((r) => r.hub_id),
   )
 
@@ -591,7 +592,7 @@ export interface ItemQuery {
 export async function queryItems(
   db: Db,
   workspaceId: string,
-  actor: string,
+  actor: Subject,
   query: ItemQuery,
 ): Promise<ItemQueryResult> {
   const { statement, keys, expand } = await itemQueryStatement(db, workspaceId, query)
@@ -628,7 +629,7 @@ export async function queryItems(
 async function linkedItems(
   db: Db,
   workspaceId: string,
-  actor: string,
+  actor: Subject,
   fromIds: string[],
   attributeIds: string[],
 ): Promise<Record<string, LinkedItem>> {
@@ -670,7 +671,7 @@ const backlinkCursorSchema = z.tuple([z.string().min(1).max(64), z.string().min(
 export async function backlinks(
   db: Db,
   workspaceId: string,
-  actor: string,
+  actor: Subject,
   id: string,
   page: { limit: number; cursor?: string | undefined },
 ): Promise<Page<Backlink>> {

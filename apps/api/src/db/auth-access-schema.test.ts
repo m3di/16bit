@@ -36,7 +36,12 @@ describe('upgrading a database already migrated with 0001', () => {
     const before = await db.selectFrom('principal').select(['workspace_id', 'id', 'kind']).execute()
     expect(before.length).toBeGreaterThan(0)
 
-    expect(await migrateToLatest(db)).toEqual(['0002_item_index', '0003_auth_access', '0004_link'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0002_item_index',
+      '0003_auth_access',
+      '0004_auth_functions',
+      '0005_link',
+    ])
 
     const principals = await db
       .selectFrom('principal')

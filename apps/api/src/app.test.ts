@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { workspaceSnapshot } from './db/test-snapshot.ts'
 import { encodeCursor } from './http.ts'
 
 // Integration tests: the real app against a fresh, migrated Postgres database per test.
@@ -145,14 +146,6 @@ async function hubCount(id: string): Promise<number> {
 
 const revisions = () =>
   db.selectFrom('revision').selectAll().where('workspace_id', '=', 'w1').orderBy('seq').execute()
-
-/** Every w2 row the item routes could write to. Compared before and after to prove isolation. */
-const w2Rows = async () => ({
-  workspace: await db.selectFrom('workspace').selectAll().where('id', '=', 'w2').execute(),
-  folders: await db.selectFrom('folder').selectAll().where('workspace_id', '=', 'w2').execute(),
-  items: await db.selectFrom('item').selectAll().where('workspace_id', '=', 'w2').execute(),
-  revisions: await db.selectFrom('revision').selectAll().where('workspace_id', '=', 'w2').execute(),
-})
 
 describe('health', () => {
   it('answers without auth when the database is up', async () => {
@@ -407,13 +400,13 @@ describe('create item', () => {
   })
 
   it('cannot create in another workspace’s folder', async () => {
-    const before = await w2Rows()
+    const before = await workspaceSnapshot(db, 'w2')
     const res = await request('POST', '/v1/workspaces/w2/items', {
       folderId: 'secret',
       values: {},
     })
     expect(res.statusCode).toBe(404)
-    expect(await w2Rows()).toEqual(before)
+    expect(await workspaceSnapshot(db, 'w2')).toEqual(before)
   })
 })
 
@@ -588,7 +581,7 @@ describe('workspace isolation', () => {
   it('returns 404 on get, patch and delete of another workspace’s item', async () => {
     await foreignItem('foreign')
     const before = await foreignRow('foreign')
-    const w2Before = await w2Rows()
+    const w2Before = await workspaceSnapshot(db, 'w2')
     for (const ws of ['w1', 'w2']) {
       const url = `/v1/workspaces/${ws}/items/foreign`
       expect((await request('GET', url)).statusCode, `GET ${ws}`).toBe(404)
@@ -598,21 +591,21 @@ describe('workspace isolation', () => {
     }
     expect(await foreignRow('foreign')).toEqual(before)
     expect(await revisions()).toHaveLength(0)
-    expect(await w2Rows()).toEqual(w2Before)
+    expect(await workspaceSnapshot(db, 'w2')).toEqual(w2Before)
   })
 
   it('touches only its own workspace’s item when IDs collide', async () => {
     const item = await create({ title: 'Ours' })
     await foreignItem(item.id)
     const before = await foreignRow(item.id)
-    const w2Before = await w2Rows()
+    const w2Before = await workspaceSnapshot(db, 'w2')
     const url = `/v1/workspaces/w1/items/${item.id}`
     expect((await request('GET', url)).json()).toMatchObject({ values: { title: 'Ours' } })
     const patched = await request('PATCH', url, { version: 1, values: { title: 'Two' } })
     expect(patched.statusCode).toBe(200)
     expect((await request('DELETE', `${url}?version=2`)).statusCode).toBe(204)
     expect(await foreignRow(item.id)).toEqual(before)
-    expect(await w2Rows()).toEqual(w2Before)
+    expect(await workspaceSnapshot(db, 'w2')).toEqual(w2Before)
   })
 })
 

@@ -8,7 +8,7 @@ import {
 import type { FastifyInstance } from 'fastify'
 import type { Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { readableHubs } from './access.ts'
+import { loadSubject, readableHubs } from './access.ts'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
@@ -519,12 +519,13 @@ describe('backlinks', () => {
 
 describe('readableHubs', () => {
   it('follows can(): a grant is needed even for owners, and non-members read nothing', async () => {
-    expect([...(await readableHubs(db, WS, 'owner', ['h1', 'h2', 'h3']))].sort()).toEqual([
-      'h1',
-      'h2',
-    ])
-    expect([...(await readableHubs(db, WS, 'insider', ['h3']))]).toEqual(['h3'])
-    expect([...(await readableHubs(db, WS, 'stranger', ['h1']))]).toEqual([])
-    expect([...(await readableHubs(db, WS, 'owner', []))]).toEqual([])
+    const subject = (id: string) => loadSubject(db, WS, id)
+    const readable = async (id: string, hubs: string[]) =>
+      [...(await readableHubs(db, WS, await subject(id), hubs))].sort()
+    expect(await readable('owner', ['h1', 'h2', 'h3'])).toEqual(['h1', 'h2'])
+    expect(await readable('insider', ['h3'])).toEqual(['h3'])
+    expect(await subject('stranger')).toBeNull()
+    expect(await readable('stranger', ['h1'])).toEqual([])
+    expect(await readable('owner', [])).toEqual([])
   })
 })

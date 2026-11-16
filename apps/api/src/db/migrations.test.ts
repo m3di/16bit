@@ -107,7 +107,8 @@ describe('migrations', () => {
       '0001_initial',
       '0002_item_index',
       '0003_auth_access',
-      '0004_link',
+      '0004_auth_functions',
+      '0005_link',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -329,7 +330,7 @@ describe('schema constraints', () => {
     ).rejects.toThrow(/principal_kind_check/)
   })
 
-  it('accepts every M1 attribute type (0004)', async () => {
+  it('accepts every M1 attribute type (0005)', async () => {
     for (const type of ['multi_select', 'url', 'actor', 'auto_id', 'rich_text', 'relation']) {
       await sql`INSERT INTO attribute (workspace_id, id, hub_id, name, type) VALUES ('w1', ${type}, 'h1', 'A', ${type})`.execute(
         db,
@@ -604,7 +605,7 @@ describe('0002_item_index', () => {
   })
 })
 
-describe('0004_link', () => {
+describe('0005_link', () => {
   beforeEach(async () => {
     await migrateToLatest(db)
     await seedHub()
@@ -661,12 +662,12 @@ describe('0004_link', () => {
       db,
       provider: { getMigrations: () => Promise.resolve(migrations) },
     })
-    const blocked = await migrator.migrateTo('0003_auth_access')
+    const blocked = await migrator.migrateTo('0004_auth_functions')
     expect(blocked.error).toBeDefined()
     expect(await tables()).toContain('link')
 
     await sql`DELETE FROM attribute WHERE id = 'rel'`.execute(db)
-    const { error } = await migrator.migrateTo('0003_auth_access')
+    const { error } = await migrator.migrateTo('0004_auth_functions')
     expect(error).toBeUndefined()
     expect(await tables()).not.toContain('link')
   })

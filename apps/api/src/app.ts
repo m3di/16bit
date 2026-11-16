@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
 import {
   createItemSchema,
   deleteItemQuerySchema,
@@ -14,6 +13,15 @@ import {
 import Fastify, { type FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
+import {
+  registerAuthHook,
+  requireIdentity,
+  resolvePrincipal,
+  accountMemberships,
+} from './auth/auth.ts'
+import { RateLimiter, type RateLimitPolicy } from './auth/rate-limit.ts'
+import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
+import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import { backlinks, createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
@@ -36,6 +44,14 @@ export interface AppOptions {
    * serves without the key reaching the bundle. Removed when real auth lands in M1.
    */
   anonymousAsDevPrincipal?: boolean
+  /** Session lifetimes. Defaults to 30 days absolute, 7 days idle. */
+  session?: SessionPolicy
+  /** Adds `Secure` to the session cookie. Off only for plain-HTTP local development. */
+  secureCookies?: boolean
+  /** Sign-in attempts per email. Defaults to 10 per 15 minutes. */
+  loginPerEmail?: RateLimitPolicy
+  /** Sign-in and invite acceptance attempts per client IP. Defaults to 100 per 15 minutes. */
+  loginPerIp?: RateLimitPolicy
 }
 
 /** Default cap on folders and attributes returned by a hub description. */
@@ -46,22 +62,21 @@ const workspaceParams = z.object({ workspaceId: idSchema })
 const hubParams = z.object({ workspaceId: idSchema, hubId: idSchema })
 const itemParams = z.object({ workspaceId: idSchema, itemId: idSchema })
 
-const digest = (value: string) => createHash('sha256').update(value).digest()
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    actor: string
-  }
-}
-
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
   const app = Fastify({ logger: false })
-  const expectedKey = digest(options.devApiKey)
-
-  app.decorateRequest('actor', '')
+  const auth = {
+    db,
+    devApiKey: options.devApiKey,
+    devPrincipalId: options.devPrincipalId,
+    anonymousAsDevPrincipal: options.anonymousAsDevPrincipal ?? false,
+    session: options.session ?? DEFAULT_SESSION_POLICY,
+    secureCookies: options.secureCookies ?? true,
+  }
+  const emailLimiter = new RateLimiter(options.loginPerEmail ?? { max: 10, windowSeconds: 900 })
+  const ipLimiter = new RateLimiter(options.loginPerIp ?? { max: 100, windowSeconds: 900 })
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
@@ -94,33 +109,39 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   void app.register(
     (v1, _opts, done) => {
-      v1.addHook('onRequest', (request, _reply, next) => {
-        if (options.anonymousAsDevPrincipal && request.headers.authorization === undefined) {
-          request.actor = options.devPrincipalId
-          next()
-          return
-        }
-        const header = request.headers.authorization ?? ''
-        const match = /^Bearer (.+)$/.exec(header)
-        if (!match?.[1] || !timingSafeEqual(digest(match[1]), expectedKey)) {
-          next(new HttpError('unauthorized', 'A valid bearer token is required'))
-          return
-        }
-        request.actor = options.devPrincipalId
-        next()
-      })
+      registerAuthHook(v1, auth)
+      registerAuthRoutes(v1, { ...auth, emailLimiter, ipLimiter })
 
       v1.get('/workspaces', async (request): Promise<Page<Workspace>> => {
+        const identity = requireIdentity(request)
         const { limit, cursor } = parse(pageQuerySchema, request.query)
+        const after = cursor ? decodeCursor(nameCursorSchema, cursor) : null
+        if (identity.kind === 'person') {
+          // Only through the membership lookup: it runs before any workspace is set, so a
+          // direct read of `workspace` here would come back empty under row-level security.
+          let q = accountMemberships(db, identity.accountId)
+          if (after)
+            q = q.where(
+              sql<boolean>`(m.workspace_name, m.workspace_id) > (${after[0]}, ${after[1]})`,
+            )
+          const rows = await q
+            .orderBy('m.workspace_name')
+            .orderBy('m.workspace_id')
+            .limit(limit + 1)
+            .execute()
+          const workspaces = rows.map((r): Workspace => ({
+            id: r.workspace_id,
+            name: r.workspace_name,
+            createdAt: r.workspace_created_at.toISOString(),
+          }))
+          return page(workspaces, limit, (w) => [w.name, w.id])
+        }
         let q = db
           .selectFrom('workspace as w')
           .innerJoin('principal as p', 'p.workspace_id', 'w.id')
           .selectAll('w')
-          .where('p.id', '=', request.actor)
-        if (cursor) {
-          const [name, id] = decodeCursor(nameCursorSchema, cursor)
-          q = q.where(sql<boolean>`(w.name, w.id) > (${name}, ${id})`)
-        }
+          .where('p.id', '=', identity.principalId)
+        if (after) q = q.where(sql<boolean>`(w.name, w.id) > (${after[0]}, ${after[1]})`)
         const rows = await q
           .orderBy('w.name')
           .orderBy('w.id')
@@ -134,14 +155,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // A workspace exists for the caller only if the caller is a principal in it.
           ws.addHook('preHandler', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            const member = await db
-              .selectFrom('principal')
-              .select('id')
-              .where('workspace_id', '=', workspaceId)
-              .where('id', '=', request.actor)
-              .executeTakeFirst()
-            if (!member) throw notFound('Workspace')
+            request.principal = await resolvePrincipal(db, requireIdentity(request), workspaceId)
           })
+
+          registerInviteRoutes(ws, db)
 
           ws.get('/hubs', async (request): Promise<Page<Folder>> => {
             const { workspaceId } = parse(workspaceParams, request.params)
@@ -214,7 +231,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            return queryItems(db, workspaceId, request.actor, parse(itemQuerySchema, request.body))
+            return queryItems(
+              db,
+              workspaceId,
+              request.principal,
+              parse(itemQuerySchema, request.body),
+            )
           })
 
           ws.post('/items', async (request, reply) => {
@@ -222,7 +244,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
             const item = await createItem(
               db,
               workspaceId,
-              request.actor,
+              request.principal.id,
               parse(createItemSchema, request.body),
             )
             return reply.status(201).send(item)
@@ -236,19 +258,19 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.get('/items/:itemId/backlinks', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const page = parse(pageQuerySchema, request.query)
-            return backlinks(db, workspaceId, request.actor, itemId, page)
+            return backlinks(db, workspaceId, request.principal, itemId, page)
           })
 
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            return patchItem(db, workspaceId, request.actor, itemId, body)
+            return patchItem(db, workspaceId, request.principal.id, itemId, body)
           })
 
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { version } = parse(deleteItemQuerySchema, request.query)
-            await deleteItem(db, workspaceId, request.actor, itemId, version)
+            await deleteItem(db, workspaceId, request.principal.id, itemId, version)
             return reply.status(204).send()
           })
 
