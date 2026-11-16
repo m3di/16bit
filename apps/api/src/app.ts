@@ -25,9 +25,11 @@ export interface AppOptions {
   devApiKey: string
   /** The principal the development key acts as. It must exist in a workspace to see it. */
   devPrincipalId: string
+  /** Cap on folders and on attributes in a hub description. Folder attributes get 10 times it. */
+  maxHubEntries?: number
 }
 
-/** Upper bound on folders and attributes returned by a hub description. */
+/** Default cap on folders and attributes returned by a hub description. */
 export const MAX_HUB_ENTRIES = 1000
 
 const nameCursorSchema = z.tuple([z.string(), z.string()])
@@ -45,6 +47,8 @@ declare module 'fastify' {
 
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
+  const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
+  const faCap = maxHubEntries * 10
   const app = Fastify({ logger: false })
   const expectedKey = digest(options.devApiKey)
 
@@ -52,10 +56,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
-    // Fastify's own client errors, for example malformed JSON or a wrong content type.
+    // Fastify's own client errors keep their status: 400 malformed JSON, 413 body too large,
+    // 415 unsupported content type, and so on.
     const status = (error as { statusCode?: number }).statusCode
     if (status !== undefined && status >= 400 && status < 500) {
-      return reply.status(400).send({ error: 'invalid_request', message: (error as Error).message })
+      const message = (error as Error).message
+      return reply.status(status).send({ error: 'invalid_request', message })
     }
     console.error(error)
     return reply.status(500).send({ error: 'internal', message: 'Internal error' })
@@ -149,7 +155,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
               .orderBy(sql`parent_id IS NULL`, 'desc')
               .orderBy('name')
               .orderBy('id')
-              .limit(MAX_HUB_ENTRIES + 1)
+              .limit(maxHubEntries + 2)
               .execute()
             const hub = folders[0]
             if (hub?.id !== hubId) throw notFound('Hub')
@@ -161,7 +167,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
                 .where('hub_id', '=', hubId)
                 .orderBy('name')
                 .orderBy('id')
-                .limit(MAX_HUB_ENTRIES)
+                .limit(maxHubEntries + 1)
                 .execute(),
               db
                 .selectFrom('folder_attribute')
@@ -170,14 +176,21 @@ export function buildApp(options: AppOptions): FastifyInstance {
                 .where('hub_id', '=', hubId)
                 .orderBy('folder_id')
                 .orderBy('position')
-                .limit(MAX_HUB_ENTRIES * 10)
+                .limit(faCap + 1)
                 .execute(),
             ])
+            // Each list is fetched with one extra row, which only says whether it was cut off.
+            const subfolders = folders.slice(1)
             return {
               hub: toFolder(hub),
-              folders: folders.slice(1, MAX_HUB_ENTRIES + 1).map(toFolder),
-              attributes: attributes.map(toAttribute),
-              folderAttributes: folderAttributes.map(toFolderAttribute),
+              folders: subfolders.slice(0, maxHubEntries).map(toFolder),
+              attributes: attributes.slice(0, maxHubEntries).map(toAttribute),
+              folderAttributes: folderAttributes.slice(0, faCap).map(toFolderAttribute),
+              truncated: {
+                folders: subfolders.length > maxHubEntries,
+                attributes: attributes.length > maxHubEntries,
+                folderAttributes: folderAttributes.length > faCap,
+              },
             }
           })
 
