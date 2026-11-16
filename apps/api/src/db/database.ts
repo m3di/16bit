@@ -13,6 +13,7 @@ export interface WorkspaceTable {
   id: string
   name: string
   created_at: Timestamp
+  next_revision_seq: Generated<number>
 }
 
 export interface PrincipalTable {
@@ -33,6 +34,7 @@ export interface FolderTable {
   id_prefix: string
   item_count: Generated<number>
   version: Generated<number>
+  next_seq: Generated<number>
 }
 
 export interface AttributeTable {
@@ -47,6 +49,7 @@ export interface AttributeTable {
 
 export interface FolderAttributeTable {
   workspace_id: string
+  hub_id: string
   folder_id: string
   attribute_id: string
   position: number

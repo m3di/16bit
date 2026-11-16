@@ -73,8 +73,10 @@ export const attributeSchema = z.discriminatedUnion('type', [
 ])
 export type Attribute = z.infer<typeof attributeSchema>
 
+/** Places a hub attribute on a folder. `hubId` is the hub of both (D10). */
 export const folderAttributeSchema = z.strictObject({
   workspaceId: idSchema,
+  hubId: idSchema,
   folderId: idSchema,
   attributeId: idSchema,
   position: z.int().min(0),

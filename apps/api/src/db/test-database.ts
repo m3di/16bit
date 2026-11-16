@@ -18,6 +18,7 @@ function baseUrl(): string {
 
 export async function createTestDatabase(): Promise<{ url: string; drop: () => Promise<void> }> {
   const admin = baseUrl()
+  // Interpolated into SQL below: safe only because it is random hex. Never pass user input here.
   const name = `test_${randomBytes(6).toString('hex')}`
   const client = new pg.Client({ connectionString: admin })
   await client.connect()

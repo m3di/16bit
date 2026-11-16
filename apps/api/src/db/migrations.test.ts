@@ -1,5 +1,6 @@
 import { sql, type Kysely } from 'kysely'
 import { Migrator, NO_MIGRATIONS } from 'kysely/migration'
+import { PALETTE_COLORS } from '@16bit/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createDb, migrateToLatest, type Database } from './database.ts'
 import { migrations } from './migrations/index.ts'
@@ -178,7 +179,7 @@ describe('schema constraints', () => {
           hub_id: 'h1',
           parent_id: null,
           name: 'X',
-          color: 'c',
+          color: 'teal',
           id_prefix: 'X',
         })
         .execute(),
@@ -195,7 +196,7 @@ describe('schema constraints', () => {
           hub_id: 'h2',
           parent_id: 'f1',
           name: 'X',
-          color: 'c',
+          color: 'teal',
           id_prefix: 'X',
         })
         .execute(),
@@ -311,5 +312,91 @@ describe('schema constraints', () => {
         .values({ ...rev, item_id: 'i2', version: 1 })
         .execute(),
     ).rejects.toThrow(/revision_pkey/)
+  })
+
+  it('accepts every palette colour and rejects anything else', async () => {
+    const folder = { workspace_id: 'w1', hub_id: 'h1', parent_id: 'h1', name: 'X', id_prefix: 'X' }
+    await db
+      .insertInto('folder')
+      .values(PALETTE_COLORS.map((color) => ({ ...folder, id: `c-${color}`, color })))
+      .execute()
+    for (const color of ['#ff0000', 'purple', 'Blue']) {
+      await expect(
+        db
+          .insertInto('folder')
+          .values({ ...folder, id: 'bad', color })
+          .execute(),
+      ).rejects.toThrow(/folder_color_check/)
+    }
+  })
+
+  it('rejects an attribute whose hub_id is not a hub', async () => {
+    await expect(
+      db
+        .insertInto('attribute')
+        .values({
+          workspace_id: 'w1',
+          id: 'a1',
+          hub_id: 'f1',
+          name: 'A',
+          type: 'text',
+          config: '{}',
+        })
+        .execute(),
+    ).rejects.toThrow(/foreign key/)
+  })
+
+  describe('folder_attribute', () => {
+    beforeEach(async () => {
+      await db
+        .insertInto('attribute')
+        .values({
+          workspace_id: 'w1',
+          id: 'a1',
+          hub_id: 'h1',
+          name: 'A',
+          type: 'text',
+          config: '{}',
+        })
+        .execute()
+    })
+
+    const place = (row: { hub_id: string; folder_id: string }) =>
+      db
+        .insertInto('folder_attribute')
+        .values({ workspace_id: 'w1', attribute_id: 'a1', position: 0, ...row })
+        .execute()
+
+    it('accepts an attribute on a folder in the same hub', async () => {
+      await place({ hub_id: 'h1', folder_id: 'f1' })
+      await place({ hub_id: 'h1', folder_id: 'h1' })
+    })
+
+    it('rejects a folder in h2 using an attribute from h1', async () => {
+      // Labelled with the folder's hub: the attribute side fails.
+      await expect(place({ hub_id: 'h2', folder_id: 'h2' })).rejects.toThrow(
+        /folder_attribute_workspace_id_hub_id_attribute_id_fkey/,
+      )
+      // Labelled with the attribute's hub: the folder side fails.
+      await expect(place({ hub_id: 'h1', folder_id: 'h2' })).rejects.toThrow(
+        /folder_attribute_workspace_id_hub_id_folder_id_fkey/,
+      )
+    })
+  })
+
+  it('starts the item and revision counters at 1', async () => {
+    const hub = await db
+      .selectFrom('folder')
+      .select(['next_seq', 'version'])
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'h1')
+      .executeTakeFirstOrThrow()
+    expect(hub).toEqual({ next_seq: 1, version: 0 })
+    const ws = await db
+      .selectFrom('workspace')
+      .select('next_revision_seq')
+      .where('id', '=', 'w1')
+      .executeTakeFirstOrThrow()
+    expect(ws.next_revision_seq).toBe(1)
   })
 })

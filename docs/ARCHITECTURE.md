@@ -36,13 +36,13 @@ Use the current stable release of each when scaffolding, pin it, and read its cu
 Every table carries `workspace_id` as the leading column of its primary key and indexes. Row-level security is added in M1.
 
 ```sql
-workspace        (id, name, created_at)
+workspace        (id, name, created_at, next_revision_seq)
 principal        (workspace_id, id, kind,           -- 'user' | 'agent'
                   name, workspace_role)
 folder           (workspace_id, id, hub_id, parent_id,   -- hub: parent_id is null, hub_id = id
-                  name, color, id_prefix, item_count, version)
+                  name, color, id_prefix, item_count, version, next_seq)
 attribute        (workspace_id, id, hub_id, name, type, config jsonb, indexed bool)
-folder_attribute (workspace_id, folder_id, attribute_id, position, required)
+folder_attribute (workspace_id, hub_id, folder_id, attribute_id, position, required)
 item             (workspace_id, id, hub_id, folder_id, seq_id,
                   values jsonb, version bigint, updated_at, updated_by)
 item_index       (workspace_id, attribute_id, item_id, num, txt, ts)   -- derived
@@ -57,7 +57,9 @@ folder_grant     (workspace_id, folder_id, principal_id)
 
 - `item.values` is keyed by attribute ID.
 - `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`.
-- `revision.seq` increases per workspace. A client asks for everything after a sequence number.
+- `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
+- `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.
+- `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
 - `folder.item_count` on a hub is a counter kept in the write transaction, so the main dashboard never counts items.
 
 **M0 scope:** `workspace`, `principal`, `folder`, `attribute`, `folder_attribute`, `item`, `revision`. No `item_index` yet; M0 lists items by folder with cursor paging and sorts by update time.
