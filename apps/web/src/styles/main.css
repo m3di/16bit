@@ -134,3 +134,14 @@
     outline-offset: 2px;
   }
 }
+
+@layer components {
+  /* RichTextEditor's empty state: Tiptap marks the empty first paragraph and sets the text. */
+  .rich-editor .is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    color: var(--ink3);
+    pointer-events: none;
+  }
+}
