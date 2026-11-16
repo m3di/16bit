@@ -16,7 +16,7 @@ import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
-import { createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
+import { backlinks, createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toWorkspace } from './mappers.ts'
 import { isAppRoute, registerWeb, sendAppShell } from './web.ts'
 
@@ -214,7 +214,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            return queryItems(db, workspaceId, parse(itemQuerySchema, request.body))
+            return queryItems(db, workspaceId, request.actor, parse(itemQuerySchema, request.body))
           })
 
           ws.post('/items', async (request, reply) => {
@@ -231,6 +231,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.get('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             return getItem(db, workspaceId, itemId)
+          })
+
+          ws.get('/items/:itemId/backlinks', async (request) => {
+            const { workspaceId, itemId } = parse(itemParams, request.params)
+            const page = parse(pageQuerySchema, request.query)
+            return backlinks(db, workspaceId, request.actor, itemId, page)
           })
 
           ws.patch('/items/:itemId', async (request) => {

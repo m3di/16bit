@@ -7,7 +7,7 @@ import {
   itemSchema,
   workspaceSchema,
 } from './entities.ts'
-import { boundedFilterSchema, sortSchema } from './query.ts'
+import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
 
 // Request and response shapes of the HTTP API (v1), shared by `apps/api` and `apps/web`.
 // Every route is scoped to a workspace: `/v1/workspaces/:workspaceId/...`.
@@ -62,19 +62,59 @@ export type HubDescription = z.infer<typeof hubDescriptionSchema>
 /**
  * `POST /v1/workspaces/:workspaceId/query`. The query shape in docs/ARCHITECTURE.md, M1 subset:
  * items of one folder, filtered and sorted on indexed attributes (D20), with a required limit
- * and cursor paging. With no `sort`, items come newest update first. `where` and `sort` are
- * checked against the folder's attributes with `compileItemQuery`.
+ * and cursor paging. With no `sort`, items come newest update first. `where`, `sort` and
+ * `expand` are checked against the folder's attributes with `compileItemQuery`.
  */
 export const itemQuerySchema = z.strictObject({
   from: idSchema,
   where: boundedFilterSchema.nullable().default(null),
   sort: sortSchema.default([]),
+  expand: expandSchema.default([]),
   limit: z.int().min(1).max(MAX_PAGE_LIMIT),
   cursor: cursorSchema.nullable().default(null),
 })
 export type ItemQuery = z.input<typeof itemQuerySchema>
 
 export const itemPageSchema = pageSchema(itemSchema)
+
+/**
+ * A linked item as the caller sees it. `none` means it exists but the caller cannot read it
+ * (no grant on its hub, D27): its values are never sent (docs/ROLES.md, relations across hubs).
+ */
+export const linkedItemSchema = z.discriminatedUnion('access', [
+  z.strictObject({ access: z.literal('read'), item: itemSchema }),
+  z.strictObject({ access: z.literal('none') }),
+])
+export type LinkedItem = z.infer<typeof linkedItemSchema>
+
+/**
+ * The response of `POST /query`. With a non-empty `expand`, `linked` holds every item that a
+ * page item links to through the expanded attributes, keyed by item ID. An ID in a relation
+ * value with no entry in `linked` no longer exists.
+ */
+export const itemQueryResultSchema = itemPageSchema.extend({
+  linked: z.record(idSchema, linkedItemSchema).optional(),
+})
+export type ItemQueryResult = z.infer<typeof itemQueryResultSchema>
+
+/**
+ * One entry of `GET /v1/workspaces/:workspaceId/items/:itemId/backlinks`: item `itemId` links
+ * to this item through its relation attribute `attributeId`. `item` is sent only when the
+ * caller can read it.
+ */
+export const backlinkSchema = z.discriminatedUnion('access', [
+  z.strictObject({
+    access: z.literal('read'),
+    itemId: idSchema,
+    attributeId: idSchema,
+    item: itemSchema,
+  }),
+  z.strictObject({ access: z.literal('none'), itemId: idSchema, attributeId: idSchema }),
+])
+export type Backlink = z.infer<typeof backlinkSchema>
+
+/** Backlinks by linking item ID, then attribute ID. Takes `pageQuerySchema`. */
+export const backlinkPageSchema = pageSchema(backlinkSchema)
 
 /** Values as sent by a client, before they are checked against the folder's attributes. */
 export const itemValuesInputSchema = z.record(idSchema, z.unknown())

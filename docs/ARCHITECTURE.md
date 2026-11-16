@@ -104,9 +104,10 @@ Rendering (cell and editor components) lives in `apps/web`, registered against t
 
 **M1 scope (#46):** multi-select, URL, actor, auto ID, rich text, relation (D44). Summary functions are listed but computed only from M4. Besides the six parts, each type states `readOnly` and `sortable`.
 
-- Type names are snake_case: `multi_select`, `url`, `actor`, `auto_id`, `rich_text`, `relation`. The `attribute.type` check constraint still lists the M0 types; a migration adds the rest.
+- Type names are snake_case: `multi_select`, `url`, `actor`, `auto_id`, `rich_text`, `relation`. The `attribute.type` check constraint takes all of them from migration 0004 (#47).
 - Multi-select, actor and relation values are lists of distinct IDs (option, principal, item). Actor and relation have `multiple` (actor off, relation on); with it off the list holds at most one. Caps: 100 options, 50 principals, 100 items. An empty list is stored as `null`. Each element is one `item_index` row; multi-select rows are in option order. Their filters are `in` ("has any of"), `not_in` ("has none of"), and the empty checks.
 - Relation config is `{ targetHubId, crossHub = false, multiple = true }`. With `crossHub` off, `targetHubId` must be the attribute's own hub (D11), checked by `attributeSchema`. That linked items exist and are readable, and that actor IDs are principals of the workspace, is checked by the server.
+- Relation writes (#47): each linked item must exist, sit in `targetHubId`, and be in a hub the writer can read (`can(…, 'hub.read')` with the writer's own hub grant). A missing item and an unreadable one get the same 422 `invalid_values` error, so hidden items can't be probed. Targets are locked `FOR KEY SHARE` in the write transaction, which then replaces the item's `link` rows for each relation it touches. Deleting an item removes the links from and to it (cascade); relation values in other items keep the ID, and readers treat an ID with no link as gone.
 - URL is an absolute http or https URL up to 2,048 characters.
 - Auto ID is a positive integer the server writes on create: the item's `seqId`. `validateItemValues` refuses any client value for it with `read_only`, and it is never required on create.
 - Rich text is ProseMirror JSON in `item.values`, limited to a closed node set, the one the shared editor from #48 uses: `doc`, `paragraph`, `heading` (level 3 or 4, since item titles take h1 and h2), `bulletList`, `orderedList` (`start`), `listItem` (a paragraph, then paragraphs or lists), `codeBlock` (plain text only), `hardBreak`, `text`, and the marks `bold`, `italic`, `code`, `link` (`href`: http, https or mailto). No other node, mark or attribute is accepted. Caps: 64 KiB of JSON (UTF-8) and 14 levels of nesting, which is lists six deep. A document with no text is empty. It indexes its plain text, filters with `contains` and `not_contains`, and renders as Markdown for agents.
@@ -122,6 +123,8 @@ Rendering (cell and editor components) lives in `apps/web`, registered against t
 Rules: indexed attributes only for filter and sort, one level of expansion, a required limit, cursor paging.
 
 **M1 scope (#45):** `from`, `where`, `sort`, `limit` (required, 1 to 200), `cursor`. Shapes are in `packages/core/src/query.ts`.
+
+**Expand (#47):** `expand` is a list of up to 3 relation attributes shown on the `from` folder (indexing not needed: it reads `link`). The response adds `linked: { [itemId]: { access: "read", item } | { access: "none" } }` with every item the page links to through them, one level deep. `none` is an item in a hub the caller cannot read; its values are never sent. An ID in a relation value with no `linked` entry no longer exists. Without `expand`, the response has no `linked` key.
 
 - `where` is a tree of `{ and: [...] }`, `{ or: [...] }`, and conditions `{ attribute, op, value }`: at most 20 conditions, 3 levels deep. `op` must be one of the attribute type's `filterOperators`; `value` is checked with the type's value schema (number bounds excepted) and projected like a stored value. `in`/`not_in` take an array of up to 100; `is_empty`/`is_not_empty` take none. `contains`, `not_contains`, `starts_with` ignore case; `eq` on text is exact. The negative operators also match items with no value.
 - `sort` is up to 3 `{ attribute, direction }`. Text sorts case-insensitively, select by option order. Empty values sort last in both directions, and ties end on the item ID. With no `sort`, items come newest update first.
@@ -146,6 +149,8 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE /v1/items/:id`.
 
 **M0 routes.** Every route except `/health` is scoped to a workspace: `/v1/workspaces/:workspaceId/...`, so the table's `/v1/items/:id` is `/v1/workspaces/:workspaceId/items/:id`. `GET /v1/workspaces` and `GET /v1/workspaces/:workspaceId/hubs` list what the caller can see. `DELETE` takes the expected version as `?version=`. Request and response shapes are in `packages/core/src/api.ts`. A stale version returns 409 `{ error: "conflict", message, current: Item }`. A revision's `patch` is `{ op: "create", folderId, values }`, `{ op: "update", values }`, or `{ op: "delete" }`. Not yet in M0: client mutation IDs and `POST /v1/items/get`.
+
+**Backlinks (#47):** `GET /v1/workspaces/:workspaceId/items/:itemId/backlinks?limit=&cursor=` pages the items linking to an item, ordered by linking item ID then attribute ID: `{ access: "read", itemId, attributeId, item }` or `{ access: "none", itemId, attributeId }`. The item itself must be in a hub the caller can read, or it is a 404.
 
 **M0 auth:** a single development API key from the environment, sent as a bearer token, mapped to a seeded owner. Real authentication, sessions, and agent keys arrive in M1.
 
