@@ -106,6 +106,7 @@ describe('migrations', () => {
       '0001_initial',
       '0002_item_index',
       '0003_auth_access',
+      '0004_auth_functions',
     ])
     expect(await tables()).toEqual(TABLES)
   })

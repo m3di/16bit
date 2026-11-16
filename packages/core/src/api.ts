@@ -106,7 +106,10 @@ export const deleteItemQuerySchema = z.strictObject({
 
 /** Every error response has this shape. Some codes add fields, listed below. */
 export const API_ERROR_CODES = [
+  /** No session or key, or a bad one. Also a failed sign-in. */
   'unauthorized',
+  /** Signed in, but the role does not allow the action (docs/ROLES.md). */
+  'forbidden',
   'not_found',
   'invalid_request',
   /** Adds `errors: ValueError[]` from `validateItemValues`. */
@@ -115,6 +118,12 @@ export const API_ERROR_CODES = [
   'conflict',
   /** `POST /items` with an `id` that is already used in the workspace. */
   'id_taken',
+  /** Accepting an invite as a new account with an email that already has one. */
+  'email_taken',
+  /** Accepting an invite into a workspace the account already belongs to. */
+  'already_member',
+  /** Too many attempts. The `Retry-After` header says when to try again, in seconds. */
+  'rate_limited',
   'internal',
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]

@@ -24,7 +24,16 @@ const anonymousAsDevPrincipal = devAnonymous.enabled
 
 // The pool connects lazily, so the server starts even while Postgres is still coming up.
 const db = createDb(databaseUrl)
-const app = buildApp({ db, devApiKey, devPrincipalId, webRoot, anonymousAsDevPrincipal })
+// Secure cookies unless explicitly turned off for plain-HTTP local development.
+const secureCookies = process.env['COOKIE_SECURE'] !== 'false'
+const app = buildApp({
+  db,
+  devApiKey,
+  devPrincipalId,
+  webRoot,
+  anonymousAsDevPrincipal,
+  secureCookies,
+})
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`api received ${signal}, closing`)
