@@ -45,6 +45,15 @@ const countLine = computed(() => {
   return `${new Intl.NumberFormat('en').format(f.itemCount)} ${f.itemCount === 1 ? 'item' : 'items'}`
 })
 
+// The server caps the hub description. Say so rather than show a partial list as complete.
+const truncatedNote = computed(() => {
+  const t = description.value?.truncated
+  if (!t) return ''
+  const parts = [t.folders && 'folders', (t.attributes || t.folderAttributes) && 'fields']
+  const cut = parts.filter(Boolean).join(' and ')
+  return cut ? `This hub has more ${cut} than can be shown here.` : ''
+})
+
 const treeLoad = computed<Load<typeof tree.value>>(() =>
   hub.value.state === 'ready' ? { state: 'ready', data: tree.value } : hub.value,
 )
@@ -177,6 +186,9 @@ const retryPanel = () => {
                 {{ folder.name }}
               </h1>
               <span v-if="countLine" class="text-ink2" data-count>{{ countLine }}</span>
+              <span v-if="truncatedNote" class="text-secondary text-ink3" data-truncated>{{
+                truncatedNote
+              }}</span>
             </div>
             <BaseButton
               variant="primary"

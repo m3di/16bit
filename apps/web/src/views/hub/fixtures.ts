@@ -82,6 +82,7 @@ export const description: HubDescription = {
   hub: folder('bld', null, 'Build'),
   folders: [folder('b', 'bld', 'Bugs'), folder('a', 'bld', 'Archive'), folder('a1', 'a', 'Old')],
   attributes,
+  truncated: { folders: false, attributes: false, folderAttributes: false },
   folderAttributes: [
     {
       workspaceId: 'w',
