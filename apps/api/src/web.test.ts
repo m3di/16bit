@@ -53,6 +53,15 @@ describe('web app', () => {
     expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable')
   })
 
+  it('does not mark index.html immutable when the root itself sits under an assets directory', async () => {
+    const nested = join(root, 'assets', 'site')
+    mkdirSync(nested, { recursive: true })
+    writeFileSync(join(nested, 'index.html'), '<!doctype html><div id="app"></div>')
+    const res = await start({ webRoot: nested }).inject({ url: '/', headers: html })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['cache-control']).toBe('no-cache')
+  })
+
   it('answers a client-side route with index.html', async () => {
     const res = await start().inject({ url: '/hubs/build?tab=table', headers: html })
     expect(res.statusCode).toBe(200)
@@ -92,6 +101,14 @@ describe('anonymousAsDevPrincipal', () => {
   it('lets a request without a key through when on', async () => {
     const res = await start({ anonymousAsDevPrincipal: true }).inject({ url: '/v1/workspaces' })
     expect(res.statusCode).toBe(500)
+  })
+
+  it('still refuses an empty Authorization header when on', async () => {
+    const res = await start({ anonymousAsDevPrincipal: true }).inject({
+      url: '/v1/workspaces',
+      headers: { authorization: '' },
+    })
+    expect(res.statusCode).toBe(401)
   })
 
   it('still refuses a wrong key when on', async () => {

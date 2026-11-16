@@ -45,4 +45,22 @@ describe('server', () => {
     expect(code).toBe(1)
     expect(stderr).toContain('DEV_API_KEY')
   })
+
+  it('refuses DEV_ANONYMOUS_AS_OWNER on a non-loopback HOST', async () => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PORT: '0',
+      HOST: '0.0.0.0',
+      DATABASE_URL: 'postgres://unused@127.0.0.1:1/unused',
+      DEV_API_KEY: 'test-key',
+      DEV_ANONYMOUS_AS_OWNER: 'true',
+    }
+    delete env['DEV_ANONYMOUS_ALLOW_NONLOCAL']
+    const child = spawn(process.execPath, [server], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+    const [code] = (await once(child, 'exit')) as [number | null]
+    expect(code).toBe(1)
+    expect(stderr).toContain('refusing to start')
+  })
 })

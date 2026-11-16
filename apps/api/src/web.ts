@@ -1,4 +1,5 @@
 import fastifyStatic from '@fastify/static'
+import { relative, sep } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 // Serves the built web app from the API process, so one image serves both (D34).
@@ -11,7 +12,8 @@ export function registerWeb(app: FastifyInstance, root: string): void {
     root,
     cacheControl: false,
     setHeaders: (reply: FastifyReply, path: string) => {
-      void reply.header('cache-control', /[/\\]assets[/\\]/.test(path) ? IMMUTABLE : 'no-cache')
+      const immutable = relative(root, path).startsWith(`assets${sep}`)
+      void reply.header('cache-control', immutable ? IMMUTABLE : 'no-cache')
     },
   })
 }
