@@ -15,6 +15,7 @@
     "format": "prettier --write .",
     "typecheck": "tsc -p tsconfig.json && pnpm -r typecheck",
     "test": "vitest run",
+    "e2e": "pnpm --filter @16bit/e2e e2e",
     "build": "pnpm -r --if-present build"
   },
   "devDependencies": {
