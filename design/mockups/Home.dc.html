@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Main dashboard: workspaces and hubs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Space+Grotesk:wght@500&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+body{margin:0}
+a{color:inherit;text-decoration:none}a:hover{color:inherit}
+button,input{font:inherit;cursor:pointer}
+.light{--bg:#FFFFFF;--surface:#FAFAFB;--line:#ECEEF1;--line2:#D9DCE3;--ink:#111318;--ink2:#4B5261;--ink3:#6B7280;--empty:#E1E4EA;--blue:#3B4CCA;--teal:#0F766E;--pink:#BE185D;--violet:#6D28D9;--amber:#D97706;--green:#15803D;--red:#B42318}
+.dark{--bg:#0F1115;--surface:#161920;--line:#252A33;--line2:#343A46;--ink:#ECEEF1;--ink2:#B4BAC6;--ink3:#8E95A3;--empty:#2A2F3A;--blue:#8E9BFF;--teal:#2DD4BF;--pink:#F472B6;--violet:#A78BFA;--amber:#FBBF24;--green:#4ADE80;--red:#F97066}
+.page{min-height:1080px;background:var(--bg);color:var(--ink);font-family:Inter,sans-serif;font-size:13px;line-height:1.45;display:flex;flex-direction:column}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.h{font-family:'Space Grotesk',sans-serif;font-weight:500}
+.mut{color:var(--ink3);font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.card{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.card:hover{border-color:var(--line2)}
+.row{display:flex;align-items:center;gap:8px}
+.sq{width:10px;height:10px;flex-shrink:0}
+.meter{display:inline-flex;gap:2px}.meter i{width:6px;height:6px;background:var(--empty)}
+.sp{display:inline-flex;align-items:flex-end;gap:2px;height:16px}.sp i{width:4px;background:var(--ink3)}
+.wh{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.chip{font-size:11px;padding:1px 6px;border:1px solid var(--line2);border-radius:3px;color:var(--ink2)}
+.li{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+.btn{min-height:32px;padding:0 12px;border:1px solid var(--line2);border-radius:5px;background:var(--bg);color:var(--ink)}
+</style>
+</helmet>
+<div class="page light">
+
+<header style="border-bottom: 1px solid var(--line); padding: 0 28px; min-height: 48px; display: flex; flex-wrap: wrap; align-items: center; gap: 16px">
+<div class="row">
+<svg aria-hidden="true" width="16" height="16" viewBox="0 0 4 4" shape-rendering="crispEdges"><path d="M0 0h2v2h-2zM2 2h2v2h-2z" fill="var(--blue)"/><path d="M2 0h2v2h-2zM0 2h2v2h-2z" fill="var(--ink)"/></svg>
+<span class="h" style="font-size: 14px">16bit.info</span>
+</div>
+<div style="flex: 1 1 240px; max-width: 420px">
+<label class="sr" for="q">Search items across your hubs</label>
+<input id="q" type="search" placeholder="Search items across your hubs" style="box-sizing: border-box; width: 100%; min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); cursor: text">
+</div>
+<button class="btn row" style="margin-left: auto"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 5 5" shape-rendering="crispEdges"><rect width="5" height="5" fill="#FFE2CC"/><path d="M0 0h1v1h-1zM4 0h1v1h-1zM1 1h3v1h-3zM0 2h5v1h-5zM1 3h1v1h-1zM3 3h1v1h-1zM2 4h1v1h-1z" fill="#B84A00"/></svg>Sara</button>
+</header>
+
+<div style="box-sizing: border-box; width: 100%; max-width: 1280px; margin: 0 auto; padding: 32px 28px; display: flex; flex-wrap: wrap; gap: 44px; align-items: flex-start">
+
+<main style="flex: 3 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h1 class="h" style="margin: 0; font-size: 24px; letter-spacing: -0.01em">Good morning, Sara</h1>
+<span style="color: var(--ink2)">6 hubs in 2 workspaces. 3 things are waiting on you.</span>
+</div>
+
+<section aria-label="Parcel Tracker workspace" style="display: flex; flex-direction: column; gap: 14px">
+<div class="wh">
+<div class="row"><h2 style="margin: 0; font-size: 13px; font-weight: 500">Parcel Tracker</h2><span class="chip">Owner</span></div>
+<div class="row" style="gap: 16px"><span class="mut">7 people, 4 agents</span><a href="#" class="mut" style="border-bottom: 1px solid var(--line2)">Workspace settings</a></div>
+</div>
+<div class="grid">
+
+<a href="#" class="card">
+<div class="row" style="justify-content: space-between"><span class="row"><span aria-hidden="true" class="sq" style="background: var(--blue)"></span><span style="font-size: 14px; font-weight: 500">Engineering</span></span><span class="row mut" style="gap: 5px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--green)"></span>Active now</span></div>
+<span style="color: var(--ink2)">Sprint 24, day 6 of 10. 18 points left.</span>
+<div class="row" style="justify-content: space-between"><span class="row mut"><span role="img" aria-label="Size: 3 of 4" class="meter"><i style="background: var(--blue)"></i><i style="background: var(--blue)"></i><i style="background: var(--blue)"></i><i></i></span>412 items</span><span role="img" aria-label="Changes over the last 7 days, rising" class="sp"><i style="height: 5px"></i><i style="height: 8px"></i><i style="height: 6px"></i><i style="height: 11px"></i><i style="height: 9px"></i><i style="height: 14px"></i><i style="height: 16px"></i></span></div>
+</a>
+
+<a href="#" class="card">
+<div class="row" style="justify-content: space-between"><span class="row"><span aria-hidden="true" class="sq" style="background: var(--teal)"></span><span style="font-size: 14px; font-weight: 500">Support</span></span><span class="mut">2 hours ago</span></div>
+<span style="color: var(--ink2)">14 open tickets. 3 are assigned to you.</span>
+<div class="row" style="justify-content: space-between"><span class="row mut"><span role="img" aria-label="Size: 4 of 4" class="meter"><i style="background: var(--teal)"></i><i style="background: var(--teal)"></i><i style="background: var(--teal)"></i><i style="background: var(--teal)"></i></span>1,280 items</span><span role="img" aria-label="Changes over the last 7 days, steady" class="sp"><i style="height: 10px"></i><i style="height: 12px"></i><i style="height: 9px"></i><i style="height: 11px"></i><i style="height: 12px"></i><i style="height: 4px"></i><i style="height: 10px"></i></span></div>
+</a>
+
+<a href="#" class="card">
+<div class="row" style="justify-content: space-between"><span class="row"><span aria-hidden="true" class="sq" style="background: var(--pink)"></span><span style="font-size: 14px; font-weight: 500">Roadmap</span></span><span class="mut">Nov 12</span></div>
+<span style="color: var(--ink2)">Themes and bets for next year.</span>
+<div class="row" style="justify-content: space-between"><span class="row mut"><span role="img" aria-label="Size: 2 of 4" class="meter"><i style="background: var(--pink)"></i><i style="background: var(--pink)"></i><i></i><i></i></span>38 items</span><span role="img" aria-label="Changes over the last 7 days, quiet" class="sp"><i style="height: 2px"></i><i style="height: 2px"></i><i style="height: 7px"></i><i style="height: 2px"></i><i style="height: 2px"></i><i style="height: 2px"></i><i style="height: 2px"></i></span></div>
+</a>
+
+<a href="#" class="card">
+<div class="row" style="justify-content: space-between"><span class="row"><span aria-hidden="true" class="sq" style="background: var(--green)"></span><span style="font-size: 14px; font-weight: 500">Finance</span></span><span class="mut">Yesterday</span></div>
+<span style="color: var(--ink2)">Invoices, vendors, and budgets.</span>
+<div class="row" style="justify-content: space-between"><span class="row mut"><span role="img" aria-label="Size: 3 of 4" class="meter"><i style="background: var(--green)"></i><i style="background: var(--green)"></i><i style="background: var(--green)"></i><i></i></span>206 items</span><span role="img" aria-label="Changes over the last 7 days, light" class="sp"><i style="height: 4px"></i><i style="height: 2px"></i><i style="height: 5px"></i><i style="height: 3px"></i><i style="height: 6px"></i><i style="height: 2px"></i><i style="height: 4px"></i></span></div>
+</a>
+
+</div>
+</section>
+
+<section aria-label="Sara's personal workspace" style="display: flex; flex-direction: column; gap: 14px">
+<div class="wh">
+<div class="row"><h2 style="margin: 0; font-size: 13px; font-weight: 500">Sara, personal</h2><span class="chip">Owner</span></div>
+<div class="row" style="gap: 16px"><span class="mut">Only you, 1 agent</span><a href="#" class="mut" style="border-bottom: 1px solid var(--line2)">Workspace settings</a></div>
+</div>
+<div class="grid">
+
+<a href="#" class="card">
+<div class="row" style="justify-content: space-between"><span class="row"><span aria-hidden="true" class="sq" style="background: var(--amber)"></span><span style="font-size: 14px; font-weight: 500">Assistant memory</span></span><span class="row mut" style="gap: 5px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--green)"></span>Active now</span></div>
+<span style="color: var(--ink2)">What your agent knows about you.</span>
+<div class="row" style="justify-content: space-between"><span class="row mut"><span role="img" aria-label="Size: 4 of 4" class="meter"><i style="background: var(--amber)"></i><i style="background: var(--amber)"></i><i style="background: var(--amber)"></i><i style="background: var(--amber)"></i></span>2,345 items</span><span role="img" aria-label="Changes over the last 7 days, busy" class="sp"><i style="height: 12px"></i><i style="height: 14px"></i><i style="height: 10px"></i><i style="height: 16px"></i><i style="height: 13px"></i><i style="height: 11px"></i><i style="height: 15px"></i></span></div>
+</a>
+
+<a href="#" class="card">
+<div class="row" style="justify-content: space-between"><span class="row"><span aria-hidden="true" class="sq" style="background: var(--violet)"></span><span style="font-size: 14px; font-weight: 500">Reading</span></span><span class="mut">Nov 9</span></div>
+<span style="color: var(--ink2)">Books, notes, and quotes.</span>
+<div class="row" style="justify-content: space-between"><span class="row mut"><span role="img" aria-label="Size: 2 of 4" class="meter"><i style="background: var(--violet)"></i><i style="background: var(--violet)"></i><i></i><i></i></span>64 items</span><span role="img" aria-label="Changes over the last 7 days, quiet" class="sp"><i style="height: 2px"></i><i style="height: 4px"></i><i style="height: 2px"></i><i style="height: 2px"></i><i style="height: 2px"></i><i style="height: 2px"></i><i style="height: 2px"></i></span></div>
+</a>
+
+<button class="card" style="align-items: center; justify-content: center; border-style: dashed; border-color: var(--line2); color: var(--ink3); min-height: 104px">New hub</button>
+
+</div>
+</section>
+<span class="mut" style="font-size: 11px">Size squares: under 10 items, under 100, under 1,000, and 1,000 or more. Bars: changes per day this week. Sample data.</span>
+</main>
+
+<aside style="flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 32px">
+
+<section aria-label="Waiting on you" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 13px; font-weight: 500">Waiting on you</h2>
+<a href="#" class="li"><span aria-hidden="true" class="sq" style="background: var(--blue); margin-top: 4px"></span><span style="flex: 1; min-width: 0">Review the live map PR<br><span class="mut">Engineering, requested by Tomas</span></span></a>
+<a href="#" class="li"><span aria-hidden="true" class="sq" style="background: var(--blue); margin-top: 4px"></span><span style="flex: 1; min-width: 0">A QA case failed on Push notification<br><span class="mut" style="color: var(--red)">Engineering, reported by qa-agent</span></span></a>
+<a href="#" class="li" style="border-bottom: 0"><span aria-hidden="true" class="sq" style="background: var(--teal); margin-top: 4px"></span><span style="flex: 1; min-width: 0">3 tickets are assigned to you<br><span class="mut">Support, oldest from Nov 13</span></span></a>
+</section>
+
+<section aria-label="Recent activity" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 13px; font-weight: 500">Recent</h2>
+<div class="li"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0"><rect width="5" height="5" fill="#EBDDFF"/><path d="M0 0h1v1h-1zM2 0h1v1h-1zM4 0h1v1h-1zM0 1h5v2h-5zM1 3h3v1h-3zM1 4h1v1h-1zM3 4h1v1h-1z" fill="#6D28D9"/></svg><span style="flex: 1; min-width: 0">qa-agent commented on Push notification on status change<br><span class="mut">Engineering, just now</span></span></div>
+<div class="li"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0"><rect width="5" height="5" fill="#DCE6FF"/><path d="M1 0h1v1h-1zM3 0h1v1h-1zM0 1h5v1h-5zM0 2h1v1h-1zM2 2h1v1h-1zM4 2h1v1h-1zM1 3h3v1h-3zM0 4h1v1h-1zM4 4h1v1h-1z" fill="#2F5BEA"/></svg><span style="flex: 1; min-width: 0">Tomas opened PR #482<br><span class="mut">Engineering, 1 hour ago</span></span></div>
+<div class="li"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0"><rect width="5" height="5" fill="#FFF0C2"/><path d="M1 0h3v1h-3zM0 1h1v1h-1zM4 1h1v1h-1zM1 2h3v1h-3zM0 3h5v1h-5zM1 4h1v1h-1zM3 4h1v1h-1z" fill="#8A6100"/></svg><span style="flex: 1; min-width: 0">Your agent saved 12 new memories<br><span class="mut">Assistant memory, last night</span></span></div>
+<div class="li" style="border-bottom: 0"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0"><rect width="5" height="5" fill="#D5F2F0"/><path d="M0 0h5v1h-5zM1 1h1v1h-1zM3 1h1v1h-1zM0 2h5v1h-5zM2 3h1v2h-1zM0 4h1v1h-1zM4 4h1v1h-1z" fill="#0F766E"/></svg><span style="flex: 1; min-width: 0">Dana added 4 invoices<br><span class="mut">Finance, yesterday</span></span></div>
+</section>
+
+</aside>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1360,"height":1080}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

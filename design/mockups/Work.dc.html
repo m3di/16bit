@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>My work and backlog</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Space+Grotesk:wght@500&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+body{margin:0}
+a{color:#374151;text-decoration:none}a:hover{color:#111318}
+button{font:inherit;cursor:pointer}
+.shell{display:flex;flex-wrap:wrap}
+@media (max-width:760px){.side{width:100%!important;border-right:0!important}}
+</style>
+</helmet>
+<div class="shell" style="min-height: 1080px; background: #FFFFFF; color: #111318; font-family: Inter, sans-serif; font-size: 13px; line-height: 1.45">
+
+<nav class="side" aria-label="Workspace" style="width: 208px; flex-shrink: 0; box-sizing: border-box; background: #FAFAFB; border-right: 1px solid #ECEEF1; padding: 16px 10px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 0 8px">
+<svg aria-hidden="true" width="16" height="16" viewBox="0 0 4 4" shape-rendering="crispEdges"><path d="M0 0h2v2h-2zM2 2h2v2h-2z" fill="{{accent}}"/><path d="M2 0h2v2h-2zM0 2h2v2h-2z" fill="#111318"/></svg>
+<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 14px">16bit.info</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 1px">
+<span style="font-size: 11px; color: #6B7280; padding: 0 8px 4px">Parcel Tracker</span>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #3B4CCA"></span>Home</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px; background: #EEF0F4; color: #111318; font-weight: 500"><span aria-hidden="true" style="width: 8px; height: 8px; background: #D97706"></span>My work</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #6D28D9"></span>Backlog</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #2563EB"></span>Sprints</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #0F766E"></span>Team</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #BE185D"></span>Epics</a>
+</div>
+<div style="display: flex; flex-direction: column; gap: 1px; margin-top: auto">
+<a href="#" style="display: flex; align-items: center; min-height: 32px; padding: 0 8px; border-radius: 5px; color: #6B7280">Settings</a>
+</div>
+</nav>
+
+<main style="flex: 1 1 520px; min-width: 0; box-sizing: border-box; padding: 28px 36px; display: flex; flex-direction: column; gap: 32px">
+
+<div style="display: flex; flex-direction: column; gap: 6px; max-width: 560px">
+<h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 500; letter-spacing: -0.01em">Sara's work</h1>
+<p style="margin: 0; color: #4B5261">10 points open in Sprint 24, and one review waiting on you.</p>
+</div>
+
+<section aria-label="My sprint board" style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">This sprint</h2>
+<span style="font-size: 11px; color: #6B7280">Items where Owner or Reviewer is you, grouped by Stage</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+
+<div style="flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid #ECEEF1"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #9CA3AF"></span><span>To do</span><span style="color: #6B7280">1</span></div>
+<a href="#" style="display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid #ECEEF1; border-radius: 6px; color: #111318"><span>Review the live map PR</span><span style="font-size: 12px; color: #6B7280">PR #482, requested by Tomas</span></a>
+</div>
+
+<div style="flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid #ECEEF1"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #D97706"></span><span>In progress</span><span style="color: #6B7280">1</span></div>
+<a href="#" style="display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid #ECEEF1; border-radius: 6px; color: #111318"><span>Delivery window picker</span><span style="font-size: 12px; color: #6B7280"><span style="font-family: 'JetBrains Mono', monospace">PT-214</span>, 5 points</span><div role="img" aria-label="3 of 5 subtasks done" style="height: 4px; background: #ECEEF1"><div style="width: 60%; height: 4px; background: {{accent}}"></div></div><span style="font-size: 12px; color: #6B7280">3 of 5 subtasks</span></a>
+</div>
+
+<div style="flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid #ECEEF1"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #2563EB"></span><span>In review</span><span style="color: #6B7280">0</span></div>
+<p style="margin: 0; padding: 12px; border: 1px dashed #D9DCE3; border-radius: 6px; color: #6B7280">Nothing of yours is in review.</p>
+</div>
+
+<div style="flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid #ECEEF1"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #6D28D9"></span><span>In QA</span><span style="color: #6B7280">1</span></div>
+<a href="#" style="display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid #ECEEF1; border-radius: 6px; color: #111318"><span>Push notification on status change</span><span style="font-size: 12px; color: #6B7280"><span style="font-family: 'JetBrains Mono', monospace">PT-217</span>, 5 points</span><span style="font-size: 12px; color: #B42318">1 of 9 test cases failed</span></a>
+</div>
+
+</div>
+</section>
+
+<section aria-label="Backlog" style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">Backlog</h2>
+<button style="min-height: 32px; padding: 0 12px; border: 1px solid #D9DCE3; border-radius: 5px; background: #FFFFFF; color: #111318">New item</button>
+</div>
+
+<div style="display: flex; justify-content: space-between; padding: 10px 0 6px; font-size: 11px; color: #6B7280; border-bottom: 1px solid #ECEEF1"><span>Next up</span><span>19 points</span></div>
+<a href="#" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 38px; border-bottom: 1px solid #ECEEF1; color: #111318"><span style="width: 52px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6B7280">PT-225</span><span style="flex: 1 1 220px; min-width: 0">Retry failed webhooks</span><span style="width: 52px; color: #B42318">Bug</span><span style="width: 110px; color: #4B5261">Notifications</span><span style="width: 24px; text-align: right">3</span></a>
+<a href="#" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 38px; border-bottom: 1px solid #ECEEF1; color: #111318"><span style="width: 52px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6B7280">PT-226</span><span style="flex: 1 1 220px; min-width: 0">Proof-of-delivery photo</span><span style="width: 52px; color: #4B5261">Story</span><span style="width: 110px; color: #4B5261">Courier tools</span><span style="width: 24px; text-align: right">8</span></a>
+<a href="#" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 38px; border-bottom: 1px solid #ECEEF1; color: #111318"><span style="width: 52px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6B7280">PT-227</span><span style="flex: 1 1 220px; min-width: 0">Dark mode for the tracking page</span><span style="width: 52px; color: #4B5261">Story</span><span style="width: 110px; color: #4B5261">Tracking page</span><span style="width: 24px; text-align: right">5</span></a>
+<a href="#" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 38px; border-bottom: 1px solid #ECEEF1; color: #111318"><span style="width: 52px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6B7280">PT-228</span><span style="flex: 1 1 220px; min-width: 0">Rate limit the public API</span><span style="width: 52px; color: #4B5261">Chore</span><span style="width: 110px; color: #6B7280">No epic</span><span style="width: 24px; text-align: right">3</span></a>
+
+<div style="display: flex; justify-content: space-between; padding: 18px 0 6px; font-size: 11px; color: #6B7280; border-bottom: 1px solid #ECEEF1"><span>Later</span><span>1 not estimated</span></div>
+<a href="#" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 38px; border-bottom: 1px solid #ECEEF1; color: #111318"><span style="width: 52px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6B7280">PT-230</span><span style="flex: 1 1 220px; min-width: 0">Courier ratings</span><span style="width: 52px; color: #4B5261">Story</span><span style="width: 110px; color: #4B5261">Courier tools</span><span style="width: 24px; text-align: right; color: #6B7280">?</span></a>
+<a href="#" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 38px; border-bottom: 1px solid #ECEEF1; color: #111318"><span style="width: 52px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6B7280">PT-231</span><span style="flex: 1 1 220px; min-width: 0">Multi-parcel orders</span><span style="width: 52px; color: #4B5261">Story</span><span style="width: 110px; color: #4B5261">Tracking page</span><span style="width: 24px; text-align: right">13</span></a>
+</section>
+
+<p style="margin: 0; font-size: 11px; color: #6B7280">Sample data for an invented team.</p>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#3B4CCA"},"$preview":{"width":1360,"height":1080}}'>
+class Component extends DCLogic {
+renderVals() {
+return { accent: this.props.accent ?? '#3B4CCA' };
+}
+}
+</script>
+</body>
+</html>

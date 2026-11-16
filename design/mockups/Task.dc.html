@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Task with stages, history and comments</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Space+Grotesk:wght@500&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+body{margin:0}
+a{color:#374151;text-decoration:none}a:hover{color:#111318}
+button{font:inherit;cursor:pointer}
+.shell{display:flex;flex-wrap:wrap}
+@media (max-width:760px){.side{width:100%!important;border-right:0!important}}
+</style>
+</helmet>
+<div class="shell" style="min-height: 1080px; background: #FFFFFF; color: #111318; font-family: Inter, sans-serif; font-size: 13px; line-height: 1.45">
+
+<nav class="side" aria-label="Workspace" style="width: 208px; flex-shrink: 0; box-sizing: border-box; background: #FAFAFB; border-right: 1px solid #ECEEF1; padding: 16px 10px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 0 8px">
+<svg aria-hidden="true" width="16" height="16" viewBox="0 0 4 4" shape-rendering="crispEdges"><path d="M0 0h2v2h-2zM2 2h2v2h-2z" fill="{{accent}}"/><path d="M2 0h2v2h-2zM0 2h2v2h-2z" fill="#111318"/></svg>
+<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 14px">16bit.info</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 1px">
+<span style="font-size: 11px; color: #6B7280; padding: 0 8px 4px">Parcel Tracker</span>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #3B4CCA"></span>Home</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #D97706"></span>My work</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #6D28D9"></span>Backlog</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px; background: #EEF0F4; color: #111318; font-weight: 500"><span aria-hidden="true" style="width: 8px; height: 8px; background: #2563EB"></span>Sprints</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #0F766E"></span>Team</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 5px"><span aria-hidden="true" style="width: 8px; height: 8px; background: #BE185D"></span>Epics</a>
+</div>
+<div style="display: flex; flex-direction: column; gap: 1px; margin-top: auto">
+<a href="#" style="display: flex; align-items: center; min-height: 32px; padding: 0 8px; border-radius: 5px; color: #6B7280">Settings</a>
+</div>
+</nav>
+
+<main style="flex: 1 1 520px; min-width: 0; box-sizing: border-box; padding: 28px 36px; display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start">
+
+<div style="flex: 3 1 440px; min-width: 0; display: flex; flex-direction: column; gap: 26px">
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 12px; color: #6B7280"><a href="#" style="color: #6B7280">Sprint 24</a> / <span style="font-family: 'JetBrains Mono', monospace">PT-217</span></span>
+<h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 500; letter-spacing: -0.01em">Push notification on status change</h1>
+</div>
+
+<section aria-label="Stages" style="display: flex; flex-wrap: wrap; border-top: 1px solid #ECEEF1; border-bottom: 1px solid #ECEEF1">
+<div style="flex: 1 1 130px; padding: 12px 12px 12px 0; display: flex; flex-direction: column; gap: 2px"><span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #15803D"></span>Development</span><span style="font-size: 12px; color: #6B7280">Done Nov 12</span></div>
+<div style="flex: 1 1 130px; padding: 12px 12px 12px 0; display: flex; flex-direction: column; gap: 2px"><span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #15803D"></span>Pull request</span><span style="font-size: 12px; color: #6B7280">Merged Nov 13</span></div>
+<div style="flex: 1 1 130px; padding: 12px 12px 12px 0; display: flex; flex-direction: column; gap: 2px"><span style="display: inline-flex; align-items: center; gap: 6px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #6D28D9"></span>QA</span><span style="font-size: 12px; color: #B42318">6 of 9 pass, 1 failed</span></div>
+<div style="flex: 1 1 130px; padding: 12px 0; display: flex; flex-direction: column; gap: 2px"><span style="display: inline-flex; align-items: center; gap: 6px; color: #6B7280"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #9CA3AF"></span>Release</span><span style="font-size: 12px; color: #6B7280">Not started</span></div>
+</section>
+
+<section aria-label="Description" style="display: flex; flex-direction: column; gap: 10px; max-width: 620px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">Description</h2>
+<p style="margin: 0; font-size: 14px; line-height: 1.65; color: #374151">When a parcel changes status, the recipient gets a push notification within a minute. The notification names the new status and opens the tracking page.</p>
+<ul style="margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.65; color: #374151">
+<li>Send for four statuses: picked up, out for delivery, delivered, delayed.</li>
+<li>Respect the quiet hours set in the app.</li>
+<li>Retry once if the device token was refreshed.</li>
+</ul>
+</section>
+
+<section aria-label="Comments" style="display: flex; flex-direction: column; gap: 16px; max-width: 620px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">Comments</h2>
+
+<article style="display: flex; gap: 10px"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0; margin-top: 2px"><rect width="5" height="5" fill="#D5F2F0"/><path d="M0 0h5v1h-5zM1 1h1v1h-1zM3 1h1v1h-1zM0 2h5v1h-5zM2 3h1v2h-1zM0 4h1v1h-1zM4 4h1v1h-1z" fill="#0F766E"/></svg>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px"><span><span style="font-weight: 500">Kofi</span> <span style="font-size: 12px; color: #6B7280">Nov 13</span></span><p style="margin: 0; color: #374151; line-height: 1.6">Approved. The retry on token refresh is a nice touch.</p>
+<div style="display: flex; gap: 6px"><button aria-label="Agree, 2 reactions" style="display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 8px; border: 1px solid #ECEEF1; border-radius: 14px; background: #FFFFFF; color: #374151; font-size: 12px"><svg aria-hidden="true" width="10" height="10" viewBox="0 0 5 5" shape-rendering="crispEdges"><path d="M0 2h1v1h-1zM1 3h1v1h-1zM2 2h1v1h-1zM3 1h1v1h-1zM4 0h1v1h-1z" fill="#15803D"/></svg>2</button></div></div></article>
+
+<article style="display: flex; gap: 10px"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0; margin-top: 2px"><rect width="5" height="5" fill="#EBDDFF"/><path d="M0 0h1v1h-1zM2 0h1v1h-1zM4 0h1v1h-1zM0 1h5v2h-5zM1 3h3v1h-3zM1 4h1v1h-1zM3 4h1v1h-1z" fill="#6D28D9"/></svg>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px"><span><span style="font-weight: 500">qa-agent</span> <span style="font-size: 12px; color: #5B21B6">Agent</span> <span style="font-size: 12px; color: #6B7280">Today</span></span><p style="margin: 0; color: #374151; line-height: 1.6">6 of 9 cases pass and 2 are still running. One failed: on Android the notification does not arrive when the app has been force-closed. Steps and logs are on the QA stage.</p>
+<div style="display: flex; gap: 6px"><button aria-label="Seen, 1 reaction" style="display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 8px; border: 1px solid #ECEEF1; border-radius: 14px; background: #FFFFFF; color: #374151; font-size: 12px"><svg aria-hidden="true" width="10" height="10" viewBox="0 0 5 5" shape-rendering="crispEdges"><path d="M0 1h2v2h-2zM3 1h2v2h-2z" fill="#2563EB"/></svg>1</button></div></div></article>
+
+<article style="display: flex; gap: 10px"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 5 5" shape-rendering="crispEdges" style="flex-shrink: 0; margin-top: 2px"><rect width="5" height="5" fill="#FFE2CC"/><path d="M0 0h1v1h-1zM4 0h1v1h-1zM1 1h3v1h-3zM0 2h5v1h-5zM1 3h1v1h-1zM3 3h1v1h-1zM2 4h1v1h-1z" fill="#B84A00"/></svg>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px"><span><span style="font-weight: 500">Sara</span> <span style="font-size: 12px; color: #6B7280">Today</span></span><p style="margin: 0; color: #374151; line-height: 1.6">Looking at it now. It is probably the background delivery channel. <a href="#" style="border-bottom: 1px solid #D9DCE3">Tomas</a>, did the live map change the channel settings?</p></div></article>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label for="c" style="font-size: 12px; color: #6B7280">Add a comment</label>
+<textarea id="c" rows="2" style="box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #D9DCE3; border-radius: 6px; font: inherit; color: #111318; resize: vertical"></textarea>
+<button style="align-self: flex-end; min-height: 32px; padding: 0 14px; border: 0; border-radius: 5px; background: {{accent}}; color: #FFFFFF">Comment</button>
+</div>
+</section>
+</div>
+
+<aside aria-label="Details" style="flex: 2 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 26px">
+
+<section style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">Details</h2>
+<dl style="margin: 0; display: grid; grid-template-columns: 84px 1fr; row-gap: 8px; column-gap: 12px">
+<dt style="color: #6B7280">Owner</dt><dd style="margin: 0">Sara</dd>
+<dt style="color: #6B7280">Type</dt><dd style="margin: 0">Story</dd>
+<dt style="color: #6B7280">Points</dt><dd style="margin: 0">5</dd>
+<dt style="color: #6B7280">Epic</dt><dd style="margin: 0"><a href="#" style="border-bottom: 1px solid #D9DCE3">Notifications</a></dd>
+<dt style="color: #6B7280">Sprint</dt><dd style="margin: 0"><a href="#" style="border-bottom: 1px solid #D9DCE3">Sprint 24</a></dd>
+</dl>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">Pull request</h2>
+<dl style="margin: 0; display: grid; grid-template-columns: 84px 1fr; row-gap: 8px; column-gap: 12px">
+<dt style="color: #6B7280">PR</dt><dd style="margin: 0"><a href="#" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; border-bottom: 1px solid #D9DCE3">#478</a></dd>
+<dt style="color: #6B7280">State</dt><dd style="margin: 0"><span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #15803D"></span>Merged Nov 13</span></dd>
+<dt style="color: #6B7280">Reviewers</dt><dd style="margin: 0">Kofi, review-agent</dd>
+<dt style="color: #6B7280">Checks</dt><dd style="margin: 0">All passed</dd>
+</dl>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">QA</h2>
+<button style="min-height: 32px; padding: 0 12px; border: 1px solid #D9DCE3; border-radius: 5px; background: #FFFFFF; color: #111318">Open test plan</button>
+</div>
+<dl style="margin: 0; display: grid; grid-template-columns: 84px 1fr; row-gap: 8px; column-gap: 12px">
+<dt style="color: #6B7280">Tester</dt><dd style="margin: 0">qa-agent</dd>
+<dt style="color: #6B7280">Cases</dt><dd style="margin: 0"><div role="img" aria-label="6 passed, 1 failed, 2 running" style="display: flex; gap: 2px; height: 8px; margin-top: 5px"><span style="flex: 6; background: #15803D"></span><span style="flex: 1; background: #B42318"></span><span style="flex: 2; background: #D9DCE3"></span></div></dd>
+<dt style="color: #6B7280">Result</dt><dd style="margin: 0">6 passed, 1 failed, 2 running</dd>
+<dt style="color: #6B7280">Failed</dt><dd style="margin: 0; color: #B42318">Android, app force-closed</dd>
+</dl>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">Assignment history</h2>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+<li style="display: flex; gap: 12px"><span style="width: 44px; flex-shrink: 0; font-size: 12px; color: #6B7280">Nov 13</span><span>Sara handed QA to qa-agent</span></li>
+<li style="display: flex; gap: 12px"><span style="width: 44px; flex-shrink: 0; font-size: 12px; color: #6B7280">Nov 12</span><span>Sara asked Kofi to review</span></li>
+<li style="display: flex; gap: 12px"><span style="width: 44px; flex-shrink: 0; font-size: 12px; color: #6B7280">Nov 9</span><span>Priya assigned Sara as owner</span></li>
+<li style="display: flex; gap: 12px"><span style="width: 44px; flex-shrink: 0; font-size: 12px; color: #6B7280">Nov 6</span><span>Priya created the item</span></li>
+</ol>
+</section>
+
+<p style="margin: 0; font-size: 11px; color: #6B7280">Sample data for an invented team.</p>
+</aside>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#3B4CCA"},"$preview":{"width":1360,"height":1080}}'>
+class Component extends DCLogic {
+renderVals() {
+return { accent: this.props.accent ?? '#3B4CCA' };
+}
+}
+</script>
+</body>
+</html>

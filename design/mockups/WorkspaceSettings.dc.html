@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workspace settings: members and roles</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Space+Grotesk:wght@500&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+body{margin:0}
+a{color:inherit;text-decoration:none}a:hover{color:inherit}
+button,input,select{font:inherit;cursor:pointer}
+.light{--bg:#FFFFFF;--surface:#FAFAFB;--line:#ECEEF1;--line2:#D9DCE3;--ink:#111318;--ink2:#4B5261;--ink3:#6B7280;--blue:#3B4CCA;--green:#15803D;--red:#B42318}
+.page{min-height:1080px;background:var(--bg);color:var(--ink);font-family:Inter,sans-serif;font-size:13px;line-height:1.45;display:flex;flex-direction:column}
+.h{font-family:'Space Grotesk',sans-serif;font-weight:500}
+.mut{color:var(--ink3);font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.btn{min-height:32px;padding:0 12px;border:1px solid var(--line2);border-radius:5px;background:var(--bg);color:var(--ink)}
+.nav a{display:flex;align-items:center;min-height:32px;padding:0 10px;border-radius:5px;color:var(--ink2)}
+.nav a[aria-current]{background:#EEF0F4;color:var(--ink);font-weight:500}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:0 12px 0 0;height:38px;border-bottom:1px solid var(--line);font-weight:400}
+thead th{font-size:11px;color:var(--ink3);height:30px}
+.c{text-align:center;padding:0}
+select{min-height:28px;padding:0 6px;border:1px solid var(--line2);border-radius:5px;background:var(--bg);color:var(--ink)}
+.wrap{display:flex;flex-wrap:wrap}
+@media (max-width:760px){.nav{width:100%!important}}
+</style>
+</helmet>
+<div class="page light">
+
+<header style="border-bottom: 1px solid var(--line); padding: 0 28px; min-height: 48px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px">
+<div class="row">
+<svg aria-hidden="true" width="16" height="16" viewBox="0 0 4 4" shape-rendering="crispEdges"><path d="M0 0h2v2h-2zM2 2h2v2h-2z" fill="var(--blue)"/><path d="M2 0h2v2h-2zM0 2h2v2h-2z" fill="var(--ink)"/></svg>
+<span class="h" style="font-size: 14px">16bit.info</span>
+<span class="mut" style="font-size: 13px">Parcel Tracker / Workspace settings</span>
+</div>
+<a href="#" class="mut" style="border-bottom: 1px solid var(--line2)">Back to hubs</a>
+</header>
+
+<div class="wrap" style="box-sizing: border-box; width: 100%; max-width: 1280px; margin: 0 auto; padding: 28px; gap: 40px; align-items: flex-start">
+
+<nav class="nav" aria-label="Workspace settings" style="width: 180px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1px">
+<a href="#">General</a>
+<a href="#" aria-current="page">Members and roles</a>
+<a href="#">Agents and keys</a>
+<a href="#">Hubs</a>
+<a href="#">Billing</a>
+<a href="#">Audit log</a>
+<a href="#" style="color: var(--red)">Danger zone</a>
+</nav>
+
+<main style="flex: 1 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 36px">
+
+<div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h1 class="h" style="margin: 0; font-size: 24px; letter-spacing: -0.01em">Members and roles</h1>
+<span style="color: var(--ink2)">You own this workspace. A workspace role sets what someone can do; hub access sets where.</span>
+</div>
+<button class="btn" style="background: var(--blue); border-color: var(--blue); color: #FFFFFF">Invite people</button>
+</div>
+
+<section aria-label="Roles" style="display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500">What each role can do</h2>
+<div style="overflow-x: auto">
+<table style="min-width: 640px">
+<thead><tr><th scope="col">Capability</th><th scope="col" class="c">Owner</th><th scope="col" class="c">Admin</th><th scope="col" class="c">Member</th><th scope="col" class="c">Viewer</th><th scope="col" class="c">Finance</th></tr></thead>
+<tbody>
+<tr><th scope="row">View items in their hubs</th><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td><td class="c mut">Finance hub</td></tr>
+<tr><th scope="row">Create and edit items</th><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td><td class="c mut">No</td><td class="c mut">Finance hub</td></tr>
+<tr><th scope="row">Comment and react</th><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td><td class="c mut">No</td><td class="c mut">Finance hub</td></tr>
+<tr><th scope="row">Create and delete hubs</th><td class="c">Yes</td><td class="c">Yes</td><td class="c mut">No</td><td class="c mut">No</td><td class="c mut">No</td></tr>
+<tr><th scope="row">Manage members and agent keys</th><td class="c">Yes</td><td class="c">Yes</td><td class="c mut">No</td><td class="c mut">No</td><td class="c mut">No</td></tr>
+<tr><th scope="row">Billing, plan, and invoices</th><td class="c">Yes</td><td class="c mut">No</td><td class="c mut">No</td><td class="c mut">No</td><td class="c">Yes</td></tr>
+<tr><th scope="row">Transfer or delete the workspace</th><td class="c">Yes</td><td class="c mut">No</td><td class="c mut">No</td><td class="c mut">No</td><td class="c mut">No</td></tr>
+</tbody>
+</table>
+</div>
+<span class="mut">Viewers can read and nothing else. Finance sees billing and the Finance hub, and no other hub unless added to it.</span>
+</section>
+
+<section aria-label="Members" style="display: flex; flex-direction: column; gap: 8px">
+<div class="row" style="justify-content: space-between"><h2 style="margin: 0; font-size: 13px; font-weight: 500">People</h2><span class="mut">7 people, 1 invite pending</span></div>
+<div style="overflow-x: auto">
+<table style="min-width: 640px">
+<thead><tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Hubs</th><th scope="col">Last active</th></tr></thead>
+<tbody>
+<tr><th scope="row">Sara <span class="mut">You</span></th><td>Owner</td><td>All hubs</td><td class="mut">Now</td></tr>
+<tr><th scope="row">Priya</th><td><select aria-label="Role for Priya"><option selected>Admin</option><option>Member</option><option>Viewer</option><option>Finance</option></select></td><td>All hubs</td><td class="mut">Today</td></tr>
+<tr><th scope="row">Tomas</th><td><select aria-label="Role for Tomas"><option>Admin</option><option selected>Member</option><option>Viewer</option><option>Finance</option></select></td><td>Engineering, Roadmap</td><td class="mut">Today</td></tr>
+<tr><th scope="row">Kofi</th><td><select aria-label="Role for Kofi"><option>Admin</option><option selected>Member</option><option>Viewer</option><option>Finance</option></select></td><td>Engineering</td><td class="mut">Today</td></tr>
+<tr><th scope="row">Lena</th><td><select aria-label="Role for Lena"><option>Admin</option><option selected>Member</option><option>Viewer</option><option>Finance</option></select></td><td>Engineering, Support</td><td class="mut">Yesterday</td></tr>
+<tr><th scope="row">Dana</th><td><select aria-label="Role for Dana"><option>Admin</option><option>Member</option><option>Viewer</option><option selected>Finance</option></select></td><td>Finance</td><td class="mut">Yesterday</td></tr>
+<tr><th scope="row">Omar</th><td><select aria-label="Role for Omar"><option>Admin</option><option>Member</option><option selected>Viewer</option><option>Finance</option></select></td><td>Roadmap</td><td class="mut">Nov 10</td></tr>
+<tr><th scope="row" style="color: var(--ink3)">Nina <span class="mut">Invite sent Nov 14</span></th><td class="mut">Member</td><td class="mut">Support</td><td><span class="row"><button class="btn" style="min-height: 28px">Resend</button><button class="btn" style="min-height: 28px; color: var(--red)">Revoke</button></span></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section aria-label="Agents" style="display: flex; flex-direction: column; gap: 8px">
+<div class="row" style="justify-content: space-between"><h2 style="margin: 0; font-size: 13px; font-weight: 500">Agents</h2><a href="#" class="mut" style="border-bottom: 1px solid var(--line2)">Manage keys</a></div>
+<span style="color: var(--ink2)">4 agents hold keys. Each key is scoped to one hub and can never manage members or billing.</span>
+</section>
+
+<span class="mut" style="font-size: 11px">Sample data for an invented team.</span>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1360,"height":1080}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

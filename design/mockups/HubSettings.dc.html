@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Space+Grotesk:wght@500&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+body{margin:0}
+a{color:inherit;text-decoration:none}a:hover{color:inherit}
+button,input,select{font:inherit;cursor:pointer}
+.light{--bg:#FFFFFF;--surface:#FAFAFB;--line:#ECEEF1;--line2:#D9DCE3;--ink:#111318;--ink2:#4B5261;--ink3:#6B7280;--blue:#3B4CCA;--green:#15803D;--red:#B42318}
+.page{min-height:1180px;background:var(--bg);color:var(--ink);font-family:Inter,sans-serif;font-size:13px;line-height:1.45;display:flex;flex-direction:column}
+.h{font-family:'Space Grotesk',sans-serif;font-weight:500}
+.mut{color:var(--ink3);font-size:12px}
+.mono{font-family:'JetBrains Mono',monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.btn{min-height:32px;padding:0 12px;border:1px solid var(--line2);border-radius:5px;background:var(--bg);color:var(--ink)}
+.nav a{display:flex;align-items:center;min-height:32px;padding:0 10px;border-radius:5px;color:var(--ink2)}
+.nav a[aria-current]{background:#EEF0F4;color:var(--ink);font-weight:500}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:0 12px 0 0;height:38px;border-bottom:1px solid var(--line);font-weight:400}
+thead th{font-size:11px;color:var(--ink3);height:30px}
+select,.in{min-height:32px;padding:0 8px;border:1px solid var(--line2);border-radius:5px;background:var(--bg);color:var(--ink);box-sizing:border-box}
+.in{width:100%;cursor:text}
+.f{display:flex;flex-direction:column;gap:4px}
+.f label{font-size:12px;color:var(--ink3)}
+.sw{width:22px;height:22px;border:0;border-radius:3px;padding:0}
+.sec{display:flex;flex-direction:column;gap:12px}
+.sec h2{margin:0;font-size:13px;font-weight:500}
+.wrap{display:flex;flex-wrap:wrap}
+.tg{width:32px;height:18px;border:0;border-radius:9px;background:var(--line2);padding:2px;display:inline-flex}
+.tg i{width:14px;height:14px;border-radius:50%;background:#FFFFFF}
+.tg[aria-checked="true"]{background:var(--blue);justify-content:flex-end}
+@media (max-width:760px){.nav{width:100%!important}}
+</style>
+</helmet>
+<div class="page light">
+
+<header style="border-bottom: 1px solid var(--line); padding: 0 28px; min-height: 48px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px">
+<div class="row">
+<svg aria-hidden="true" width="16" height="16" viewBox="0 0 4 4" shape-rendering="crispEdges"><path d="M0 0h2v2h-2zM2 2h2v2h-2z" fill="var(--blue)"/><path d="M2 0h2v2h-2zM0 2h2v2h-2z" fill="var(--ink)"/></svg>
+<span class="h" style="font-size: 14px">16bit.info</span>
+<span class="mut" style="font-size: 13px">Parcel Tracker / Engineering / Hub settings</span>
+</div>
+<a href="#" class="mut" style="border-bottom: 1px solid var(--line2)">Back to Engineering</a>
+</header>
+
+<div class="wrap" style="box-sizing: border-box; width: 100%; max-width: 1280px; margin: 0 auto; padding: 28px; gap: 40px; align-items: flex-start">
+
+<nav class="nav" aria-label="Hub settings" style="width: 180px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1px">
+<a href="#" aria-current="page">Overview</a>
+<a href="#">Access</a>
+<a href="#">Folders</a>
+<a href="#">Attributes</a>
+<a href="#">Agents and keys</a>
+<a href="#" style="color: var(--red)">Danger zone</a>
+</nav>
+
+<main style="flex: 1 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 32px">
+
+<div class="row" style="flex-wrap: wrap; justify-content: space-between; gap: 12px">
+<div class="row" style="gap: 10px"><span aria-hidden="true" style="width: 14px; height: 14px; background: var(--blue)"></span><h1 class="h" style="margin: 0; font-size: 24px; letter-spacing: -0.01em">Engineering</h1><span class="mut">412 items</span></div>
+<span class="row mut"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--green)"></span>All changes saved</span>
+</div>
+
+<div class="wrap" style="gap: 40px; align-items: flex-start">
+
+<div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 32px">
+
+<section class="sec" aria-label="General">
+<h2>General</h2>
+<div class="f"><label for="n">Name</label><input id="n" class="in" value="Engineering"></div>
+<div class="f"><label for="d">Description</label><input id="d" class="in" value="Sprints, backlog, and releases"></div>
+<div class="wrap" style="gap: 16px">
+<div class="f" style="width: 96px"><label for="p">ID prefix</label><input id="p" class="in mono" value="PT"></div>
+<div class="f" style="flex: 1 1 180px"><label for="rv">Opens on</label><select id="rv"><option selected>Home</option><option>My work</option><option>Backlog</option></select></div>
+</div>
+<div class="f"><span class="mut" id="cl">Colour</span>
+<div role="radiogroup" aria-labelledby="cl" class="wrap" style="gap: 6px">
+<button role="radio" aria-checked="true" aria-label="Indigo" class="sw" style="background: #3B4CCA; outline: 2px solid #111318; outline-offset: 2px"></button>
+<button role="radio" aria-checked="false" aria-label="Blue" class="sw" style="background: #2563EB"></button>
+<button role="radio" aria-checked="false" aria-label="Cyan" class="sw" style="background: #0891B2"></button>
+<button role="radio" aria-checked="false" aria-label="Teal" class="sw" style="background: #0F766E"></button>
+<button role="radio" aria-checked="false" aria-label="Green" class="sw" style="background: #15803D"></button>
+<button role="radio" aria-checked="false" aria-label="Lime" class="sw" style="background: #65A30D"></button>
+<button role="radio" aria-checked="false" aria-label="Yellow" class="sw" style="background: #CA8A04"></button>
+<button role="radio" aria-checked="false" aria-label="Amber" class="sw" style="background: #D97706"></button>
+<button role="radio" aria-checked="false" aria-label="Orange" class="sw" style="background: #EA580C"></button>
+<button role="radio" aria-checked="false" aria-label="Red" class="sw" style="background: #DC2626"></button>
+<button role="radio" aria-checked="false" aria-label="Pink" class="sw" style="background: #BE185D"></button>
+<button role="radio" aria-checked="false" aria-label="Magenta" class="sw" style="background: #C026D3"></button>
+<button role="radio" aria-checked="false" aria-label="Violet" class="sw" style="background: #6D28D9"></button>
+<button role="radio" aria-checked="false" aria-label="Slate" class="sw" style="background: #4B5261"></button>
+<button role="radio" aria-checked="false" aria-label="Ink" class="sw" style="background: #111318"></button>
+<button role="radio" aria-checked="false" aria-label="Grey" class="sw" style="background: #9CA3AF"></button>
+</div></div>
+</section>
+
+<section class="sec" aria-label="Access">
+<div class="row" style="justify-content: space-between"><h2>Access</h2><button class="btn">Add people or agents</button></div>
+<table>
+<thead><tr><th scope="col">Who</th><th scope="col">Hub role</th><th scope="col">Source</th></tr></thead>
+<tbody>
+<tr><th scope="row">Sara <span class="mut">You</span></th><td>Hub admin</td><td class="mut">Workspace owner</td></tr>
+<tr><th scope="row">Priya</th><td>Hub admin</td><td class="mut">Workspace admin</td></tr>
+<tr><th scope="row">Tomas</th><td><select aria-label="Hub role for Tomas"><option>Hub admin</option><option selected>Editor</option><option>Commenter</option><option>Viewer</option></select></td><td class="mut">Added here</td></tr>
+<tr><th scope="row">Kofi</th><td><select aria-label="Hub role for Kofi"><option>Hub admin</option><option selected>Editor</option><option>Commenter</option><option>Viewer</option></select></td><td class="mut">Added here</td></tr>
+<tr><th scope="row">Lena</th><td><select aria-label="Hub role for Lena"><option>Hub admin</option><option selected>Editor</option><option>Commenter</option><option>Viewer</option></select></td><td class="mut">Added here</td></tr>
+<tr><th scope="row">qa-agent <span class="mut" style="color: #5B21B6">Agent</span></th><td><select aria-label="Hub role for qa-agent"><option selected>Editor</option><option>Commenter</option><option>Viewer</option></select></td><td class="mut">Key, this hub only</td></tr>
+<tr><th scope="row">review-agent <span class="mut" style="color: #5B21B6">Agent</span></th><td><select aria-label="Hub role for review-agent"><option>Editor</option><option selected>Commenter</option><option>Viewer</option></select></td><td class="mut">Key, this hub only</td></tr>
+</tbody>
+</table>
+<div class="row" style="justify-content: space-between; gap: 16px"><span><span id="xr">Relations to other hubs</span><br><span class="mut">Off: items here cannot link to items in another hub.</span></span><button role="switch" aria-checked="false" aria-labelledby="xr" class="tg"><i></i></button></div>
+</section>
+
+</div>
+
+<div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 32px">
+
+<section class="sec" aria-label="Folders">
+<div class="row" style="justify-content: space-between"><h2>Folders</h2><button class="btn">New folder</button></div>
+<table>
+<thead><tr><th scope="col">Folder</th><th scope="col">Items</th><th scope="col">Who can open it</th></tr></thead>
+<tbody>
+<tr><th scope="row"><span class="row"><span aria-hidden="true" style="width: 8px; height: 8px; background: #3B4CCA"></span>Home</span></th><td class="mut">Views only</td><td>Everyone in the hub</td></tr>
+<tr><th scope="row"><span class="row"><span aria-hidden="true" style="width: 8px; height: 8px; background: #D97706"></span>My work</span></th><td class="mut">Views only</td><td>Everyone in the hub</td></tr>
+<tr><th scope="row"><span class="row"><span aria-hidden="true" style="width: 8px; height: 8px; background: #6D28D9"></span>Backlog</span></th><td>372</td><td>Everyone in the hub</td></tr>
+<tr><th scope="row"><span class="row"><span aria-hidden="true" style="width: 8px; height: 8px; background: #2563EB"></span>Sprints</span></th><td>24</td><td>Everyone in the hub</td></tr>
+<tr><th scope="row"><span class="row"><span aria-hidden="true" style="width: 8px; height: 8px; background: #0F766E"></span>Team</span></th><td>8</td><td>Hub admins only</td></tr>
+<tr><th scope="row"><span class="row"><span aria-hidden="true" style="width: 8px; height: 8px; background: #BE185D"></span>Epics</span></th><td>8</td><td>Everyone in the hub</td></tr>
+</tbody>
+</table>
+<span class="mut">A folder can narrow who opens it. It can never let in someone who is not in the hub.</span>
+</section>
+
+<section class="sec" aria-label="Attributes">
+<div class="row" style="justify-content: space-between"><h2>Attributes</h2><button class="btn">New attribute</button></div>
+<table>
+<thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Used in</th><th scope="col">Filter and sort</th></tr></thead>
+<tbody>
+<tr><th scope="row">ID</th><td class="mut">Auto ID</td><td>Backlog</td><td><button role="switch" aria-checked="true" aria-label="Filter and sort by ID" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Stage</th><td class="mut">Select</td><td>Backlog</td><td><button role="switch" aria-checked="true" aria-label="Filter and sort by Stage" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Owner</th><td class="mut">Actor</td><td>Backlog</td><td><button role="switch" aria-checked="true" aria-label="Filter and sort by Owner" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Points</th><td class="mut">Number</td><td>Backlog</td><td><button role="switch" aria-checked="true" aria-label="Filter and sort by Points" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Epic</th><td class="mut">Relation</td><td>Backlog</td><td><button role="switch" aria-checked="true" aria-label="Filter and sort by Epic" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Sprint</th><td class="mut">Relation</td><td>Backlog</td><td><button role="switch" aria-checked="true" aria-label="Filter and sort by Sprint" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Pull request</th><td class="mut">URL</td><td>Backlog</td><td><button role="switch" aria-checked="false" aria-label="Filter and sort by Pull request" class="tg"><i></i></button></td></tr>
+<tr><th scope="row">Items done</th><td class="mut">Rollup</td><td>Epics</td><td><button role="switch" aria-checked="false" aria-label="Filter and sort by Items done" class="tg"><i></i></button></td></tr>
+</tbody>
+</table>
+</section>
+
+</div>
+</div>
+
+<span class="mut" style="font-size: 11px">Sample data for an invented team.</span>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1360,"height":1180}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
