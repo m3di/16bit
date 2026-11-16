@@ -63,6 +63,8 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `item.values` is keyed by attribute ID.
 - A person has one `account` and one `principal` per workspace they belong to. An agent key is a `principal` of kind `agent` with workspace role `member` and exactly one `hub_grant` (D47); `agent_key` only holds its secret hash and lifecycle.
 - `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`.
+- `agent_key` and `hub_grant` also carry `principal_kind`, a copy of `principal.kind` held in step by a `(workspace_id, principal_id, principal_kind)` foreign key. It lets the database refuse a key on a person, a second grant for an agent, and `hub_admin` for an agent (D28, D47). `account.email` is stored trimmed and lowercased, and `password_hash` must be an argon2id string.
+- The only indexes on workspace-scoped tables that do not lead with `workspace_id` are the three lookups that run before a principal is known: `agent_key.secret_hash`, `invite.token_hash` (both unique), and `principal.account_id`.
 - `access_log.seq` is taken from `workspace.next_access_seq` in the same transaction as the access change.
 - `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.

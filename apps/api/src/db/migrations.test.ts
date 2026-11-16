@@ -6,16 +6,32 @@ import { createDb, migrateToLatest, type Database } from './database.ts'
 import { migrations } from './migrations/index.ts'
 import { createTestDatabase } from './test-database.ts'
 
-const M0_TABLES = [
+const TABLES = [
+  'access_log',
+  'account',
+  'agent_key',
   'attribute',
   'folder',
   'folder_attribute',
+  'hub_grant',
+  'invite',
   'item',
   'principal',
   'revision',
+  'session',
   'workspace',
 ]
-const SCOPED_TABLES = M0_TABLES.filter((t) => t !== 'workspace')
+// Installation-level tables sit outside workspace scope (D46).
+const SCOPED_TABLES = TABLES.filter((t) => !['workspace', 'account', 'session'].includes(t))
+// Lookups that run before a principal is known, through SECURITY DEFINER functions
+// (docs/ARCHITECTURE.md, M1 auth). The only indexes allowed not to lead with workspace_id.
+const UNSCOPED_LOOKUPS = [
+  'agent_key_secret_hash_key',
+  'invite_token_hash_key',
+  'principal_account_idx',
+]
+// FKs from scoped tables to installation-level ones.
+const UNSCOPED_FKS = ['principal_account_id_fkey']
 
 let db: Kysely<Database>
 let drop: () => Promise<void>
@@ -81,11 +97,11 @@ async function seedHub(): Promise<void> {
 }
 
 describe('migrations', () => {
-  it('applies to an empty database and creates the M0 tables', async () => {
+  it('applies to an empty database and creates every table', async () => {
     expect(await tables()).toEqual([])
 
-    expect(await migrateToLatest(db)).toEqual(['0001_initial'])
-    expect(await tables()).toEqual(M0_TABLES)
+    expect(await migrateToLatest(db)).toEqual(['0001_initial', '0003_auth_access'])
+    expect(await tables()).toEqual(TABLES)
   })
 
   it('is a no-op when already up to date', async () => {
@@ -106,7 +122,12 @@ describe('migrations', () => {
       WHERE n.nspname = 'public' AND t.relname = ANY(${SCOPED_TABLES})
     `.execute(db)
     expect(indexes.length).toBeGreaterThan(SCOPED_TABLES.length)
-    expect(indexes.filter((r) => r.first !== 'workspace_id')).toEqual([])
+    expect(
+      indexes
+        .filter((r) => r.first !== 'workspace_id')
+        .map((r) => r.index)
+        .sort(),
+    ).toEqual(UNSCOPED_LOOKUPS)
     // Every scoped table has a primary key covered above.
     expect(new Set(indexes.map((r) => r.table))).toEqual(new Set(SCOPED_TABLES))
 
@@ -116,7 +137,7 @@ describe('migrations', () => {
       JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
       WHERE c.contype = 'f' AND c.conrelid::regclass::text = ANY(${SCOPED_TABLES})
     `.execute(db)
-    expect(fks.filter((r) => r.first !== 'workspace_id')).toEqual([])
+    expect(fks.filter((r) => r.first !== 'workspace_id').map((r) => r.name)).toEqual(UNSCOPED_FKS)
   })
 
   it('migrates down to an empty schema', async () => {
