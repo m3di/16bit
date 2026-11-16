@@ -7,10 +7,10 @@ const sources = import.meta.glob<string>(['../**/*.vue', '../**/*.ts', '!../**/*
   eager: true,
 })
 
-// A hex colour follows a colon, a space, an opening bracket, or a quote, as in `color: #fff` or
-// `'#fff'`. Fragment links such as `href="#add"` are not colours.
+// A hex colour starts a line or follows a colon, a space, an opening bracket, or a quote, as in
+// `color: #fff` or `'#fff'`. Fragment links such as `href="#add"` are not colours.
 const RAW_COLOR =
-  /(?<!href=["'])(?<=[:\s(,'"`])#[0-9a-f]{3}(?:[0-9a-f]{3})?(?:[0-9a-f]{2})?\b|\b(?:rgba?|hsla?|oklch|oklab)\(/i
+  /(?<!href=["'])(?<=^|[:\s(,'"`])#[0-9a-f]{3}(?:[0-9a-f]{3})?(?:[0-9a-f]{2})?\b|\b(?:rgba?|hsla?|oklch|oklab)\(/im
 
 describe('source files', () => {
   it('were found', () => {
@@ -22,6 +22,7 @@ describe('source files', () => {
     ["background: '#3B4CCA'", true],
     ['fill="#abcdef80"', true],
     ['rgb(0 0 0)', true],
+    ['#fff', true],
     ['href="#add"', false],
     ['<a href="#bad">', false],
   ])('the pattern reads %s as a colour: %s', (text, isColor) => {

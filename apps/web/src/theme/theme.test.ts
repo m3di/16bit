@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import indexHtml from '../../index.html?raw'
 import { parsePreference, resolveTheme, THEME_STORAGE_KEY } from './theme.ts'
@@ -92,7 +92,6 @@ async function freshTheme() {
 }
 
 describe('startTheme', () => {
-  beforeEach(() => vi.resetModules())
   afterEach(() => vi.unstubAllGlobals())
 
   it('applies a stored dark choice to <html> at start', async () => {
