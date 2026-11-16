@@ -47,4 +47,13 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 - `/standup`: summarise the board from GitHub and say what is blocked.
 - `/sprint`: run one iteration of the sprint loop in `docs/WORKFLOW.md`.
 
-Project scripts (`pnpm dev`, `pnpm test`, `pnpm lint`, `pnpm e2e`, `pnpm seed`) are created in M0. Keep this section up to date as they land.
+Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack):
+
+- `pnpm dev`: wait for Postgres, run migrations, then start the API and the web dev server.
+- `pnpm db:migrate`: apply database migrations.
+- `pnpm lint` / `pnpm format`: ESLint and Prettier check / write.
+- `pnpm typecheck`: TypeScript across the workspace.
+- `pnpm test`: Vitest. Needs a running Postgres once migrations land (`docker compose up -d db`).
+- `pnpm build`: build all packages.
+
+Still to come in M0: `pnpm seed` (#7), `pnpm seed:build-hub` (#11), `pnpm e2e` (#12). Keep this list up to date as they land.
