@@ -15,6 +15,7 @@ import {
 } from './build-hub.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { workspaceSnapshot } from './db/test-snapshot.ts'
 import { deleteItem, getItem, patchItem } from './items.ts'
 
 // Integration tests against a fresh, migrated Postgres per test. `gh` is not called:
@@ -315,6 +316,42 @@ describe('importIssues', () => {
     ])
   })
 
+  it('reports an item deleted between read and write per issue and imports the rest', async () => {
+    await importIssues(db, [issue(1)])
+
+    // Same lock trick as the conflict test, but the other writer deletes gh-1. Once it commits,
+    // the importer's update matches no row and the item is gone: a 404 on the patch path.
+    const other = new pg.Client({ connectionString: dbUrl })
+    await other.connect()
+    try {
+      await other.query('BEGIN')
+      await other.query(`DELETE FROM item WHERE workspace_id = $1 AND id = 'gh-1'`, [WS])
+      const running = importIssues(db, [issue(1, { title: 'Renamed' }), issue(2)])
+      await waitForLockWait()
+      await other.query('COMMIT')
+
+      const result = await running
+      expect(result).toEqual({
+        created: 1,
+        updated: 0,
+        unchanged: 0,
+        skipped: [],
+        failed: [{ issue: 1, code: 'not_found', message: 'Item not found' }],
+      })
+    } finally {
+      await other.end()
+    }
+    await expect(getItem(db, WS, 'gh-1')).rejects.toMatchObject({ code: 'not_found' })
+    expect(await getItem(db, WS, 'gh-2')).toMatchObject({ version: 1 })
+    expect((await revisions()).map((r) => [r.item_id, r.version])).toEqual([
+      ['gh-1', 1],
+      ['gh-2', 1],
+    ])
+
+    // The next run sees the delete and skips the issue, as for any local delete.
+    expect((await importIssues(db, [issue(1), issue(2)])).skipped).toEqual([1])
+  })
+
   it('still stops the run on an error that is not about one issue', async () => {
     await db.deleteFrom('folder_attribute').execute()
     await db.deleteFrom('attribute').execute()
@@ -362,27 +399,13 @@ describe('importIssues', () => {
         updated_by: 'them',
       })
       .execute()
-    const snapshot = async () => ({
-      workspace: await db.selectFrom('workspace').selectAll().where('id', '=', 'other').execute(),
-      folders: await db
-        .selectFrom('folder')
-        .selectAll()
-        .where('workspace_id', '=', 'other')
-        .execute(),
-      items: await db.selectFrom('item').selectAll().where('workspace_id', '=', 'other').execute(),
-      revisions: await db
-        .selectFrom('revision')
-        .selectAll()
-        .where('workspace_id', '=', 'other')
-        .execute(),
-    })
-    const before = await snapshot()
+    const before = await workspaceSnapshot(db, 'other')
 
     // Create, then update, so both write paths run against the colliding ID.
     expect((await importIssues(db, [issue(1)])).created).toBe(1)
     expect((await importIssues(db, [issue(1, { title: 'Renamed' })])).updated).toBe(1)
 
-    expect(await snapshot()).toEqual(before)
+    expect(await workspaceSnapshot(db, 'other')).toEqual(before)
     expect((await getItem(db, WS, 'gh-1')).values[ATTR.title]).toBe('Renamed')
   })
 })

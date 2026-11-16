@@ -204,7 +204,7 @@ export async function ensureBuildHub(db: Kysely<Database>, ownerId: string): Pro
 /** An issue the hub rejected. The rest of the run carries on; the CLI exits non-zero. */
 export interface ImportFailure {
   issue: number
-  code: 'conflict' | 'invalid_values'
+  code: 'conflict' | 'invalid_values' | 'not_found'
   message: string
 }
 
@@ -218,21 +218,34 @@ export interface ImportResult {
 }
 
 /**
- * Turns a per-issue rejection into a failure entry. Anything else (database down, missing hub)
- * is not about one issue, so it is rethrown and stops the run.
+ * The fields of `invalid_values` errors the importer reports. Parsed, not cast: `HttpError.extra`
+ * is untyped. Typed against core's `ValueError`, so a renamed field fails the typecheck.
  */
-function toFailure(issue: GhIssue, error: unknown): ImportFailure {
+const valueErrorsSchema = z.array(
+  z.looseObject({ attributeId: z.string(), message: z.string() }),
+) satisfies z.ZodType<Pick<ValueError, 'attributeId' | 'message'>[]>
+
+/**
+ * Turns a per-issue rejection into a failure entry. `perIssue` lists the codes that are about
+ * this one issue on the write path that threw. Anything else (database down, missing hub) is
+ * not about one issue, so it is rethrown and stops the run.
+ */
+function toFailure(
+  issue: GhIssue,
+  error: unknown,
+  perIssue: readonly ImportFailure['code'][],
+): ImportFailure {
   if (!(error instanceof HttpError)) throw error
-  if (error.code === 'conflict') {
-    // Someone wrote the item between our read and our write; the next run picks it up.
-    return { issue: issue.number, code: 'conflict', message: error.message }
+  const code = perIssue.find((c) => c === error.code)
+  if (!code) throw error
+  if (code === 'invalid_values') {
+    const parsed = valueErrorsSchema.safeParse(error.extra['errors'])
+    const detail = parsed.success
+      ? parsed.data.map((e) => `${e.attributeId}: ${e.message}`).join('; ')
+      : ''
+    return { issue: issue.number, code, message: detail || error.message }
   }
-  if (error.code === 'invalid_values') {
-    const errors = (error.extra['errors'] ?? []) as ValueError[]
-    const detail = errors.map((e) => `${e.attributeId}: ${e.message}`).join('; ')
-    return { issue: issue.number, code: 'invalid_values', message: detail || error.message }
-  }
-  throw error
+  return { issue: issue.number, code, message: error.message }
 }
 
 /** Upserts one item per issue, matched by item ID `gh-<number>`. Writes only what changed. */
@@ -262,7 +275,8 @@ export async function importIssues(
         if (error instanceof HttpError && error.code === 'id_taken') {
           result.skipped.push(issue.number)
         } else {
-          result.failed.push(toFailure(issue, error))
+          // A missing folder here is the hub, not the issue: rethrown.
+          result.failed.push(toFailure(issue, error, ['conflict', 'invalid_values']))
         }
       }
       continue
@@ -279,7 +293,9 @@ export async function importIssues(
       await patchItem(db, ws, IMPORT_ACTOR.id, id, { version: current.version, values: changed })
       result.updated++
     } catch (error) {
-      result.failed.push(toFailure(issue, error))
+      // conflict: someone wrote the item between our read and our write. not_found: someone
+      // deleted it. Either way the next run sees the new state.
+      result.failed.push(toFailure(issue, error, ['conflict', 'invalid_values', 'not_found']))
     }
   }
   return result
