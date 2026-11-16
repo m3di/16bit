@@ -30,7 +30,7 @@ watch(() => title, focus, { flush: 'post' })
       <h2
         ref="heading"
         tabindex="-1"
-        class="m-0 min-w-0 font-display text-card-title font-medium break-words"
+        class="m-0 min-w-0 font-display text-card-title font-medium break-words outline-none"
       >
         {{ title }}
       </h2>

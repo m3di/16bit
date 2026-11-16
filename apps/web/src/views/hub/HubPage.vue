@@ -193,7 +193,7 @@ const retryPanel = () => {
             class="flex flex-wrap items-center justify-between gap-2 rounded-control border border-danger px-3 py-2 text-danger"
             data-notice
           >
-            <span class="min-w-0">{{ notice }}</span>
+            <span class="min-w-0 flex-[1_1_240px]">{{ notice }}</span>
             <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
               >Dismiss</BaseButton
             >
