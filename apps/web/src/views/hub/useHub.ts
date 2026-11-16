@@ -54,6 +54,14 @@ export function folderColumns(
     })
 }
 
+/** A sentence saying which lists the server cut short, or `''` when nothing was cut. */
+export function truncatedNote(description: HubDescription): string {
+  const t = description.truncated
+  const parts = [t.folders && 'folders', (t.attributes || t.folderAttributes) && 'fields']
+  const cut = parts.filter(Boolean).join(' and ')
+  return cut ? `This hub has more ${cut} than can be shown here.` : ''
+}
+
 /** A hub's description: its folders and attributes (`GET /v1/workspaces/:w/hubs/:h`). */
 export function useHub(
   workspaceId: string,

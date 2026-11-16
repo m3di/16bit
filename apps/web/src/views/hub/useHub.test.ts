@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { description, fakeApi, folder, json } from './fixtures.ts'
-import { folderColumns, folderTree, useHub } from './useHub.ts'
+import { description, fakeApi, folder, json } from './fixtures.test-utils.ts'
+import { folderColumns, folderTree, truncatedNote, useHub } from './useHub.ts'
 
 describe('folderTree', () => {
   it('puts the hub first, then folders by parent with children under them', () => {
@@ -28,6 +28,41 @@ describe('folderColumns', () => {
       ['points', false],
     ])
     expect(folderColumns(description, 'a')).toEqual([])
+  })
+
+  it('leaves out a folder attribute whose attribute is missing', () => {
+    const fa = description.folderAttributes[0]
+    if (!fa) throw new Error('fixture has no folder attributes')
+    const withGhost = {
+      ...description,
+      folderAttributes: [
+        ...description.folderAttributes,
+        { ...fa, folderId: 'bld', attributeId: 'gone', position: 1.5 },
+      ],
+    }
+    expect(folderColumns(withGhost, 'bld').map((c) => c.attribute.id)).toEqual([
+      'title',
+      'stage',
+      'points',
+    ])
+  })
+})
+
+describe('truncatedNote', () => {
+  const cut = (folders: boolean, attributes: boolean, folderAttributes: boolean) =>
+    truncatedNote({ ...description, truncated: { folders, attributes, folderAttributes } })
+
+  it('says nothing when nothing was cut', () => {
+    expect(cut(false, false, false)).toBe('')
+  })
+
+  it('names what was cut', () => {
+    expect(cut(true, false, false)).toBe('This hub has more folders than can be shown here.')
+    expect(cut(false, true, false)).toBe('This hub has more fields than can be shown here.')
+    expect(cut(false, false, true)).toBe('This hub has more fields than can be shown here.')
+    expect(cut(true, false, true)).toBe(
+      'This hub has more folders and fields than can be shown here.',
+    )
   })
 })
 

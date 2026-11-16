@@ -1,7 +1,7 @@
 import type { Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
-import { fakeApi, item, json, type Call } from './fixtures.ts'
-import { useItems, valueErrors } from './useItems.ts'
+import { fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
+import { inHub, useItems, valueErrors } from './useItems.ts'
 
 const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
 
@@ -180,5 +180,31 @@ describe('useItems: creating', () => {
     if (!result.ok) expect(valueErrors(result.error)).toEqual({ title: 'A value is required' })
     expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
     expect(s.notice.value).toContain('The item was not created')
+  })
+
+  it('does not send an edit for an item the server has not confirmed', async () => {
+    const answer = gate<Response>()
+    const { s, calls } = await opened(() => answer.promise, [item('i1', 1)])
+    const created = s.create({ title: 'Fresh' })
+    const id = s.rows.value[0]?.id ?? ''
+    const sent = calls.length
+    expect(await s.save(id, { title: 'Edited' })).toBe(false)
+    expect(calls).toHaveLength(sent)
+    expect(s.view(id)?.values).toEqual({ title: 'Fresh' })
+    expect(s.notice.value).toContain('still being saved')
+    answer.release(json(item(id, 2, { title: 'Fresh' }), 201))
+    await created
+  })
+})
+
+describe('inHub', () => {
+  it('passes an item of this hub through', () => {
+    const ready = { state: 'ready' as const, data: item('i1', 1) }
+    expect(inHub(ready, 'bld')).toBe(ready)
+  })
+
+  it('reports an item of another hub as missing', () => {
+    const other = { state: 'ready' as const, data: { ...item('i1', 1), hubId: 'ops' } }
+    expect(inHub(other, 'bld')).toMatchObject({ state: 'error', error: { status: 404 } })
   })
 })

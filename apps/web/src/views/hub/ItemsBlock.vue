@@ -39,6 +39,11 @@ const tableColumns = computed<TableColumn[]>(() => [
   })),
 ])
 
+// A row still being created has no server copy yet, so it cannot be opened.
+function select(row: Item) {
+  if (!isCreating(row.id)) emit('open', row)
+}
+
 const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.attribute])))
 </script>
 
@@ -75,7 +80,7 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
       :columns="tableColumns"
       :rows="rows"
       :selected-id="selectedId"
-      @select="emit('open', $event)"
+      @select="select"
     >
       <template #cell="{ row, column }">
         <template v-if="column.key === '#id'">

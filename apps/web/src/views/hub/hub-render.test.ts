@@ -7,8 +7,10 @@ import DataTable from '../../ui/DataTable.vue'
 import ItemPanel from '../../ui/ItemPanel.vue'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
-import { description, item } from './fixtures.ts'
+import HubState from './HubState.vue'
+import { description, item } from './fixtures.test-utils.ts'
 import ItemDetails from './ItemDetails.vue'
+import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
 import { folderColumns, folderTree } from './useHub.ts'
@@ -133,6 +135,18 @@ describe('ItemDetails', () => {
     expect(html).toContain('value="Ship"')
   })
 
+  it('disables the editors while the item is not confirmed', async () => {
+    const html = await render(ItemDetails, { item: item('i', 1), columns, disabled: true })
+    expect(html.match(/<(input|select)[^>]* disabled/g)).toHaveLength(columns.length)
+  })
+
+  it('labels the details section with a generated heading ID', async () => {
+    const html = await render(ItemDetails, { item: item('i', 1), columns })
+    const id = /<h3 id="([^"]+)"/.exec(html)?.[1]
+    expect(id).toBeTruthy()
+    expect(html).toContain(`aria-labelledby="${id ?? ''}"`)
+  })
+
   it('says when a folder has no fields', async () => {
     const html = await render(ItemDetails, { item: item('i', 1), columns: [] })
     expect(html).toContain('This folder has no fields yet.')
@@ -168,5 +182,86 @@ describe('DataTable and ItemPanel', () => {
     expect(html).toContain('aria-label="Close panel"')
     expect(html).toContain('BLD-4')
     expect(html).toContain('Body')
+  })
+})
+
+const failed = (code: 'internal' | 'unauthorized' | 'not_found', status: number) =>
+  ({ state: 'error', error: new ApiRequestError(code, 'Boom', status) }) as const
+
+describe('HubState', () => {
+  const hub = (state: Load<typeof description>, folderFound = true) =>
+    render(HubState, { workspaceId: 'w', hubId: 'bld', hub: state, folderFound }, () => 'FOLDER')
+
+  it('renders the folder once the hub is loaded', async () => {
+    const html = await hub({ state: 'ready', data: description })
+    expect(html).toContain('FOLDER')
+  })
+
+  it('renders the loading state', async () => {
+    const html = await hub({ state: 'loading' })
+    expect(html).toContain('role="status"')
+    expect(html).toContain('Loading hub')
+    expect(html).not.toContain('FOLDER')
+  })
+
+  it.each([
+    ['a missing hub', failed('not_found', 404)],
+    ['no permission', failed('unauthorized', 403)],
+  ])('renders %s as unavailable, with a way back', async (_name, state) => {
+    const html = await hub(state)
+    expect(html).toContain('data-state="no-permission"')
+    expect(html).toContain('This hub is not available')
+    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Back to workspaces<\/a>/)
+    expect(html).not.toContain('Try again')
+    expect(html).not.toContain('FOLDER')
+  })
+
+  it('renders other errors with a retry', async () => {
+    const html = await hub(failed('internal', 500))
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('The hub could not be loaded')
+    expect(html).toContain('Try again')
+    expect(html).not.toContain('FOLDER')
+  })
+
+  it('says when the folder is not in this hub, and links to the hub', async () => {
+    const html = await hub({ state: 'ready', data: description }, false)
+    expect(html).toContain('This folder is not in this hub')
+    expect(html).toMatch(/<a [^>]*href="\/w\/w\/hubs\/bld"[^>]*>Open Build<\/a>/)
+    expect(html).not.toContain('FOLDER')
+  })
+})
+
+describe('ItemPanelBody', () => {
+  const panel = (state: Load<ReturnType<typeof item>>) =>
+    render(ItemPanelBody, { item: state }, () => 'DETAILS')
+
+  it('renders the item once loaded', async () => {
+    expect(await panel({ state: 'ready', data: item('i1', 1) })).toContain('DETAILS')
+  })
+
+  it('renders the loading state', async () => {
+    const html = await panel({ state: 'loading' })
+    expect(html).toContain('Loading item')
+    expect(html).not.toContain('DETAILS')
+  })
+
+  it('renders no permission without a retry', async () => {
+    const html = await panel(failed('unauthorized', 401))
+    expect(html).toContain('You do not have access to this item')
+    expect(html).not.toContain('Try again')
+  })
+
+  it('renders a missing item without a retry', async () => {
+    const html = await panel(failed('not_found', 404))
+    expect(html).toContain('This item does not exist')
+    expect(html).not.toContain('Try again')
+  })
+
+  it('renders other errors with a retry', async () => {
+    const html = await panel(failed('internal', 500))
+    expect(html).toContain('The item could not be loaded')
+    expect(html).toContain('Try again')
+    expect(html).not.toContain('DETAILS')
   })
 })

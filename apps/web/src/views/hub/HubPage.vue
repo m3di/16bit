@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import type { Item, ItemValues } from '@16bit/core'
+import { ApiRequestError } from '../../api/client.ts'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { AppShell, BaseButton, ItemPanel, StateBlock } from '../../ui/index.ts'
+import { AppShell, BaseButton, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
+import HubState from './HubState.vue'
 import ItemDetails from './ItemDetails.vue'
+import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
-import { folderColumns, useHub } from './useHub.ts'
-import { useItems, valueErrors } from './useItems.ts'
+import { folderColumns, truncatedNote, useHub } from './useHub.ts'
+import { inHub, useItems, valueErrors } from './useItems.ts'
 
 const { workspaceId, hubId, folderId, itemId } = defineProps<{
   workspaceId: string
@@ -46,13 +49,7 @@ const countLine = computed(() => {
 })
 
 // The server caps the hub description. Say so rather than show a partial list as complete.
-const truncatedNote = computed(() => {
-  const t = description.value?.truncated
-  if (!t) return ''
-  const parts = [t.folders && 'folders', (t.attributes || t.folderAttributes) && 'fields']
-  const cut = parts.filter(Boolean).join(' and ')
-  return cut ? `This hub has more ${cut} than can be shown here.` : ''
-})
+const truncated = computed(() => (description.value ? truncatedNote(description.value) : ''))
 
 const treeLoad = computed<Load<typeof tree.value>>(() =>
   hub.value.state === 'ready' ? { state: 'ready', data: tree.value } : hub.value,
@@ -76,25 +73,38 @@ watch(
   { immediate: true },
 )
 
-// The item panel follows `?item=`.
+// The item panel follows `?item=`. An item from another hub is treated as missing here.
 const selected = ref<Load<string> | null>(null)
+async function loadSelected(id: string | null) {
+  if (!id) {
+    selected.value = null
+    return
+  }
+  selected.value = { state: 'loading' }
+  const result = inHub(await items.openItem(id), hubId)
+  if (id !== itemId) return
+  selected.value = result.state === 'ready' ? { state: 'ready', data: id } : result
+}
 watch(
   () => itemId,
-  async (id) => {
-    if (!id) {
-      selected.value = null
-      return
-    }
+  (id) => {
     creating.value = false
-    selected.value = { state: 'loading' }
-    const result = await items.openItem(id)
-    if (id !== itemId) return
-    selected.value = result.state === 'ready' ? { state: 'ready', data: id } : result
+    void loadSelected(id)
   },
   { immediate: true },
 )
+const retryPanel = () => void loadSelected(itemId)
+
+const panelItem = computed<Load<Item> | null>(() => {
+  const s = selected.value
+  if (s?.state !== 'ready') return s
+  const item = items.view(s.data)
+  return item
+    ? { state: 'ready', data: item }
+    : { state: 'error', error: new ApiRequestError('not_found', 'This item is gone.', 404) }
+})
 const selectedItem = computed(() =>
-  selected.value?.state === 'ready' ? items.view(selected.value.data) : undefined,
+  panelItem.value?.state === 'ready' ? panelItem.value.data : undefined,
 )
 
 const itemLink = (item: Item) => ({ query: { item: item.id } })
@@ -120,15 +130,6 @@ async function submitCreate(values: ItemValues) {
     createErrors.value = valueErrors(result.error)
   }
 }
-
-const retryPanel = () => {
-  if (itemId) {
-    selected.value = { state: 'loading' }
-    void items.openItem(itemId).then((r) => {
-      selected.value = r.state === 'ready' ? { state: 'ready', data: r.data.id } : r
-    })
-  }
-}
 </script>
 
 <template>
@@ -144,88 +145,61 @@ const retryPanel = () => {
 
     <div class="flex flex-1 flex-wrap items-stretch">
       <main class="box-border flex min-w-0 flex-[999_1_420px] flex-col gap-6 px-4 py-6 sm:px-7">
-        <StateBlock v-if="hub.state === 'loading'" state="loading" title="Loading hub" :rows="6" />
-        <StateBlock
-          v-else-if="
-            hub.state === 'error' && (hub.error.isNoPermission || hub.error.status === 404)
-          "
-          state="no-permission"
-          title="This hub is not available"
-          message="It may not exist, or it may not be shared with you."
+        <HubState
+          :workspace-id="workspaceId"
+          :hub-id="hubId"
+          :hub="hub"
+          :folder-found="folder !== null"
+          @retry="loadHub()"
         >
-          <template #action>
-            <RouterLink to="/" class="text-accent">Back to workspaces</RouterLink>
-          </template>
-        </StateBlock>
-        <StateBlock
-          v-else-if="hub.state === 'error'"
-          state="error"
-          title="The hub could not be loaded"
-          :message="hub.error.message"
-        >
-          <template #action>
-            <BaseButton size="sm" @click="loadHub()">Try again</BaseButton>
-          </template>
-        </StateBlock>
-        <StateBlock
-          v-else-if="!folder"
-          state="empty"
-          title="This folder is not in this hub"
-          message="It may have been moved or deleted."
-        >
-          <template #action>
-            <RouterLink :to="{ name: 'hub', params: { workspaceId, hubId } }" class="text-accent"
-              >Open {{ hub.data.hub.name }}</RouterLink
-            >
-          </template>
-        </StateBlock>
-        <template v-else>
-          <div class="flex flex-wrap items-end justify-between gap-3">
-            <div class="flex min-w-0 flex-col gap-1">
-              <h1 class="m-0 font-display text-page-title font-medium tracking-[-0.01em]">
-                {{ folder.name }}
-              </h1>
-              <span v-if="countLine" class="text-ink2" data-count>{{ countLine }}</span>
-              <span v-if="truncatedNote" class="text-secondary text-ink3" data-truncated>{{
-                truncatedNote
-              }}</span>
+          <template v-if="folder && hub.state === 'ready'">
+            <div class="flex flex-wrap items-end justify-between gap-3">
+              <div class="flex min-w-0 flex-col gap-1">
+                <h1 class="m-0 font-display text-page-title font-medium tracking-[-0.01em]">
+                  {{ folder.name }}
+                </h1>
+                <span v-if="countLine" class="text-ink2" data-count>{{ countLine }}</span>
+                <span v-if="truncated" class="text-secondary text-ink3" data-truncated>{{
+                  truncated
+                }}</span>
+              </div>
+              <BaseButton
+                variant="primary"
+                :disabled="list.state !== 'ready'"
+                data-new-item-button
+                @click="startCreate"
+                >New item</BaseButton
+              >
             </div>
-            <BaseButton
-              variant="primary"
-              :disabled="list.state !== 'ready'"
-              data-new-item-button
-              @click="startCreate"
-              >New item</BaseButton
-            >
-          </div>
 
-          <div
-            v-if="notice"
-            role="alert"
-            class="flex flex-wrap items-center justify-between gap-2 rounded-control border border-danger px-3 py-2 text-danger"
-            data-notice
-          >
-            <span class="min-w-0 flex-[1_1_240px]">{{ notice }}</span>
-            <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
-              >Dismiss</BaseButton
+            <div
+              v-if="notice"
+              role="alert"
+              class="flex flex-wrap items-center justify-between gap-2 rounded-control border border-danger px-3 py-2 text-danger"
+              data-notice
             >
-          </div>
+              <span class="min-w-0 flex-[1_1_240px]">{{ notice }}</span>
+              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                >Dismiss</BaseButton
+              >
+            </div>
 
-          <ItemsBlock
-            :folder-name="folder.name"
-            :list="list"
-            :rows="rows"
-            :columns="columns"
-            :id-prefix="hub.data.hub.idPrefix"
-            :selected-id="itemId"
-            :item-link="itemLink"
-            :is-creating="items.isCreating"
-            @open="openItem"
-            @retry="items.openFolder(openFolderId)"
-            @more="items.loadMore()"
-            @create="startCreate"
-          />
-        </template>
+            <ItemsBlock
+              :folder-name="folder.name"
+              :list="list"
+              :rows="rows"
+              :columns="columns"
+              :id-prefix="hub.data.hub.idPrefix"
+              :selected-id="itemId"
+              :item-link="itemLink"
+              :is-creating="items.isCreating"
+              @open="openItem"
+              @retry="items.openFolder(openFolderId)"
+              @more="items.loadMore()"
+              @create="startCreate"
+            />
+          </template>
+        </HubState>
       </main>
 
       <ItemPanel
@@ -244,41 +218,23 @@ const retryPanel = () => {
         />
       </ItemPanel>
       <ItemPanel
-        v-else-if="itemId && selected"
+        v-else-if="itemId && panelItem"
         :title="selectedItem && description ? items.label(selectedItem) : 'Item'"
         class="flex-[1_1_320px]"
         @close="closePanel"
       >
-        <StateBlock v-if="selected.state === 'loading'" state="loading" title="Loading item" />
-        <StateBlock
-          v-else-if="selected.state === 'error' && selected.error.isNoPermission"
-          state="no-permission"
-          title="You do not have access to this item"
-        />
-        <StateBlock
-          v-else-if="selected.state === 'error' && selected.error.status === 404"
-          state="empty"
-          title="This item does not exist"
-          message="It may have been deleted."
-        />
-        <StateBlock
-          v-else-if="selected.state === 'error'"
-          state="error"
-          title="The item could not be loaded"
-          :message="selected.error.message"
-        >
-          <template #action>
-            <BaseButton size="sm" @click="retryPanel">Try again</BaseButton>
+        <ItemPanelBody :item="panelItem" @retry="retryPanel">
+          <template #default="{ item }">
+            <ItemDetails
+              :key="item.id"
+              :item="item"
+              :columns="description ? folderColumns(description, item.folderId) : []"
+              :saving="items.isSaving(item.id)"
+              :disabled="items.isCreating(item.id)"
+              @save="items.save(item.id, $event)"
+            />
           </template>
-        </StateBlock>
-        <ItemDetails
-          v-else-if="selectedItem"
-          :key="selectedItem.id"
-          :item="selectedItem"
-          :columns="description ? folderColumns(description, selectedItem.folderId) : []"
-          :saving="items.isSaving(selectedItem.id)"
-          @save="items.save(selectedItem.id, $event)"
-        />
+        </ItemPanelBody>
       </ItemPanel>
     </div>
   </AppShell>

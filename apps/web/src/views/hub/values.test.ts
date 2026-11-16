@@ -1,6 +1,6 @@
 import type { Attribute } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
-import { attributes } from './fixtures.ts'
+import { attributes } from './fixtures.test-utils.ts'
 import { formatValue, fromInput, selectedOption, toInput } from './values.ts'
 
 const [text, select, number] = attributes as [Attribute, Attribute, Attribute]

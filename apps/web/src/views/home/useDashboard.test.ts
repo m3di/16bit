@@ -146,7 +146,8 @@ describe('useDashboard', () => {
       }),
     )
     await d.load()
+    hubCalls = 0
     await Promise.all([d.reloadHubs('a'), d.reloadHubs('a')])
-    expect(hubCalls).toBe(2)
+    expect(hubCalls).toBe(1)
   })
 })

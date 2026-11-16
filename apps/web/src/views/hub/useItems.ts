@@ -39,6 +39,15 @@ export function valueErrors(error: ApiRequestError): Record<string, string> {
   return out
 }
 
+/** An item opened by ID inside a hub's page. One from another hub is reported as missing. */
+export function inHub(result: Load<Item>, hubId: string): Load<Item> {
+  if (result.state !== 'ready' || result.data.hubId === hubId) return result
+  return {
+    state: 'error',
+    error: new ApiRequestError('not_found', 'This item is not in this hub.', 404),
+  }
+}
+
 /**
  * Items of one hub: the selected folder's list, single items opened by ID, and writes.
  * The server's copy of each item is kept apart from local edits, so a rejected edit rolls
@@ -182,6 +191,11 @@ export function useItems(
    * is dropped, since it was made against the old version. Any other failure undoes this edit.
    */
   function save(id: string, values: ItemValues): Promise<boolean> {
+    // The server does not have the item yet, so there is nothing to PATCH.
+    if (creating.value[id]) {
+      notice.value = 'The new item is still being saved. Edit it once it has been created.'
+      return Promise.resolve(false)
+    }
     const edit: PendingEdit = { key: ++editKey, values }
     pending.value[id] = [...(pending.value[id] ?? []), edit]
     const drop = () => {
