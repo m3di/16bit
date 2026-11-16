@@ -253,6 +253,32 @@ describe('demo seed', () => {
     expect(forced.stderr).toContain('DATABASE_URL is not set')
   }, 30_000)
 
+  it('gets --force from `pnpm seed` through the root and filtered scripts', async () => {
+    const root = fileURLToPath(new URL('../../..', import.meta.url))
+    // Under `pnpm test`, npm_execpath is the pnpm running the tests.
+    const pnpm = process.env['npm_execpath'] ?? 'pnpm'
+    // DATABASE_URL is set but empty, so the scripts' --env-file-if-exists cannot fill it in from
+    // a local .env: the seed must stop at the URL check and can never reach a database.
+    const env = { ...process.env, NODE_ENV: 'production', DATABASE_URL: '' }
+    const run = async (args: string[]): Promise<string> => {
+      try {
+        await promisify(execFile)(pnpm, args, { cwd: root, env })
+        return ''
+      } catch (error) {
+        return (error as { stderr: string; stdout: string }).stderr
+      }
+    }
+    for (const args of [
+      ['seed', '--force'],
+      ['--filter', '@16bit/api', 'seed', '--force'],
+    ]) {
+      const stderr = await run(args)
+      expect(stderr, args.join(' ')).toContain('DATABASE_URL is not set')
+      expect(stderr, args.join(' ')).not.toContain('refusing to run')
+    }
+    expect(await run(['seed'])).toContain('refusing to run with NODE_ENV=production')
+  }, 60_000)
+
   // Must stay the last test: it leaves the hub's next_seq ahead of its item count.
   it('fills in a workspace that is only partly seeded', async () => {
     await db.transaction().execute(async (trx) => {
