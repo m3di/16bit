@@ -1,0 +1,143 @@
+/*
+ * Design tokens. Source: docs/DESIGN.md.
+ * Components use these through Tailwind utilities (see main.css), never raw colour values.
+ * A theme class can be set on any element, so both themes can render side by side (/kit).
+ *
+ * Every value here is listed in docs/DESIGN.md. tokens.test.ts checks the contrast rules.
+ */
+
+.theme-light {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #fafafb;
+  --line: #eceef1;
+  --line2: #d9dce3;
+  --line3: #838995;
+  --ink: #111318;
+  --ink2: #4b5261;
+  --ink3: #676d7b;
+  --empty: #e1e4ea;
+  --accent: #3b4cca;
+  --on-accent: #ffffff;
+  --success: #157e3c;
+  --warning: #a55a05;
+  --danger: #b42318;
+  --selected: #eef0f4;
+
+  --pal-indigo: #3b4cca;
+  --pal-indigo-tint: #e4e6f8;
+  --pal-indigo-ink: #3b4cca;
+  --pal-blue: #2563eb;
+  --pal-blue-tint: #e0e9fc;
+  --pal-blue-ink: #235edf;
+  --pal-cyan: #0891b2;
+  --pal-cyan-tint: #dcf0f4;
+  --pal-cyan-ink: #06738d;
+  --pal-teal: #0f766e;
+  --pal-teal-tint: #ddeceb;
+  --pal-teal-ink: #0f746c;
+  --pal-green: #15803d;
+  --pal-green-tint: #deede4;
+  --pal-green-ink: #147739;
+  --pal-lime: #65a30d;
+  --pal-lime-tint: #e9f2dd;
+  --pal-lime-ink: #4a7709;
+  --pal-yellow: #a16207;
+  --pal-yellow-tint: #f2e9dc;
+  --pal-yellow-ink: #8c5f03;
+  --pal-amber: #d97706;
+  --pal-amber-tint: #faecdc;
+  --pal-amber-ink: #a15804;
+  --pal-orange: #ea580c;
+  --pal-orange-tint: #fce8dd;
+  --pal-orange-ink: #b44409;
+  --pal-red: #dc2626;
+  --pal-red-tint: #fae1e1;
+  --pal-red-ink: #c62222;
+  --pal-pink: #be185d;
+  --pal-pink-tint: #f6dfe8;
+  --pal-pink-ink: #be185d;
+  --pal-magenta: #c026d3;
+  --pal-magenta-tint: #f6e1f9;
+  --pal-magenta-ink: #ab22bc;
+  --pal-violet: #6d28d9;
+  --pal-violet-tint: #ebe1fa;
+  --pal-violet-ink: #6d28d9;
+  --pal-slate: #4b5261;
+  --pal-slate-tint: #e6e7e9;
+  --pal-slate-ink: #4b5261;
+  --pal-ink: #111318;
+  --pal-ink-tint: #dededf;
+  --pal-ink-ink: #111318;
+  --pal-grey: #7c8390;
+  --pal-grey-tint: #edeef0;
+  --pal-grey-ink: #676b73;
+}
+
+.theme-dark {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --surface: #161920;
+  --line: #252a33;
+  --line2: #343a46;
+  --line3: #666d7c;
+  --ink: #eceef1;
+  --ink2: #b4bac6;
+  --ink3: #8e95a3;
+  --empty: #2a2f3a;
+  --accent: #8e9bff;
+  --on-accent: #0f1115;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f97066;
+  --selected: #1d2129;
+
+  --pal-indigo: #8e9bff;
+  --pal-indigo-tint: #282d44;
+  --pal-indigo-ink: #8e9bff;
+  --pal-blue: #60a5fa;
+  --pal-blue-tint: #1f2f43;
+  --pal-blue-ink: #60a5fa;
+  --pal-cyan: #22d3ee;
+  --pal-cyan-tint: #133840;
+  --pal-cyan-ink: #22d3ee;
+  --pal-teal: #2dd4bf;
+  --pal-teal-tint: #153837;
+  --pal-teal-ink: #2dd4bf;
+  --pal-green: #4ade80;
+  --pal-green-tint: #1b3a2a;
+  --pal-green-ink: #4ade80;
+  --pal-lime: #a3e635;
+  --pal-lime-tint: #2d3c1b;
+  --pal-lime-ink: #a3e635;
+  --pal-yellow: #facc15;
+  --pal-yellow-tint: #3e3615;
+  --pal-yellow-ink: #facc15;
+  --pal-amber: #fbbf24;
+  --pal-amber-tint: #3e3418;
+  --pal-amber-ink: #fbbf24;
+  --pal-orange: #fb923c;
+  --pal-orange-tint: #3e2b1d;
+  --pal-orange-ink: #fb923c;
+  --pal-red: #f87171;
+  --pal-red-tint: #3e2427;
+  --pal-red-ink: #f87171;
+  --pal-pink: #f472b6;
+  --pal-pink-tint: #3d2435;
+  --pal-pink-ink: #f472b6;
+  --pal-magenta: #e879f9;
+  --pal-magenta-tint: #3a2643;
+  --pal-magenta-ink: #e879f9;
+  --pal-violet: #a78bfa;
+  --pal-violet-tint: #2d2943;
+  --pal-violet-ink: #a78bfa;
+  --pal-slate: #a3abba;
+  --pal-slate-tint: #2d3036;
+  --pal-slate-ink: #a3abba;
+  --pal-ink: #eceef1;
+  --pal-ink-tint: #3b3d41;
+  --pal-ink-ink: #eceef1;
+  --pal-grey: #6b7280;
+  --pal-grey-tint: #21242a;
+  --pal-grey-ink: #878d98;
+}
