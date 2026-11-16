@@ -21,7 +21,7 @@ export const dateType: AttributeType<'date', DateConfig, string> = {
   valueSchema: (config) => (config.includeTime ? z.iso.datetime({ offset: true }) : z.iso.date()),
   isEmpty: () => false,
   indexProjection: 'ts',
-  project: (value) => new Date(toEpoch(value)).toISOString(),
+  project: (value) => [new Date(toEpoch(value)).toISOString()],
   filterOperators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', ...EMPTY_OPERATORS],
   sortKey: toEpoch,
   // Buckets by UTC calendar day. Per-viewer time zones come with views.

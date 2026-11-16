@@ -45,7 +45,7 @@ export const numberType: AttributeType<'number', NumberConfig, number> = {
   valueSchema,
   isEmpty: () => false,
   indexProjection: 'num',
-  project: (value) => value,
+  project: (value) => [value],
   filterOperators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', ...EMPTY_OPERATORS],
   sortKey: (value) => value,
   groupKey: (value) => String(value),

@@ -132,6 +132,17 @@ export interface ItemTable {
   updated_by: string
 }
 
+/** Derived typed copies of indexed values (D6). Exactly one of num, txt, ts is set. */
+export interface ItemIndexTable {
+  workspace_id: string
+  attribute_id: string
+  item_id: string
+  ord: Generated<number>
+  num: number | null
+  txt: string | null
+  ts: ColumnType<Date | null, Date | string | null, Date | string | null>
+}
+
 export interface RevisionTable {
   workspace_id: string
   seq: number
@@ -152,6 +163,7 @@ export interface Database {
   attribute: AttributeTable
   folder_attribute: FolderAttributeTable
   item: ItemTable
+  item_index: ItemIndexTable
   revision: RevisionTable
   invite: InviteTable
   agent_key: AgentKeyTable

@@ -62,7 +62,7 @@ folder_grant     (workspace_id, folder_id, principal_id)
 
 - `item.values` is keyed by attribute ID.
 - A person has one `account` and one `principal` per workspace they belong to. An agent key is a `principal` of kind `agent` with workspace role `member` and exactly one `hub_grant` (D47); `agent_key` only holds its secret hash and lifecycle.
-- `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`.
+- `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`. Each attribute type's `project` returns a list of values, one row each, numbered by `ord`; a write replaces all of an item's rows for the attributes it touches. An empty value has no row. Sorting reads the `ord = 0` row.
 - `agent_key` and `hub_grant` also carry `principal_kind`, a copy of `principal.kind` held in step by a `(workspace_id, principal_id, principal_kind)` foreign key. It lets the database refuse a key on a person, a second grant for an agent, and `hub_admin` for an agent (D28, D47). `account.email` is stored trimmed and lowercased, and `password_hash` must be an argon2id string.
 - The only indexes on workspace-scoped tables that do not lead with `workspace_id` are the three lookups that run before a principal is known: `agent_key.secret_hash`, `invite.token_hash` (both unique), and `principal.account_id`.
 - `access_log.seq` is taken from `workspace.next_access_seq` in the same transaction as the access change.
@@ -71,7 +71,7 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
 - `folder.item_count` on a hub is a counter kept in the write transaction, so the main dashboard never counts items.
 
-**M0 scope:** `workspace`, `principal`, `folder`, `attribute`, `folder_attribute`, `item`, `revision`. No `item_index` yet; M0 lists items by folder with cursor paging and sorts by update time.
+**M0 scope:** `workspace`, `principal`, `folder`, `attribute`, `folder_attribute`, `item`, `revision`. `item_index` arrives in M1 (#45).
 
 ## Writes
 
@@ -109,6 +109,15 @@ Rendering (cell and editor components) lives in `apps/web`, registered against t
 ```
 
 Rules: indexed attributes only for filter and sort, one level of expansion, a required limit, cursor paging.
+
+**M1 scope (#45):** `from`, `where`, `sort`, `limit` (required, 1 to 200), `cursor`. Shapes are in `packages/core/src/query.ts`.
+
+- `where` is a tree of `{ and: [...] }`, `{ or: [...] }`, and conditions `{ attribute, op, value }`: at most 20 conditions, 3 levels deep. `op` must be one of the attribute type's `filterOperators`; `value` is checked with the type's value schema (number bounds excepted) and projected like a stored value. `in`/`not_in` take an array of up to 100; `is_empty`/`is_not_empty` take none. `contains`, `not_contains`, `starts_with` ignore case; `eq` on text is exact. The negative operators also match items with no value.
+- `sort` is up to 3 `{ attribute, direction }`. Text sorts case-insensitively, select by option order. Empty values sort last in both directions, and ties end on the item ID. With no `sort`, items come newest update first.
+- Only indexed attributes shown on the `from` folder can be filtered or sorted. Anything else is a 400 `invalid_request` whose `message` names the path, attribute, and operator, with every problem listed in `errors: [{ path, message }]`.
+- The cursor holds the last row's sort values and ID, so it only fits the sort it came from.
+- Plans (D20). With no `sort`, a page is an index scan on `item_folder_updated_idx` with a row-comparison cursor and no sort step; `apps/api/src/query.test.ts` checks this with EXPLAIN. A `sort` on attributes is not index-backed: each page reads every item in the folder that passes `where`, looks up its sort values in `item_index`, and sorts them, so a page costs O(folder size). That is fine at M1 folder sizes. Index-backed attribute sorts need a different shape (for example a per-folder sort column) and their own decision.
+- A select value whose option was deleted still sorts (after every option), but cannot be filtered on: `eq`, `neq`, `in`, and `not_in` operands are checked against the current options and reject it as an unknown option. `is_empty` and `is_not_empty` still see it.
 
 ## API
 
