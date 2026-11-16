@@ -55,5 +55,7 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm typecheck`: TypeScript across the workspace.
 - `pnpm test`: Vitest. Needs a running Postgres once migrations land (`docker compose up -d db`).
 - `pnpm build`: build all packages.
+- `pnpm seed`: load the demo workspaces (`demo`, `acme`). Safe to re-run. Refuses `NODE_ENV=production` without `--force`.
+- `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
 
-Still to come in M0: `pnpm seed` (#7), `pnpm seed:build-hub` (#11), `pnpm e2e` (#12). Keep this list up to date as they land.
+Still to come in M0: `pnpm e2e` (#12). Keep this list up to date as they land.
