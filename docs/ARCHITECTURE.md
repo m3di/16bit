@@ -102,6 +102,16 @@ Rendering (cell and editor components) lives in `apps/web`, registered against t
 
 **M0 scope:** text, number, boolean, date, select.
 
+**M1 scope (#46):** multi-select, URL, actor, auto ID, rich text, relation (D44). Summary functions are listed but computed only from M4. Besides the six parts, each type states `readOnly` and `sortable`.
+
+- Type names are snake_case: `multi_select`, `url`, `actor`, `auto_id`, `rich_text`, `relation`. The `attribute.type` check constraint still lists the M0 types; a migration adds the rest.
+- Multi-select, actor and relation values are lists of distinct IDs (option, principal, item). Actor and relation have `multiple` (actor off, relation on); with it off the list holds at most one. Caps: 100 options, 50 principals, 100 items. An empty list is stored as `null`. Each element is one `item_index` row; multi-select rows are in option order. Their filters are `in` ("has any of"), `not_in` ("has none of"), and the empty checks.
+- Relation config is `{ targetHubId, crossHub = false, multiple = true }`. With `crossHub` off, `targetHubId` must be the attribute's own hub (D11), checked by `attributeSchema`. That linked items exist and are readable, and that actor IDs are principals of the workspace, is checked by the server.
+- URL is an absolute http or https URL up to 2,048 characters.
+- Auto ID is a positive integer the server writes on create: the item's `seqId`. `validateItemValues` refuses any client value for it with `read_only`, and it is never required on create.
+- Rich text is ProseMirror JSON in `item.values`, limited to a closed node set, the one the shared editor from #48 uses: `doc`, `paragraph`, `heading` (level 3 or 4, since item titles take h1 and h2), `bulletList`, `orderedList` (`start`), `listItem` (a paragraph, then paragraphs or lists), `codeBlock` (plain text only), `hardBreak`, `text`, and the marks `bold`, `italic`, `code`, `link` (`href`: http, https or mailto). No other node, mark or attribute is accepted. Caps: 64 KiB of JSON (UTF-8) and 14 levels of nesting, which is lists six deep. A document with no text is empty. It indexes its plain text, filters with `contains` and `not_contains`, and renders as Markdown for agents.
+- Actor, relation and rich text cannot be sorted: an ID or document order would look random. Sorting by a principal's or linked item's name needs the joined data and its own decision.
+
 ## Query shape
 
 ```json

@@ -139,7 +139,7 @@ function projectWith<C, V extends ItemValue>(
   if (type.isEmpty(result.data, config)) {
     return { ok: false, message: 'An empty value matches nothing; use is_empty' }
   }
-  // An operand is one value of a single-valued type, so it projects to exactly one.
+  // An operand is one value, or a list of one element, so it projects to exactly one.
   const [projected] = type.project(result.data, config)
   return projected === undefined
     ? { ok: false, message: 'Not filterable' }
@@ -160,6 +160,20 @@ function operand(attribute: Attribute, input: unknown): Operand {
       return projectWith(attributeTypes.date, attribute.config, input)
     case 'select':
       return projectWith(attributeTypes.select, attribute.config, input)
+    // List types: an operand is one element, checked as a list of one.
+    case 'multi_select':
+      return projectWith(attributeTypes.multi_select, attribute.config, [input])
+    case 'actor':
+      return projectWith(attributeTypes.actor, attribute.config, [input])
+    case 'relation':
+      return projectWith(attributeTypes.relation, attribute.config, [input])
+    case 'url':
+      return projectWith(attributeTypes.url, attribute.config, input)
+    case 'auto_id':
+      return projectWith(attributeTypes.auto_id, attribute.config, input)
+    case 'rich_text':
+      // Only the text operators apply, and they take a search string, not a value.
+      return { ok: false, message: 'Not comparable; use contains' }
   }
 }
 
@@ -261,6 +275,20 @@ function compileFilter(
     : { or: compiled as CompiledFilter[] }
 }
 
+/** Select and multi-select by option order (a list by its earliest option), text by case. */
+function sortKeyOf(attribute: Attribute): CompiledSort['key'] {
+  switch (attribute.type) {
+    case 'select':
+    case 'multi_select':
+      return { by: 'position', order: attribute.config.options.map((o) => o.id) }
+    case 'text':
+    case 'url':
+      return { by: 'lower' }
+    default:
+      return { by: 'value' }
+  }
+}
+
 /**
  * Checks `where` and `sort` against the attributes of the queried folder and resolves them to
  * `item_index` columns. Returns every problem found, each naming the attribute and operator.
@@ -278,16 +306,18 @@ export function compileItemQuery(
     const resolved = resolve(byId, key.attribute, `sort.${String(i)}`, errors)
     if (!resolved) continue
     const { attribute, column } = resolved
+    if (!attributeTypes[attribute.type].sortable) {
+      errors.push({
+        path: `sort.${String(i)}`,
+        message: `Attribute "${attribute.id}" is a ${attribute.type} attribute, which cannot be sorted`,
+      })
+      continue
+    }
     sort.push({
       attributeId: attribute.id,
       column,
       direction: key.direction,
-      key:
-        attribute.type === 'select'
-          ? { by: 'position', order: attribute.config.options.map((o) => o.id) }
-          : attribute.type === 'text'
-            ? { by: 'lower' }
-            : { by: 'value' },
+      key: sortKeyOf(attribute),
     })
   }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, where, sort }
@@ -330,5 +360,17 @@ export function indexEntries(attribute: Attribute, value: ItemValue | null): Ind
       return entriesWith(attributeTypes.date, attribute.config, value)
     case 'select':
       return entriesWith(attributeTypes.select, attribute.config, value)
+    case 'multi_select':
+      return entriesWith(attributeTypes.multi_select, attribute.config, value)
+    case 'url':
+      return entriesWith(attributeTypes.url, attribute.config, value)
+    case 'actor':
+      return entriesWith(attributeTypes.actor, attribute.config, value)
+    case 'auto_id':
+      return entriesWith(attributeTypes.auto_id, attribute.config, value)
+    case 'rich_text':
+      return entriesWith(attributeTypes.rich_text, attribute.config, value)
+    case 'relation':
+      return entriesWith(attributeTypes.relation, attribute.config, value)
   }
 }

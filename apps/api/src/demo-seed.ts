@@ -5,7 +5,7 @@ import {
   type PaletteColor,
 } from '@16bit/core'
 import type { Kysely } from 'kysely'
-import type { Database, PrincipalTable } from './db/database.ts'
+import type { AttributeTable, Database, PrincipalTable } from './db/database.ts'
 import { createItem } from './items.ts'
 
 // `pnpm seed`: two demo workspaces whose hubs cover every size-meter step in docs/DESIGN.md
@@ -305,7 +305,23 @@ function valueFor(attribute: Attribute, index: number, rand: () => number): unkn
       day.setUTCHours(8 + Math.floor(rand() * 10), Math.floor(rand() * 60))
       return day.toISOString()
     }
+    default:
+      throw new Error(`The demo seed has no values for ${attribute.type} yet`)
   }
+}
+
+const STORED_TYPES: readonly string[] = [
+  'text',
+  'number',
+  'boolean',
+  'date',
+  'select',
+] satisfies AttributeTable['type'][]
+
+/** The attribute table only takes the M0 types until a migration adds the rest. */
+function storedType(type: Attribute['type']): AttributeTable['type'] {
+  if (!STORED_TYPES.includes(type)) throw new Error(`The attribute table does not take ${type} yet`)
+  return type as AttributeTable['type']
 }
 
 function flatten(
@@ -397,7 +413,7 @@ export async function applySeed(
               id: attribute.id,
               hub_id: hub.id,
               name: attribute.name,
-              type: attribute.type,
+              type: storedType(attribute.type),
               config: JSON.stringify(attribute.config),
             })),
           )

@@ -8,11 +8,13 @@ export const booleanType: AttributeType<'boolean', BooleanConfig, boolean> = {
   name: 'boolean',
   configSchema: booleanConfigSchema,
   valueSchema: () => z.boolean(),
+  readOnly: false,
   isEmpty: () => false,
   // Stored as 0/1 in the number column so indexed booleans are filterable (D20).
   indexProjection: 'num',
   project: (value) => [value ? 1 : 0],
   filterOperators: ['eq', 'neq', ...EMPTY_OPERATORS],
+  sortable: true,
   sortKey: (value) => (value ? 1 : 0),
   groupKey: (value) => String(value),
   summaries: [...BASE_SUMMARIES, 'count_true', 'count_false'],

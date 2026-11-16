@@ -1,4 +1,10 @@
-import { attributeTypes, type Attribute, type ItemValues, type SelectOption } from '@16bit/core'
+import {
+  attributeTypes,
+  richTextPlainText,
+  type Attribute,
+  type ItemValues,
+  type SelectOption,
+} from '@16bit/core'
 
 type Value = ItemValues[string] | undefined
 
@@ -31,6 +37,18 @@ export function formatValue(attribute: Attribute, value: Value): string {
     }
     case 'select':
       return typeof value === 'string' ? attributeTypes.select.render(value, attribute.config) : ''
+    // Plain text until the M1 cells land (M1-12).
+    case 'url':
+      return typeof value === 'string' ? value : ''
+    case 'auto_id':
+      return typeof value === 'number' ? attributeTypes.auto_id.render(value, attribute.config) : ''
+    case 'multi_select':
+      return Array.isArray(value) ? attributeTypes.multi_select.render(value, attribute.config) : ''
+    case 'actor':
+    case 'relation':
+      return Array.isArray(value) ? value.join(', ') : ''
+    case 'rich_text':
+      return typeof value === 'object' && !Array.isArray(value) ? richTextPlainText(value) : ''
   }
 }
 
@@ -51,7 +69,8 @@ export function toInput(attribute: Attribute, value: Value): string {
     if (Number.isNaN(d.getTime())) return ''
     return `${String(d.getFullYear())}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
-  return String(value)
+  // Lists and rich text get their own editors in M1-12.
+  return typeof value === 'object' ? '' : String(value)
 }
 
 export type Parsed = { ok: true; value: ItemValues[string] } | { ok: false; message: string }
@@ -76,6 +95,13 @@ export function fromInput(attribute: Attribute, text: string): Parsed {
         : { ok: true, value: d.toISOString() }
     }
     case 'select':
+    case 'url':
       return { ok: true, value: text }
+    case 'multi_select':
+    case 'actor':
+    case 'auto_id':
+    case 'rich_text':
+    case 'relation':
+      return { ok: false, message: 'This field cannot be edited here yet' }
   }
 }
