@@ -1,4 +1,5 @@
-import type { Kysely } from 'kysely'
+import { sql, type Kysely } from 'kysely'
+import pg from 'pg'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ATTR,
@@ -8,6 +9,7 @@ import {
   ghIssueSchema,
   importIssues,
   IMPORT_ACTOR,
+  parseIssues,
   toValues,
   type GhIssue,
 } from './build-hub.ts'
@@ -22,11 +24,13 @@ const OWNER = 'dev-owner'
 const WS = BUILD_WORKSPACE.id
 
 let db: Kysely<Database>
+let dbUrl: string
 let drop: () => Promise<void>
 
 beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
+  dbUrl = test.url
   db = createDb(test.url)
   await migrateToLatest(db)
   await ensureBuildHub(db, OWNER)
@@ -103,6 +107,33 @@ describe('ghIssueSchema', () => {
   })
 })
 
+describe('parseIssues', () => {
+  it('parses gh output', () => {
+    const issues = [issue(1), { ...issue(2), body: 'extra fields are ignored' }]
+    expect(parseIssues(JSON.stringify(issues))).toEqual([issue(1), issue(2)])
+    expect(parseIssues('[]')).toEqual([])
+  })
+
+  it('rejects output that is not JSON', () => {
+    for (const stdout of ['', 'gh: not logged in', '[{"number": 1']) {
+      expect(() => parseIssues(stdout), stdout).toThrow('gh output is not JSON')
+    }
+  })
+
+  it('rejects JSON that is not a list of issues, naming the bad field', () => {
+    expect(() => parseIssues('{"number": 1}')).toThrow('gh output is not a list of issues')
+    expect(() => parseIssues('null')).toThrow('gh output is not a list of issues')
+    const badState = JSON.stringify([issue(1), { ...issue(2), state: 'MERGED' }])
+    expect(() => parseIssues(badState)).toThrow('[1.state]')
+    const noLabels = JSON.stringify([{ ...issue(1), labels: undefined }])
+    expect(() => parseIssues(noLabels)).toThrow('[0.labels]')
+  })
+
+  it('rejects an issue listed twice', () => {
+    expect(() => parseIssues(JSON.stringify([issue(1), issue(1)]))).toThrow('#1 twice')
+  })
+})
+
 describe('ensureBuildHub', () => {
   it('is idempotent and makes the hub visible to the dev principal', async () => {
     await ensureBuildHub(db, OWNER)
@@ -137,7 +168,7 @@ describe('ensureBuildHub', () => {
 describe('importIssues', () => {
   it('creates one item per issue with revisions and the hub count', async () => {
     const result = await importIssues(db, [issue(1), issue(2), issue(3, { state: 'CLOSED' })])
-    expect(result).toEqual({ created: 3, updated: 0, unchanged: 0, skipped: [] })
+    expect(result).toEqual({ created: 3, updated: 0, unchanged: 0, skipped: [], failed: [] })
 
     const item = await getItem(db, WS, 'gh-2')
     expect(item).toMatchObject({ hubId: BUILD_HUB.id, folderId: BUILD_HUB.id, version: 1 })
@@ -176,6 +207,7 @@ describe('importIssues', () => {
       updated: 0,
       unchanged: 2,
       skipped: [],
+      failed: [],
     })
     expect(await revisions()).toEqual(before)
     expect(await hubCount()).toBe(2)
@@ -193,7 +225,7 @@ describe('importIssues', () => {
       issue(2),
       issue(5),
     ])
-    expect(result).toEqual({ created: 1, updated: 1, unchanged: 1, skipped: [] })
+    expect(result).toEqual({ created: 1, updated: 1, unchanged: 1, skipped: [], failed: [] })
 
     const item = await getItem(db, WS, 'gh-1')
     expect(item.version).toBe(2)
@@ -224,26 +256,145 @@ describe('importIssues', () => {
     await deleteItem(db, WS, OWNER, 'gh-1', 1)
 
     const result = await importIssues(db, [issue(1), issue(2)])
-    expect(result).toEqual({ created: 0, updated: 0, unchanged: 1, skipped: [1] })
+    expect(result).toEqual({ created: 0, updated: 0, unchanged: 1, skipped: [1], failed: [] })
     await expect(getItem(db, WS, 'gh-1')).rejects.toMatchObject({ code: 'not_found' })
     expect(await hubCount()).toBe(1)
   })
 
-  it('fails on a value the hub rejects and writes nothing for it', async () => {
+  it('reports an invalid value per issue and imports the rest', async () => {
     const tooLong = issue(9, { title: 'x'.repeat(10_001) })
-    await expect(importIssues(db, [tooLong])).rejects.toMatchObject({ code: 'invalid_values' })
-    expect(await hubCount()).toBe(0)
-    expect(await revisions()).toEqual([])
+    const result = await importIssues(db, [issue(1), tooLong, issue(12)])
+    expect(result).toMatchObject({ created: 2, failed: [{ issue: 9, code: 'invalid_values' }] })
+    expect(result.failed[0]?.message).toMatch(/^title: /)
+    expect(await hubCount()).toBe(2)
+    expect((await revisions()).map((r) => r.item_id)).toEqual(['gh-1', 'gh-12'])
+    await expect(getItem(db, WS, 'gh-9')).rejects.toMatchObject({ code: 'not_found' })
   })
 
-  it('stays inside the team workspace', async () => {
-    await db.insertInto('workspace').values({ id: 'other', name: 'Other' }).execute()
+  it('reports an invalid value on update and leaves the item as it was', async () => {
     await importIssues(db, [issue(1)])
-    const elsewhere = await db
-      .selectFrom('item')
-      .select('id')
-      .where('workspace_id', '!=', WS)
+    const result = await importIssues(db, [issue(1, { title: 'x'.repeat(10_001) }), issue(2)])
+    expect(result).toMatchObject({ created: 1, failed: [{ issue: 1, code: 'invalid_values' }] })
+    const item = await getItem(db, WS, 'gh-1')
+    expect(item.version).toBe(1)
+    expect(item.values[ATTR.title]).toBe('Issue 1')
+  })
+
+  it('reports a version conflict per issue and imports the rest', async () => {
+    await importIssues(db, [issue(1)])
+
+    // Another writer bumps gh-1 and holds its row lock. The importer reads version 1, then its
+    // update waits on the lock; once the writer commits, the version check fails: a real 409.
+    const other = new pg.Client({ connectionString: dbUrl })
+    await other.connect()
+    try {
+      await other.query('BEGIN')
+      await other.query(
+        `UPDATE item SET version = version + 1 WHERE workspace_id = $1 AND id = 'gh-1'`,
+        [WS],
+      )
+      const running = importIssues(db, [issue(1, { title: 'Renamed' }), issue(2)])
+      await waitForLockWait()
+      await other.query('COMMIT')
+
+      const result = await running
+      expect(result).toMatchObject({
+        created: 1,
+        updated: 0,
+        failed: [{ issue: 1, code: 'conflict' }],
+      })
+    } finally {
+      await other.end()
+    }
+    const item = await getItem(db, WS, 'gh-1')
+    expect(item.version).toBe(2)
+    expect(item.values[ATTR.title]).toBe('Issue 1')
+    expect((await revisions()).map((r) => [r.item_id, r.version])).toEqual([
+      ['gh-1', 1],
+      ['gh-2', 1],
+    ])
+  })
+
+  it('still stops the run on an error that is not about one issue', async () => {
+    await db.deleteFrom('folder_attribute').execute()
+    await db.deleteFrom('attribute').execute()
+    await db.deleteFrom('folder').execute()
+    await expect(importIssues(db, [issue(1), issue(2)])).rejects.toMatchObject({
+      code: 'not_found',
+    })
+  })
+
+  it('leaves an item with the same ID in another workspace unchanged', async () => {
+    await db.insertInto('workspace').values({ id: 'other', name: 'Other' }).execute()
+    await db
+      .insertInto('principal')
+      .values({
+        workspace_id: 'other',
+        id: 'them',
+        kind: 'user',
+        name: 'T',
+        workspace_role: 'owner',
+      })
       .execute()
-    expect(elsewhere).toEqual([])
+    await db
+      .insertInto('folder')
+      .values({
+        workspace_id: 'other',
+        id: BUILD_HUB.id,
+        hub_id: BUILD_HUB.id,
+        parent_id: null,
+        name: 'Theirs',
+        color: 'blue',
+        id_prefix: 'BLD',
+        item_count: 1,
+        next_seq: 2,
+      })
+      .execute()
+    await db
+      .insertInto('item')
+      .values({
+        workspace_id: 'other',
+        id: 'gh-1',
+        hub_id: BUILD_HUB.id,
+        folder_id: BUILD_HUB.id,
+        seq_id: 1,
+        values: JSON.stringify({ [ATTR.title]: 'Theirs' }),
+        updated_by: 'them',
+      })
+      .execute()
+    const snapshot = async () => ({
+      workspace: await db.selectFrom('workspace').selectAll().where('id', '=', 'other').execute(),
+      folders: await db
+        .selectFrom('folder')
+        .selectAll()
+        .where('workspace_id', '=', 'other')
+        .execute(),
+      items: await db.selectFrom('item').selectAll().where('workspace_id', '=', 'other').execute(),
+      revisions: await db
+        .selectFrom('revision')
+        .selectAll()
+        .where('workspace_id', '=', 'other')
+        .execute(),
+    })
+    const before = await snapshot()
+
+    // Create, then update, so both write paths run against the colliding ID.
+    expect((await importIssues(db, [issue(1)])).created).toBe(1)
+    expect((await importIssues(db, [issue(1, { title: 'Renamed' })])).updated).toBe(1)
+
+    expect(await snapshot()).toEqual(before)
+    expect((await getItem(db, WS, 'gh-1')).values[ATTR.title]).toBe('Renamed')
   })
 })
+
+/** Resolves once a session in this test database is waiting on a lock. */
+async function waitForLockWait(): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const { rows } = await sql<{ waiting: number }>`
+      SELECT count(*)::int AS waiting FROM pg_stat_activity
+      WHERE datname = current_database() AND wait_event_type = 'Lock'`.execute(db)
+    if ((rows[0]?.waiting ?? 0) > 0) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error('The importer never waited on the row lock')
+}

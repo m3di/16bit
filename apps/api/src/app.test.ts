@@ -146,6 +146,14 @@ async function hubCount(id: string): Promise<number> {
 const revisions = () =>
   db.selectFrom('revision').selectAll().where('workspace_id', '=', 'w1').orderBy('seq').execute()
 
+/** Every w2 row the item routes could write to. Compared before and after to prove isolation. */
+const w2Rows = async () => ({
+  workspace: await db.selectFrom('workspace').selectAll().where('id', '=', 'w2').execute(),
+  folders: await db.selectFrom('folder').selectAll().where('workspace_id', '=', 'w2').execute(),
+  items: await db.selectFrom('item').selectAll().where('workspace_id', '=', 'w2').execute(),
+  revisions: await db.selectFrom('revision').selectAll().where('workspace_id', '=', 'w2').execute(),
+})
+
 describe('health', () => {
   it('answers without auth when the database is up', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
@@ -227,6 +235,75 @@ describe('workspaces and hubs', () => {
     expect(hub.folders.map((f) => f.id)).toEqual(['bugs'])
     expect(hub.attributes.map((a) => a.id).sort()).toEqual(['points', 'stage', 'title'])
     expect(hub.folderAttributes.filter((fa) => fa.folderId === 'build')).toHaveLength(3)
+    expect(hub.truncated).toEqual({ folders: false, attributes: false, folderAttributes: false })
+  })
+
+  it('says which lists were cut off at the cap', async () => {
+    const describeBuild = async () => {
+      const res = await request('GET', '/v1/workspaces/w1/hubs/build')
+      return hubDescriptionSchema.parse(res.json())
+    }
+    await app.close()
+    app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR, maxHubEntries: 1 })
+    // build has 1 subfolder, 3 attributes and 4 folder attributes: only attributes exceed 1.
+    const atCap = await describeBuild()
+    expect(atCap.folders).toHaveLength(1)
+    expect(atCap.attributes).toHaveLength(1)
+    expect(atCap.folderAttributes).toHaveLength(4)
+    expect(atCap.truncated).toEqual({ folders: false, attributes: true, folderAttributes: false })
+
+    await db
+      .insertInto('folder')
+      .values({
+        workspace_id: 'w1',
+        id: 'tasks',
+        hub_id: 'build',
+        parent_id: 'build',
+        name: 'Tasks',
+        color: 'blue',
+        id_prefix: 'BLD',
+      })
+      .execute()
+    // Four more attributes on build, two on tasks: 7 + 1 (bugs) + 2 (tasks) = 10 folder
+    // attributes, exactly the cap of 10 (maxHubEntries * 10). A third on tasks goes over.
+    const extra = ['a1', 'a2', 'a3', 'a4']
+    const text = (id: string) => ({
+      workspace_id: 'w1',
+      id,
+      hub_id: 'build',
+      name: id,
+      type: 'text' as const,
+      config: {},
+    })
+    await db.insertInto('attribute').values(extra.map(text)).execute()
+    const fa = (folder_id: string, attribute_id: string, position: number) => ({
+      workspace_id: 'w1',
+      hub_id: 'build',
+      folder_id,
+      attribute_id,
+      position,
+      required: false,
+    })
+    await db
+      .insertInto('folder_attribute')
+      .values([
+        ...extra.map((id, i) => fa('build', id, 3 + i)),
+        fa('tasks', 'title', 0),
+        fa('tasks', 'points', 1),
+      ])
+      .execute()
+    const faAtCap = await describeBuild()
+    expect(faAtCap.folderAttributes).toHaveLength(10)
+    expect(faAtCap.truncated.folderAttributes).toBe(false)
+
+    await db
+      .insertInto('folder_attribute')
+      .values(fa('tasks', 'stage', 2))
+      .execute()
+    const over = await describeBuild()
+    expect(over.folders.map((f) => f.id)).toEqual(['bugs'])
+    expect(over.folderAttributes).toHaveLength(10)
+    expect(over.truncated).toEqual({ folders: true, attributes: true, folderAttributes: true })
   })
 
   it('returns 404 for a folder that is not a hub, or a missing hub', async () => {
@@ -330,11 +407,13 @@ describe('create item', () => {
   })
 
   it('cannot create in another workspace’s folder', async () => {
+    const before = await w2Rows()
     const res = await request('POST', '/v1/workspaces/w2/items', {
       folderId: 'secret',
       values: {},
     })
     expect(res.statusCode).toBe(404)
+    expect(await w2Rows()).toEqual(before)
   })
 })
 
@@ -366,6 +445,32 @@ describe('patch item', () => {
       version: 2,
       patch: { op: 'update', values: { title: 'New', points: null } },
     })
+  })
+
+  it('clears only top-level nulls and keeps nested nulls', async () => {
+    const item = await create({ title: 'Old', points: 2 })
+    // No M0 type has nested values, so a nested value is written directly, as a later type
+    // (rich text, for example) would store it.
+    const nested = { blocks: [{ text: 'a', mark: null }], meta: { owner: null } }
+    await db
+      .updateTable('item')
+      .set({ values: JSON.stringify({ title: 'Old', points: 2, doc: nested }) })
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', item.id)
+      .execute()
+    const res = await request('PATCH', `/v1/workspaces/w1/items/${item.id}`, {
+      version: 1,
+      values: { title: 'New', points: null },
+    })
+    expect(res.statusCode).toBe(200)
+    // Read the row: the response schema only knows M0's flat value types.
+    const row = await db
+      .selectFrom('item')
+      .select('values')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', item.id)
+      .executeTakeFirstOrThrow()
+    expect(row.values).toEqual({ title: 'New', doc: nested })
   })
 
   it('returns 409 with the current item on a stale version, and writes nothing', async () => {
@@ -452,6 +557,87 @@ describe('delete item', () => {
     expect((await request('DELETE', '/v1/workspaces/w1/items/missing?version=1')).statusCode).toBe(
       404,
     )
+  })
+})
+
+describe('workspace isolation', () => {
+  /** A w2 item with the given ID, written directly: the caller cannot reach w2 through the API. */
+  async function foreignItem(id: string): Promise<void> {
+    await db
+      .insertInto('item')
+      .values({
+        workspace_id: 'w2',
+        id,
+        hub_id: 'secret',
+        folder_id: 'secret',
+        seq_id: 1,
+        values: JSON.stringify({ title: 'Theirs' }),
+        updated_by: 'someone',
+      })
+      .execute()
+  }
+
+  const foreignRow = (id: string) =>
+    db
+      .selectFrom('item')
+      .select(['values', 'version'])
+      .where('workspace_id', '=', 'w2')
+      .where('id', '=', id)
+      .executeTakeFirst()
+
+  it('returns 404 on get, patch and delete of another workspace’s item', async () => {
+    await foreignItem('foreign')
+    const before = await foreignRow('foreign')
+    const w2Before = await w2Rows()
+    for (const ws of ['w1', 'w2']) {
+      const url = `/v1/workspaces/${ws}/items/foreign`
+      expect((await request('GET', url)).statusCode, `GET ${ws}`).toBe(404)
+      const patch = await request('PATCH', url, { version: 1, values: { title: 'Mine' } })
+      expect(patch.statusCode, `PATCH ${ws}`).toBe(404)
+      expect((await request('DELETE', `${url}?version=1`)).statusCode, `DELETE ${ws}`).toBe(404)
+    }
+    expect(await foreignRow('foreign')).toEqual(before)
+    expect(await revisions()).toHaveLength(0)
+    expect(await w2Rows()).toEqual(w2Before)
+  })
+
+  it('touches only its own workspace’s item when IDs collide', async () => {
+    const item = await create({ title: 'Ours' })
+    await foreignItem(item.id)
+    const before = await foreignRow(item.id)
+    const w2Before = await w2Rows()
+    const url = `/v1/workspaces/w1/items/${item.id}`
+    expect((await request('GET', url)).json()).toMatchObject({ values: { title: 'Ours' } })
+    const patched = await request('PATCH', url, { version: 1, values: { title: 'Two' } })
+    expect(patched.statusCode).toBe(200)
+    expect((await request('DELETE', `${url}?version=2`)).statusCode).toBe(204)
+    expect(await foreignRow(item.id)).toEqual(before)
+    expect(await w2Rows()).toEqual(w2Before)
+  })
+})
+
+describe('error status codes', () => {
+  it('keeps 413 for a body over the limit', async () => {
+    const huge = 'x'.repeat(2 * 1024 * 1024)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/workspaces/w1/items',
+      headers: { ...auth, 'content-type': 'application/json' },
+      payload: JSON.stringify({ folderId: 'build', values: { title: huge } }),
+    })
+    expect(res.statusCode).toBe(413)
+    expect(res.json()).toMatchObject({ error: 'invalid_request' })
+  })
+
+  it('keeps 415 for an unsupported content type', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/workspaces/w1/items',
+      headers: { ...auth, 'content-type': 'application/xml' },
+      payload: '<item/>',
+    })
+    expect(res.statusCode).toBe(415)
+    expect(res.json()).toMatchObject({ error: 'invalid_request' })
   })
 })
 

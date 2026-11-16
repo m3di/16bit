@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { ItemValues, SelectOption } from '@16bit/core'
+import type { ItemValues, SelectOption, ValueError } from '@16bit/core'
 import type { Kysely } from 'kysely'
 import { z } from 'zod'
 import type { Database } from './db/database.ts'
@@ -66,13 +66,38 @@ export type GhIssue = z.infer<typeof ghIssueSchema>
 /** Upper bound on issues read per run. Hitting it is reported, never silently truncated. */
 export const ISSUE_LIMIT = 1000
 
-/** Runs `gh issue list` and validates its output. `repo` is `owner/name`; omitted, gh uses the cwd. */
+/** Runs `gh issue list` and parses its output. `repo` is `owner/name`; omitted, gh uses the cwd. */
 export async function fetchIssues(repo?: string): Promise<GhIssue[]> {
   const args = ['issue', 'list', '--state', 'all', '--limit', String(ISSUE_LIMIT)]
   args.push('--json', 'number,title,state,url,labels,milestone')
   if (repo) args.push('--repo', repo)
   const { stdout } = await promisify(execFile)('gh', args, { maxBuffer: 64 * 1024 * 1024 })
-  return z.array(ghIssueSchema).parse(JSON.parse(stdout))
+  return parseIssues(stdout)
+}
+
+/**
+ * Parses the JSON printed by `gh issue list --json`. Throws one readable error naming the
+ * first bad field, so a gh upgrade or a wrong flag fails the run before anything is written.
+ */
+export function parseIssues(stdout: string): GhIssue[] {
+  let raw: unknown
+  try {
+    raw = JSON.parse(stdout)
+  } catch {
+    throw new Error('gh output is not JSON')
+  }
+  const result = z.array(ghIssueSchema).safeParse(raw)
+  if (!result.success) {
+    const issue = result.error.issues[0]
+    const path = issue?.path.length ? `[${issue.path.join('.')}] ` : ''
+    throw new Error(`gh output is not a list of issues: ${path}${issue?.message ?? 'invalid'}`)
+  }
+  const seen = new Set<number>()
+  for (const { number } of result.data) {
+    if (seen.has(number)) throw new Error(`gh output lists issue #${String(number)} twice`)
+    seen.add(number)
+  }
+  return result.data
 }
 
 export const itemIdFor = (issue: Pick<GhIssue, 'number'>): string => `gh-${String(issue.number)}`
@@ -176,12 +201,38 @@ export async function ensureBuildHub(db: Kysely<Database>, ownerId: string): Pro
   })
 }
 
+/** An issue the hub rejected. The rest of the run carries on; the CLI exits non-zero. */
+export interface ImportFailure {
+  issue: number
+  code: 'conflict' | 'invalid_values'
+  message: string
+}
+
 export interface ImportResult {
   created: number
   updated: number
   unchanged: number
   /** Issue numbers whose item was deleted locally. IDs are never reused, so they stay deleted. */
   skipped: number[]
+  failed: ImportFailure[]
+}
+
+/**
+ * Turns a per-issue rejection into a failure entry. Anything else (database down, missing hub)
+ * is not about one issue, so it is rethrown and stops the run.
+ */
+function toFailure(issue: GhIssue, error: unknown): ImportFailure {
+  if (!(error instanceof HttpError)) throw error
+  if (error.code === 'conflict') {
+    // Someone wrote the item between our read and our write; the next run picks it up.
+    return { issue: issue.number, code: 'conflict', message: error.message }
+  }
+  if (error.code === 'invalid_values') {
+    const errors = (error.extra['errors'] ?? []) as ValueError[]
+    const detail = errors.map((e) => `${e.attributeId}: ${e.message}`).join('; ')
+    return { issue: issue.number, code: 'invalid_values', message: detail || error.message }
+  }
+  throw error
 }
 
 /** Upserts one item per issue, matched by item ID `gh-<number>`. Writes only what changed. */
@@ -190,7 +241,7 @@ export async function importIssues(
   issues: readonly GhIssue[],
 ): Promise<ImportResult> {
   const ws = BUILD_WORKSPACE.id
-  const result: ImportResult = { created: 0, updated: 0, unchanged: 0, skipped: [] }
+  const result: ImportResult = { created: 0, updated: 0, unchanged: 0, skipped: [], failed: [] }
 
   // Oldest first, so the hub's sequence numbers (BLD-1, BLD-2, ...) follow issue order.
   for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
@@ -208,8 +259,11 @@ export async function importIssues(
         await createItem(db, ws, IMPORT_ACTOR.id, { id, folderId: BUILD_HUB.id, values })
         result.created++
       } catch (error) {
-        if (!(error instanceof HttpError && error.code === 'id_taken')) throw error
-        result.skipped.push(issue.number)
+        if (error instanceof HttpError && error.code === 'id_taken') {
+          result.skipped.push(issue.number)
+        } else {
+          result.failed.push(toFailure(issue, error))
+        }
       }
       continue
     }
@@ -221,9 +275,12 @@ export async function importIssues(
       result.unchanged++
       continue
     }
-    // A concurrent edit makes this throw a conflict; the next run picks the change up again.
-    await patchItem(db, ws, IMPORT_ACTOR.id, id, { version: current.version, values: changed })
-    result.updated++
+    try {
+      await patchItem(db, ws, IMPORT_ACTOR.id, id, { version: current.version, values: changed })
+      result.updated++
+    } catch (error) {
+      result.failed.push(toFailure(issue, error))
+    }
   }
   return result
 }

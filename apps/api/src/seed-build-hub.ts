@@ -24,14 +24,19 @@ try {
   }
   await migrateToLatest(db)
   await ensureBuildHub(db, ownerId)
-  const { created, updated, unchanged, skipped } = await importIssues(db, issues)
+  const { created, updated, unchanged, skipped, failed } = await importIssues(db, issues)
   console.log(
     `seed:build-hub: ${String(issues.length)} issues, ${String(created)} created, ` +
-      `${String(updated)} updated, ${String(unchanged)} unchanged; ` +
+      `${String(updated)} updated, ${String(unchanged)} unchanged, ${String(failed.length)} failed; ` +
       `hub has ${String(await buildHubItemCount(db))} items`,
   )
   if (skipped.length > 0) {
     console.log(`seed:build-hub: deleted locally, not re-imported: #${skipped.join(', #')}`)
+  }
+  if (failed.length > 0) {
+    console.error(`seed:build-hub: ${String(failed.length)} issues not imported:`)
+    for (const f of failed) console.error(`  #${String(f.issue)} ${f.code}: ${f.message}`)
+    process.exitCode = 1
   }
 } catch (error) {
   console.error(`seed:build-hub: ${(error as Error).message}`)

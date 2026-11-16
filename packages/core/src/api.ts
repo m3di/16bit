@@ -49,6 +49,12 @@ export const hubDescriptionSchema = z.strictObject({
   attributes: z.array(attributeSchema),
   /** Which attributes each folder shows, in `position` order per folder. */
   folderAttributes: z.array(folderAttributeSchema),
+  /** Each list is capped by the server. `true` means that list was cut off at the cap. */
+  truncated: z.strictObject({
+    folders: z.boolean(),
+    attributes: z.boolean(),
+    folderAttributes: z.boolean(),
+  }),
 })
 export type HubDescription = z.infer<typeof hubDescriptionSchema>
 
