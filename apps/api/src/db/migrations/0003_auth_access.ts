@@ -58,6 +58,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       workspace_role  text        NOT NULL
         CHECK (workspace_role IN ('owner', 'admin', 'member', 'viewer', 'finance')),
       created_by      text        NOT NULL,
+      created_at      timestamptz NOT NULL DEFAULT now(),
       expires_at      timestamptz NOT NULL,
       used_at         timestamptz,
       PRIMARY KEY (workspace_id, id),
@@ -75,11 +76,14 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       principal_id    text        NOT NULL,
       principal_kind  text        NOT NULL DEFAULT 'agent' CHECK (principal_kind = 'agent'),
       secret_hash     text        NOT NULL,
+      created_by      text        NOT NULL,
+      created_at      timestamptz NOT NULL DEFAULT now(),
       expires_at      timestamptz,
       revoked_at      timestamptz,
       PRIMARY KEY (workspace_id, principal_id),
       FOREIGN KEY (workspace_id, principal_id, principal_kind)
-        REFERENCES principal (workspace_id, id, kind)
+        REFERENCES principal (workspace_id, id, kind),
+      FOREIGN KEY (workspace_id, created_by) REFERENCES principal (workspace_id, id)
     );
     -- Lookup without a workspace: resolving a bearer key to its principal, workspace and hub.
     CREATE UNIQUE INDEX agent_key_secret_hash_key ON agent_key (secret_hash);

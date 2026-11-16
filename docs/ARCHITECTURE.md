@@ -41,8 +41,9 @@ session          (id_hash, account_id, created_at, last_seen_at, expires_at) -- 
 workspace        (id, name, created_at, next_revision_seq, next_access_seq)
 principal        (workspace_id, id, kind,           -- 'user' | 'agent'
                   name, workspace_role, account_id) -- account_id for users only
-invite           (workspace_id, id, token_hash, workspace_role, created_by, expires_at, used_at)
-agent_key        (workspace_id, principal_id, secret_hash, expires_at, revoked_at)  -- one agent principal per key (D47)
+invite           (workspace_id, id, token_hash, workspace_role, created_by, created_at, expires_at, used_at)
+agent_key        (workspace_id, principal_id, secret_hash, created_by, created_at,
+                  expires_at, revoked_at)  -- one agent principal per key; no hub or role (D47)
 access_log       (workspace_id, seq, actor, action, target, detail jsonb, at)       -- grants, roles, keys, members (D48)
 folder           (workspace_id, id, hub_id, parent_id,   -- hub: parent_id is null, hub_id = id
                   name, color, id_prefix, item_count, version, next_seq)

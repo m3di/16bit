@@ -236,6 +236,16 @@ describe('auth and access constraints', () => {
           account_id: 'acc1',
         })
         .execute()
+      const rows = await db
+        .selectFrom('principal')
+        .select(['workspace_id', 'id', 'workspace_role'])
+        .where('account_id', '=', 'acc1')
+        .orderBy('workspace_id')
+        .execute()
+      expect(rows).toEqual([
+        { workspace_id: 'w1', id: 'p1', workspace_role: 'owner' },
+        { workspace_id: 'w2', id: 'p1', workspace_role: 'viewer' },
+      ])
     })
 
     it('rejects an unknown account', async () => {
@@ -263,6 +273,16 @@ describe('auth and access constraints', () => {
 
     it('accepts a valid invite and rejects a reused token hash', async () => {
       await invite()
+      const row = await db.selectFrom('invite').selectAll().executeTakeFirstOrThrow()
+      expect(row).toMatchObject({
+        id: 'i1',
+        token_hash: 't1',
+        workspace_role: 'member',
+        created_by: 'p1',
+        used_at: null,
+      })
+      expect(row.created_at).toBeInstanceOf(Date)
+      expect(Math.abs(row.created_at.getTime() - Date.now())).toBeLessThan(60_000)
       await expect(invite({ id: 'i2' })).rejects.toThrow(/invite_token_hash_key/)
     })
 
@@ -285,12 +305,36 @@ describe('auth and access constraints', () => {
           workspace_id: 'w1',
           principal_id: 'bot',
           secret_hash: 'k1',
+          created_by: 'p1',
           expires_at: null,
           revoked_at: null,
         })
         .execute()
       const key = await db.selectFrom('agent_key').selectAll().executeTakeFirstOrThrow()
-      expect(key).toMatchObject({ principal_kind: 'agent', expires_at: null, revoked_at: null })
+      expect(key).toMatchObject({
+        principal_kind: 'agent',
+        created_by: 'p1',
+        expires_at: null,
+        revoked_at: null,
+      })
+      expect(key.created_at).toBeInstanceOf(Date)
+      expect(Math.abs(key.created_at.getTime() - Date.now())).toBeLessThan(60_000)
+    })
+
+    it('rejects an unknown creator', async () => {
+      await expect(
+        db
+          .insertInto('agent_key')
+          .values({
+            workspace_id: 'w1',
+            principal_id: 'bot',
+            secret_hash: 'k1',
+            created_by: 'nope',
+            expires_at: null,
+            revoked_at: null,
+          })
+          .execute(),
+      ).rejects.toThrow(/agent_key_workspace_id_created_by_fkey/)
     })
 
     it('rejects a key for a person', async () => {
@@ -301,13 +345,14 @@ describe('auth and access constraints', () => {
             workspace_id: 'w1',
             principal_id: 'p1',
             secret_hash: 'k1',
+            created_by: 'p1',
             expires_at: null,
             revoked_at: null,
           })
           .execute(),
       ).rejects.toThrow(/foreign key/)
       await expect(
-        sql`INSERT INTO agent_key (workspace_id, principal_id, principal_kind, secret_hash) VALUES ('w1', 'p1', 'user', 'k1')`.execute(
+        sql`INSERT INTO agent_key (workspace_id, principal_id, principal_kind, secret_hash, created_by) VALUES ('w1', 'p1', 'user', 'k1', 'p1')`.execute(
           db,
         ),
       ).rejects.toThrow(/agent_key_principal_kind_check/)
@@ -331,6 +376,7 @@ describe('auth and access constraints', () => {
             workspace_id: 'w1',
             principal_id,
             secret_hash,
+            created_by: 'p1',
             expires_at: null,
             revoked_at: null,
           })
@@ -356,6 +402,16 @@ describe('auth and access constraints', () => {
     it('accepts grants on several hubs for a person', async () => {
       await grant('h1', 'p1', 'hub_admin')
       await grant('h2', 'p1', 'viewer')
+      const rows = await db
+        .selectFrom('hub_grant')
+        .select(['hub_id', 'principal_kind', 'hub_role'])
+        .where('principal_id', '=', 'p1')
+        .orderBy('hub_id')
+        .execute()
+      expect(rows).toEqual([
+        { hub_id: 'h1', principal_kind: 'user', hub_role: 'hub_admin' },
+        { hub_id: 'h2', principal_kind: 'user', hub_role: 'viewer' },
+      ])
     })
 
     it('rejects a grant on a folder that is not a hub', async () => {

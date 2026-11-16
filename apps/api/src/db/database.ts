@@ -55,6 +55,7 @@ export interface InviteTable {
   token_hash: string
   workspace_role: WorkspaceRole
   created_by: string
+  created_at: Timestamp
   expires_at: Timestamp
   used_at: Timestamp | null
 }
@@ -65,6 +66,8 @@ export interface AgentKeyTable {
   principal_id: string
   principal_kind: Generated<'agent'>
   secret_hash: string
+  created_by: string
+  created_at: Timestamp
   expires_at: Timestamp | null
   revoked_at: Timestamp | null
 }
