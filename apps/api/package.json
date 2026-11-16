@@ -1,0 +1,16 @@
+{
+  "name": "@16bit/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.ts",
+    "start": "node src/server.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@16bit/core": "workspace:*",
+    "fastify": "5.12.8"
+  }
+}
