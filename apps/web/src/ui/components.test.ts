@@ -55,6 +55,12 @@ describe('components', () => {
     expect(html).toContain('aria-label="Size: 3 of 4"')
   })
 
+  it('SizeMeter fills no squares for an empty hub', async () => {
+    const html = await render(SizeMeter, { count: 0 })
+    expect(html).toContain('aria-label="Size: 0 of 4"')
+    expect(html).not.toContain('background')
+  })
+
   it.each([
     ['loading', 'role="status"'],
     ['empty', 'Nothing here yet'],

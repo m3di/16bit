@@ -20,6 +20,7 @@ const tokens = [
   'surface',
   'line',
   'line2',
+  'line3',
   'ink',
   'ink2',
   'ink3',
@@ -44,7 +45,7 @@ const roles = [
   { value: 'owner', label: 'Owner', disabled: true },
 ]
 const avatarIds = ['sara', 'tomas', 'qa-agent', 'dana', 'kofi', 'backend-agent', 'u_01', 'u_02']
-const counts = [0, 7, 38, 412, 1280, 2345]
+const counts = [0, 1, 7, 38, 412, 1280, 2345]
 </script>
 
 <template>

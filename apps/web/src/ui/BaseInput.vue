@@ -50,7 +50,7 @@ const describedBy = computed(
       :class="[
         'box-border min-h-8 w-full rounded-control border bg-bg px-2 text-ink placeholder:text-ink3',
         'disabled:cursor-not-allowed disabled:bg-surface disabled:text-ink3',
-        error ? 'border-danger' : 'border-line2',
+        error ? 'border-danger' : 'border-line3',
         mono ? 'font-mono text-secondary' : 'text-body',
       ]"
     />

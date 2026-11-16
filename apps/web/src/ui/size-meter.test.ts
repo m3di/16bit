@@ -3,7 +3,8 @@ import { sizeLevel } from './size-meter.ts'
 
 describe('sizeLevel', () => {
   it.each([
-    [0, 1],
+    [0, 0],
+    [0.5, 0],
     [1, 1],
     [9, 1],
     [10, 2],
@@ -13,12 +14,13 @@ describe('sizeLevel', () => {
     [1000, 4],
     [1280, 4],
     [5_000_000, 4],
-  ])('%i items fill %i squares', (count, level) => {
+  ])('%d items fill %i squares', (count, level) => {
     expect(sizeLevel(count)).toBe(level)
   })
 
-  it('treats invalid counts as under 10', () => {
-    expect(sizeLevel(-5)).toBe(1)
-    expect(sizeLevel(Number.NaN)).toBe(1)
+  it('treats invalid counts as empty', () => {
+    expect(sizeLevel(-5)).toBe(0)
+    expect(sizeLevel(Number.NaN)).toBe(0)
+    expect(sizeLevel(Number.POSITIVE_INFINITY)).toBe(0)
   })
 })

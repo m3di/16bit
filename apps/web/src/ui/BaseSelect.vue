@@ -55,7 +55,7 @@ const describedBy = computed(
           'box-border w-full cursor-pointer appearance-none rounded-control border bg-bg pr-7 pl-2 text-body text-ink',
           'disabled:cursor-not-allowed disabled:bg-surface disabled:text-ink3',
           size === 'sm' ? 'min-h-7' : 'min-h-8',
-          error ? 'border-danger' : 'border-line2',
+          error ? 'border-danger' : 'border-line3',
         ]"
       >
         <option v-for="o in options" :key="o.value" :value="o.value" :disabled="o.disabled">

@@ -30,9 +30,6 @@ const TEXT = 4.5
 const NON_TEXT = 3
 const textTokens = ['ink', 'ink2', 'ink3', 'accent', 'success', 'warning', 'danger']
 const surfaces = ['bg', 'surface', 'selected']
-// Base palette values fixed by docs/DESIGN.md that are below 3:1 on the light background.
-// They are decorative next to a text label. Raised with the maintainer on #8.
-const lowContrastBase: Record<string, string[]> = { light: ['yellow', 'grey'], dark: [] }
 
 describe.each(['light', 'dark'] as const)('%s theme tokens', (name) => {
   const v = themeVars(name)
@@ -71,8 +68,11 @@ describe.each(['light', 'dark'] as const)('%s theme tokens', (name) => {
     }
   })
 
-  it('lists exactly the palette colours below 3:1 on the page', () => {
-    const low = PALETTE.filter((c) => contrast(get(`pal-${c}`), get('bg')) < NON_TEXT)
-    expect(low).toEqual(lowContrastBase[name])
+  it.each([...PALETTE])('%s base colour is at least 3:1 on the page', (color) => {
+    expect(contrast(get(`pal-${color}`), get('bg'))).toBeGreaterThanOrEqual(NON_TEXT)
+  })
+
+  it.each(surfaces)('input and select borders are at least 3:1 on --%s', (surface) => {
+    expect(contrast(get('line3'), get(surface))).toBeGreaterThanOrEqual(NON_TEXT)
   })
 })

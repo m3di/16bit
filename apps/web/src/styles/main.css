@@ -13,6 +13,7 @@
   --color-surface: var(--surface);
   --color-line: var(--line);
   --color-line2: var(--line2);
+  --color-line3: var(--line3);
   --color-ink: var(--ink);
   --color-ink2: var(--ink2);
   --color-ink3: var(--ink3);
@@ -89,7 +90,7 @@
   --text-secondary--line-height: 1.45;
   --text-body: 13px;
   --text-body--line-height: 1.45;
-  /* Hub and brand names in the Home mockup. Not in the DESIGN.md type table yet (see #8). */
+  /* Hub and brand names. */
   --text-name: 14px;
   --text-name--line-height: 1.45;
   --text-card-title: 18px;

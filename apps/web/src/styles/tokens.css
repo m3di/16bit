@@ -3,12 +3,7 @@
  * Components use these through Tailwind utilities (see main.css), never raw colour values.
  * A theme class can be set on any element, so both themes can render side by side (/kit).
  *
- * Changed from DESIGN.md to pass contrast (see tokens.test.ts and issue #8):
- *   light --ink3     #6B7280 -> #676D7B  (4.24:1 on --selected)
- *   light --success  #15803D -> #157E3C  (4.40:1 on --selected)
- *   light --warning  #D97706 -> #A55A05  (3.19:1 on --bg)
- * Added: --on-accent (text on an accent fill; white fails on the dark accent).
- * Added: palette base, tint, and ink per theme (DESIGN.md defines light base values only).
+ * Every value here is listed in docs/DESIGN.md. tokens.test.ts checks the contrast rules.
  */
 
 .theme-light {
@@ -17,6 +12,7 @@
   --surface: #fafafb;
   --line: #eceef1;
   --line2: #d9dce3;
+  --line3: #838995;
   --ink: #111318;
   --ink2: #4b5261;
   --ink3: #676d7b;
@@ -46,9 +42,9 @@
   --pal-lime: #65a30d;
   --pal-lime-tint: #e9f2dd;
   --pal-lime-ink: #4a7709;
-  --pal-yellow: #ca8a04;
-  --pal-yellow-tint: #f8efdc;
-  --pal-yellow-ink: #916303;
+  --pal-yellow: #a16207;
+  --pal-yellow-tint: #f2e9dc;
+  --pal-yellow-ink: #8c5f03;
   --pal-amber: #d97706;
   --pal-amber-tint: #faecdc;
   --pal-amber-ink: #a15804;
@@ -73,9 +69,9 @@
   --pal-ink: #111318;
   --pal-ink-tint: #dededf;
   --pal-ink-ink: #111318;
-  --pal-grey: #9ca3af;
-  --pal-grey-tint: #f1f2f4;
-  --pal-grey-ink: #696d75;
+  --pal-grey: #7c8390;
+  --pal-grey-tint: #edeef0;
+  --pal-grey-ink: #676b73;
 }
 
 .theme-dark {
@@ -84,6 +80,7 @@
   --surface: #161920;
   --line: #252a33;
   --line2: #343a46;
+  --line3: #666d7c;
   --ink: #eceef1;
   --ink2: #b4bac6;
   --ink3: #8e95a3;

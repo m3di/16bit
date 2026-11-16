@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw, type RouterHistory } from 'vue-router'
 import HomeView from './views/HomeView.vue'
 
-export const routes: RouteRecordRaw[] = [{ path: '/', name: 'home', component: HomeView }]
+const routes: RouteRecordRaw[] = [{ path: '/', name: 'home', component: HomeView }]
 
 // The component kit is a local tool. It is left out of production builds.
 if (import.meta.env.DEV) {
