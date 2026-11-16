@@ -19,7 +19,36 @@ A shared workspace that people and AI agents both read and write.
 
 ## Running it locally
 
-The quick-start commands are written by the build team during M0 and will appear here once `pnpm dev` works.
+You need Node.js 26 (see `.nvmrc`), pnpm 12, and either Docker or a Postgres you run yourself.
+
+```sh
+pnpm install
+docker compose up -d db   # Postgres 18 on 127.0.0.1:55432
+pnpm dev                  # migrations, then the API on :3000 and the web app on :5173
+```
+
+On its first run `pnpm dev` copies `.env.example` to `.env`. Every variable is documented there.
+
+**Without Docker.** Create a database in your own Postgres, set `DATABASE_URL` in `.env` (or export it in your shell, which takes precedence), and run `pnpm dev`.
+
+| Command | What it does |
+|---|---|
+| `pnpm dev` | Waits for Postgres, runs migrations, starts the API and the web dev server. Ctrl-C stops both. |
+| `pnpm db:migrate` | Runs migrations only. |
+| `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. |
+| `docker compose down` | Stops Postgres. Add `-v` to delete its data. |
+
+### Installing Node.js and pnpm
+
+Install Node.js 26 with a version manager that reads `.nvmrc` (`fnm use`, `nvm use`) or with `brew install node@26`. `pnpm install` refuses older versions.
+
+Install pnpm with its standalone installer, which needs no Node.js and does not go through corepack:
+
+```sh
+curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=12.21.0 sh -
+```
+
+Open a new shell, then check that `pnpm -v` prints `12.21.0`. If `pnpm` fails with a missing `bin/pnpm.cjs` or another module error, an older corepack or npm shim is earlier on your `PATH`: run `which -a pnpm`, then remove that shim (`corepack disable pnpm`, or `npm uninstall -g pnpm`).
 
 ## How this repository is built
 

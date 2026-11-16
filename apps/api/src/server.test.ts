@@ -1,0 +1,31 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+
+const server = fileURLToPath(new URL('./server.ts', import.meta.url))
+
+describe('server', () => {
+  it.each(['SIGTERM', 'SIGINT'] as const)('closes and exits 0 on %s', async (signal) => {
+    const child = spawn(process.execPath, [server], {
+      env: { ...process.env, PORT: '0', HOST: '127.0.0.1' },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+    let output = ''
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.on('data', (chunk: Buffer) => {
+        output += chunk.toString()
+        if (output.includes('api listening')) resolve()
+      })
+      child.once('exit', () => {
+        reject(new Error(`server exited before listening: ${output}`))
+      })
+    })
+
+    child.kill(signal)
+    const [code] = (await once(child, 'exit')) as [number | null]
+
+    expect(code).toBe(0)
+    expect(output).toContain(`api received ${signal}, closing`)
+  })
+})
