@@ -38,7 +38,14 @@ describe('api contracts', () => {
     expect(pageQuerySchema.parse({})).toEqual({ limit: 50 })
     expect(pageQuerySchema.parse({ limit: '10' }).limit).toBe(10)
     expect(pageQuerySchema.safeParse({ limit: '201' }).success).toBe(false)
-    expect(itemQuerySchema.parse({ from: 'f1' })).toEqual({ from: 'f1', limit: 50, cursor: null })
+    expect(itemQuerySchema.parse({ from: 'f1', limit: 50 })).toEqual({
+      from: 'f1',
+      where: null,
+      sort: [],
+      limit: 50,
+      cursor: null,
+    })
+    expect(itemQuerySchema.safeParse({ from: 'f1' }).success).toBe(false)
     expect(itemQuerySchema.safeParse({ from: 'f1', where: {} }).success).toBe(false)
   })
 
