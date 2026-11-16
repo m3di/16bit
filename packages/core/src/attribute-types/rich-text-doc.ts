@@ -3,17 +3,22 @@ import { z } from 'zod'
 // The closed node set for rich text values (D44). The shape is ProseMirror JSON, so the
 // Tiptap editor (docs/ARCHITECTURE.md) reads and writes it directly once it is limited to
 // these nodes and marks and their listed attributes. Anything else is refused, including
-// extra attributes such as a link's `target`, `rel` or `class`.
+// extra attributes such as a link's `target`, `rel` or `class`. It matches the set the
+// shared RichTextEditor and RichTextView were built for (#48).
 
 /** UTF-8 bytes of the value's JSON. Long-form text belongs in a document attribute (M2). */
 export const RICH_TEXT_MAX_BYTES = 65_536
-/** Node nesting, counting `doc` as 1. Allows lists nested about six levels deep. */
-export const RICH_TEXT_MAX_DEPTH = 16
-export const RICH_TEXT_HEADING_LEVELS = [1, 2, 3] as const
+/**
+ * Node nesting, counting `doc` as 1 and not counting inline nodes. A list and its item take
+ * two levels each, so this allows lists six deep, as the editor does.
+ */
+export const RICH_TEXT_MAX_DEPTH = 14
+/** Item titles are the page's h1 and h2, so headings inside a value start at 3 (#48). */
+export const RICH_TEXT_HEADING_LEVELS = [3, 4] as const
 export const RICH_TEXT_LINK_PROTOCOLS = ['http:', 'https:', 'mailto:'] as const
 
 export type RichTextMark =
-  { type: 'bold' | 'italic' | 'strike' | 'code' } | { type: 'link'; attrs: { href: string } }
+  { type: 'bold' | 'italic' | 'code' } | { type: 'link'; attrs: { href: string } }
 
 export interface RichTextText {
   type: 'text'
@@ -36,13 +41,10 @@ export interface RichTextHeading {
   attrs: { level: (typeof RICH_TEXT_HEADING_LEVELS)[number] }
   content?: RichTextInline[]
 }
-export interface RichTextBlockquote {
-  type: 'blockquote'
-  content: RichTextBlock[]
-}
 export interface RichTextListItem {
   type: 'listItem'
-  content: RichTextBlock[]
+  /** Starts with a paragraph, as ProseMirror's list schema requires. */
+  content: [RichTextParagraph, ...(RichTextParagraph | RichTextBulletList | RichTextOrderedList)[]]
 }
 export interface RichTextBulletList {
   type: 'bulletList'
@@ -55,21 +57,11 @@ export interface RichTextOrderedList {
 }
 export interface RichTextCodeBlock {
   type: 'codeBlock'
-  attrs?: { language: string | null }
   /** Plain text only: no marks, no hard breaks (newlines are kept in the text). */
   content?: { type: 'text'; text: string }[]
 }
-export interface RichTextHorizontalRule {
-  type: 'horizontalRule'
-}
 export type RichTextBlock =
-  | RichTextParagraph
-  | RichTextHeading
-  | RichTextBlockquote
-  | RichTextBulletList
-  | RichTextOrderedList
-  | RichTextCodeBlock
-  | RichTextHorizontalRule
+  RichTextParagraph | RichTextHeading | RichTextBulletList | RichTextOrderedList | RichTextCodeBlock
 
 export interface RichTextDoc {
   type: 'doc'
@@ -80,13 +72,11 @@ export interface RichTextDoc {
 export const RICH_TEXT_BLOCK_TYPES = [
   'paragraph',
   'heading',
-  'blockquote',
   'bulletList',
   'orderedList',
   'codeBlock',
-  'horizontalRule',
 ] as const
-export const RICH_TEXT_MARK_TYPES = ['bold', 'italic', 'strike', 'code', 'link'] as const
+export const RICH_TEXT_MARK_TYPES = ['bold', 'italic', 'code', 'link'] as const
 
 // Validation. Hand-written rather than a recursive Zod union: it stops at the depth cap before
 // recursing further, and names the exact path of the first problem.
@@ -183,6 +173,8 @@ function checkBlocks(nodes: unknown[], path: Path, depth: number) {
   for (const [i, node] of nodes.entries()) checkBlock(node, [...path, i], depth)
 }
 
+const LIST_ITEM_CHILDREN: readonly unknown[] = ['paragraph', 'bulletList', 'orderedList']
+
 function checkListItems(nodes: unknown[], path: Path, depth: number) {
   if (depth > RICH_TEXT_MAX_DEPTH) throw new Invalid(path, 'Nested too deeply')
   for (const [i, node] of nodes.entries()) {
@@ -191,7 +183,20 @@ function checkListItems(nodes: unknown[], path: Path, depth: number) {
       throw new Invalid(itemPath, 'Lists hold listItem nodes only')
     }
     keysOnly(node, ['type', 'content'], itemPath)
-    checkBlocks(list(node, 'content', itemPath, true), [...itemPath, 'content'], depth + 1)
+    const children = list(node, 'content', itemPath, true)
+    for (const [j, child] of children.entries()) {
+      const childPath = [...itemPath, 'content', j]
+      const type = isRecord(child) ? child.type : undefined
+      if (j === 0 ? type !== 'paragraph' : !LIST_ITEM_CHILDREN.includes(type)) {
+        throw new Invalid(
+          childPath,
+          j === 0
+            ? 'A list item starts with a paragraph'
+            : 'A list item holds paragraphs and lists only',
+        )
+      }
+      checkBlock(child, childPath, depth + 1)
+    }
   }
 }
 
@@ -211,25 +216,17 @@ function checkBlock(node: unknown, path: Path, depth: number): void {
       const a = attrs(node, path, true) ?? {}
       keysOnly(a, ['level'], [...path, 'attrs'])
       if (!(RICH_TEXT_HEADING_LEVELS as readonly unknown[]).includes(a.level)) {
-        throw new Invalid([...path, 'attrs', 'level'], 'Heading level must be 1, 2 or 3')
+        throw new Invalid([...path, 'attrs', 'level'], 'Heading level must be 3 or 4')
       }
       for (const [i, child] of list(node, 'content', path, false).entries()) {
         checkInline(child, [...content, i])
       }
       return
     }
-    case 'blockquote':
-      keysOnly(node, ['type', 'content'], path)
-      {
-        checkBlocks(list(node, 'content', path, true), content, depth + 1)
-        return
-      }
     case 'bulletList':
       keysOnly(node, ['type', 'content'], path)
-      {
-        checkListItems(list(node, 'content', path, true), content, depth + 1)
-        return
-      }
+      checkListItems(list(node, 'content', path, true), content, depth + 1)
+      return
     case 'orderedList': {
       keysOnly(node, ['type', 'attrs', 'content'], path)
       const a = attrs(node, path, false)
@@ -243,25 +240,13 @@ function checkBlock(node: unknown, path: Path, depth: number): void {
       return
     }
     case 'codeBlock': {
-      keysOnly(node, ['type', 'attrs', 'content'], path)
-      const a = attrs(node, path, false)
-      if (a) {
-        keysOnly(a, ['language'], [...path, 'attrs'])
-        const { language } = a
-        if (language !== null && !(typeof language === 'string' && language.length <= 32)) {
-          throw new Invalid([...path, 'attrs', 'language'], 'Expected a short string or null')
-        }
-      }
+      keysOnly(node, ['type', 'content'], path)
       for (const [i, child] of list(node, 'content', path, false).entries()) {
         if (!isRecord(child) || child.type !== 'text') {
           throw new Invalid([...content, i], 'Code blocks hold text only')
         }
         checkText(child, [...content, i], false)
       }
-      return
-    }
-    case 'horizontalRule': {
-      keysOnly(node, ['type'], path)
       return
     }
     default:
@@ -317,10 +302,6 @@ function blockLines(block: RichTextBlock): string[] {
       return [inlineText(block.content)]
     case 'codeBlock':
       return [(block.content ?? []).map((n) => n.text).join('')]
-    case 'horizontalRule':
-      return []
-    case 'blockquote':
-      return block.content.flatMap(blockLines)
     case 'bulletList':
     case 'orderedList':
       return block.content.flatMap((item) => item.content.flatMap(blockLines))
@@ -335,7 +316,6 @@ export function richTextPlainText(doc: RichTextDoc): string {
 const MARK_WRAP: Record<Exclude<RichTextMark['type'], 'link'>, string> = {
   bold: '**',
   italic: '*',
-  strike: '~~',
   code: '`',
 }
 
@@ -364,15 +344,7 @@ function markdownBlock(block: RichTextBlock): string[] {
     case 'heading':
       return [`${'#'.repeat(block.attrs.level)} ${markdownInline(block.content)}`]
     case 'codeBlock':
-      return [
-        `\`\`\`${block.attrs?.language ?? ''}`,
-        (block.content ?? []).map((n) => n.text).join(''),
-        '```',
-      ]
-    case 'horizontalRule':
-      return ['---']
-    case 'blockquote':
-      return markdownBlocks(block.content).map((line) => (line === '' ? '>' : `> ${line}`))
+      return ['```', (block.content ?? []).map((n) => n.text).join(''), '```']
     case 'bulletList':
     case 'orderedList': {
       const start = block.type === 'orderedList' ? (block.attrs?.start ?? 1) : 1

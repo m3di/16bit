@@ -202,13 +202,17 @@ describe('rich_text', () => {
   const li = (...content: unknown[]) => ({ type: 'listItem', content })
 
   const sample = doc(
-    { type: 'heading', attrs: { level: 2 }, content: [t('Plan')] },
+    { type: 'heading', attrs: { level: 3 }, content: [t('Plan')] },
     p(t('Ship '), t('M1', [{ type: 'bold' }]), t(' by '), t('Friday', [{ type: 'italic' }])),
-    { type: 'bulletList', content: [li(p(t('one'))), li(p(t('two')))] },
+    {
+      type: 'bulletList',
+      content: [
+        li(p(t('one')), { type: 'bulletList', content: [li(p(t('nested')))] }),
+        li(p(t('two'))),
+      ],
+    },
     { type: 'orderedList', attrs: { start: 3 }, content: [li(p(t('three')))] },
-    { type: 'blockquote', content: [p(t('quoted'))] },
-    { type: 'codeBlock', attrs: { language: 'ts' }, content: [t('const x = 1')] },
-    { type: 'horizontalRule' },
+    { type: 'codeBlock', content: [t('const x = 1')] },
     p(
       t('see '),
       t('docs', [{ type: 'link', attrs: { href: 'https://16bit.info' } }]),
@@ -237,10 +241,27 @@ describe('rich_text', () => {
     ['a repeated mark', doc(p(t('x', [{ type: 'bold' }, { type: 'bold' }]))), 'repeated'],
     ['empty text', doc(p(t(''))), 'non-empty string'],
     ['a block inline', doc(p(p(t('x')))), 'not allowed inline'],
+    ['a heading level 2', doc({ type: 'heading', attrs: { level: 2 } }), 'Heading level'],
+    ['a blockquote', doc({ type: 'blockquote', content: [p(t('x'))] }), 'not an allowed block'],
+    ['a horizontal rule', doc({ type: 'horizontalRule' }), 'not an allowed block'],
+    ['a strike mark', doc(p(t('x', [{ type: 'strike' }]))), 'Unknown mark'],
     [
-      'a heading level 4',
-      doc({ type: 'heading', attrs: { level: 4 }, content: [] }),
-      'Heading level',
+      'a code language',
+      doc({ type: 'codeBlock', attrs: { language: 'ts' } }),
+      'Unknown key "attrs"',
+    ],
+    [
+      'a list item without a leading paragraph',
+      doc({ type: 'bulletList', content: [li({ type: 'bulletList', content: [li(p(t('x')))] })] }),
+      'starts with a paragraph',
+    ],
+    [
+      'a heading in a list item',
+      doc({
+        type: 'bulletList',
+        content: [li(p(t('x')), { type: 'heading', attrs: { level: 3 } })],
+      }),
+      'paragraphs and lists only',
     ],
     [
       'marks in code',
@@ -262,11 +283,13 @@ describe('rich_text', () => {
   })
 
   it(`caps nesting at ${String(RICH_TEXT_MAX_DEPTH)} levels`, () => {
-    const nest = (levels: number): unknown =>
-      levels === 0 ? p(t('x')) : { type: 'blockquote', content: [nest(levels - 1)] }
-    // doc (1) + blockquotes + paragraph
-    expect(accepts(schema, doc(nest(RICH_TEXT_MAX_DEPTH - 2)))).toBe(true)
-    expect(firstMessage(schema, doc(nest(RICH_TEXT_MAX_DEPTH - 1)))).toContain('Nested too deeply')
+    const nest = (lists: number): unknown =>
+      lists === 0
+        ? p(t('x'))
+        : { type: 'bulletList', content: [li(p(t('x')), ...(lists > 1 ? [nest(lists - 1)] : []))] }
+    // Six lists deep, as the editor allows, and not seven.
+    expect(accepts(schema, doc(nest(6)))).toBe(true)
+    expect(firstMessage(schema, doc(nest(7)))).toContain('Nested too deeply')
   })
 
   it(`caps the document at ${String(RICH_TEXT_MAX_BYTES)} bytes of JSON`, () => {
@@ -287,7 +310,7 @@ describe('rich_text', () => {
 
   it('projects plain text for contains filters and is not sortable', () => {
     expect(richTextType.project(sample as RichTextDoc, {})).toEqual([
-      'Plan\nShip M1 by Friday\none\ntwo\nthree\nquoted\nconst x = 1\nsee docs\nend',
+      'Plan\nShip M1 by Friday\none\nnested\ntwo\nthree\nconst x = 1\nsee docs\nend',
     ])
     expect(richTextType.filterOperators).toEqual([
       'contains',
@@ -301,22 +324,19 @@ describe('rich_text', () => {
   it('renders Markdown for agents', () => {
     expect(richTextType.render(sample as RichTextDoc, {})).toBe(
       [
-        '## Plan',
+        '### Plan',
         '',
         'Ship **M1** by *Friday*',
         '',
         '- one',
+        '  - nested',
         '- two',
         '',
         '3. three',
         '',
-        '> quoted',
-        '',
-        '```ts',
+        '```',
         'const x = 1',
         '```',
-        '',
-        '---',
         '',
         'see [docs](https://16bit.info)  ',
         'end',

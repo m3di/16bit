@@ -19,7 +19,7 @@ const marks = {
     oneOf: [
       {
         type: 'object',
-        properties: { type: { enum: ['bold', 'italic', 'strike', 'code'] } },
+        properties: { type: { enum: ['bold', 'italic', 'code'] } },
         required: ['type'],
         additionalProperties: false,
       },
@@ -49,14 +49,18 @@ const node = (type: string, properties: Record<string, unknown> = {}, required: 
 })
 
 const inline = { $ref: '#/$defs/inline' }
-const block = { $ref: '#/$defs/block' }
+const paragraph = { $ref: '#/$defs/paragraph' }
+const list = { oneOf: [{ $ref: '#/$defs/bulletList' }, { $ref: '#/$defs/orderedList' }] }
 const listItems = { type: 'array', minItems: 1, items: { $ref: '#/$defs/listItem' } }
 
 /** The JSON Schema for agents. The depth and size caps are stated, not encoded. */
 const jsonSchema = {
   type: 'object',
-  description: `A rich text document (ProseMirror JSON) with block nodes ${RICH_TEXT_BLOCK_TYPES.join(', ')}. At most ${String(RICH_TEXT_MAX_BYTES)} bytes of JSON.`,
-  properties: { type: { const: 'doc' }, content: { type: 'array', items: block } },
+  description: `A rich text document (ProseMirror JSON) with block nodes ${RICH_TEXT_BLOCK_TYPES.join(', ')}. Headings are level 3 or 4. At most ${String(RICH_TEXT_MAX_BYTES)} bytes of JSON.`,
+  properties: {
+    type: { const: 'doc' },
+    content: { type: 'array', items: { $ref: '#/$defs/block' } },
+  },
   required: ['type', 'content'],
   additionalProperties: false,
   $defs: {
@@ -66,12 +70,36 @@ const jsonSchema = {
         node('hardBreak'),
       ],
     },
-    listItem: node('listItem', { content: { type: 'array', minItems: 1, items: block } }, [
-      'content',
-    ]),
+    paragraph: node('paragraph', { content: { type: 'array', items: inline } }),
+    bulletList: node('bulletList', { content: listItems }, ['content']),
+    orderedList: node(
+      'orderedList',
+      {
+        attrs: {
+          type: 'object',
+          properties: { start: { type: 'integer', minimum: 1 } },
+          required: ['start'],
+          additionalProperties: false,
+        },
+        content: listItems,
+      },
+      ['content'],
+    ),
+    listItem: node(
+      'listItem',
+      {
+        content: {
+          type: 'array',
+          minItems: 1,
+          prefixItems: [paragraph],
+          items: { oneOf: [paragraph, list] },
+        },
+      },
+      ['content'],
+    ),
     block: {
       oneOf: [
-        node('paragraph', { content: { type: 'array', items: inline } }),
+        paragraph,
         node(
           'heading',
           {
@@ -85,32 +113,13 @@ const jsonSchema = {
           },
           ['attrs'],
         ),
-        node('blockquote', { content: { type: 'array', minItems: 1, items: block } }, ['content']),
-        node('bulletList', { content: listItems }, ['content']),
-        node(
-          'orderedList',
-          {
-            attrs: {
-              type: 'object',
-              properties: { start: { type: 'integer', minimum: 1 } },
-              additionalProperties: false,
-            },
-            content: listItems,
-          },
-          ['content'],
-        ),
+        list,
         node('codeBlock', {
-          attrs: {
-            type: 'object',
-            properties: { language: { type: ['string', 'null'], maxLength: 32 } },
-            additionalProperties: false,
-          },
           content: {
             type: 'array',
             items: node('text', { text: { type: 'string', minLength: 1 } }, ['text']),
           },
         }),
-        node('horizontalRule'),
       ],
     },
   },
