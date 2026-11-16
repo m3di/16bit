@@ -1,0 +1,229 @@
+import { hubPageSchema, validateItemValues, workspacePageSchema, type Folder } from '@16bit/core'
+import type { FastifyInstance } from 'fastify'
+import { sql, type Kysely } from 'kysely'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { buildApp } from './app.ts'
+import { createDb, migrateToLatest, type Database } from './db/database.ts'
+import { createTestDatabase } from './db/test-database.ts'
+import { applySeed, demoSeed } from './demo-seed.ts'
+import { folderDefinitions } from './items.ts'
+
+// Integration tests: the demo seed against a fresh, migrated Postgres database. The seed is
+// applied once in beforeAll; the later tests run it again, so they depend on test order.
+
+const KEY = 'test-key'
+const ACTOR = 'dev-owner'
+const auth = { authorization: `Bearer ${KEY}` }
+
+let db: Kysely<Database>
+let drop: () => Promise<void>
+let app: FastifyInstance
+
+beforeAll(async () => {
+  const test = await createTestDatabase()
+  drop = test.drop
+  db = createDb(test.url)
+  await migrateToLatest(db)
+  await applySeed(db, { devPrincipalId: ACTOR })
+  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
+}, 120_000)
+
+afterAll(async () => {
+  await app.close()
+  await db.destroy()
+  await drop()
+})
+
+/** The SizeMeter steps in docs/DESIGN.md: 0, 1 to 9, under 100, under 1,000, 1,000 or more. */
+const sizeStep = (count: number): number =>
+  count === 0 ? 0 : count < 10 ? 1 : count < 100 ? 2 : count < 1000 ? 3 : 4
+
+async function hubs(workspaceId: string): Promise<Folder[]> {
+  const res = await app.inject({
+    method: 'GET',
+    url: `/v1/workspaces/${workspaceId}/hubs?limit=50`,
+    headers: auth,
+  })
+  expect(res.statusCode).toBe(200)
+  return hubPageSchema.parse(res.json()).items
+}
+
+/** Row counts per table, to prove a second run writes nothing. */
+async function tableCounts(): Promise<Record<string, number>> {
+  const tables = [
+    'workspace',
+    'principal',
+    'folder',
+    'attribute',
+    'folder_attribute',
+    'item',
+    'revision',
+  ] as const
+  const counts: Record<string, number> = {}
+  for (const table of tables) {
+    const { n } = await db
+      .selectFrom(table)
+      .select(sql<number>`count(*)::int`.as('n'))
+      .executeTakeFirstOrThrow()
+    counts[table] = n
+  }
+  return counts
+}
+
+describe('demo seed', () => {
+  it('creates two workspaces the dev key can see', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/workspaces', headers: auth })
+    expect(res.statusCode).toBe(200)
+    const ids = workspacePageSchema.parse(res.json()).items.map((w) => w.id)
+    expect(ids.sort()).toEqual(['acme', 'demo'])
+  })
+
+  it('has hubs at every size-meter step, with nested folders', async () => {
+    const all = [...(await hubs('demo')), ...(await hubs('acme'))]
+    expect(new Set(all.map((h) => sizeStep(h.itemCount)))).toEqual(new Set([0, 1, 2, 3, 4]))
+    // The first workspace alone shows every step, so one dashboard screen covers the meter.
+    const demo = await hubs('demo')
+    expect(new Set(demo.map((h) => sizeStep(h.itemCount)))).toEqual(new Set([0, 1, 2, 3, 4]))
+
+    const nested = await db
+      .selectFrom('folder as child')
+      .innerJoin('folder as parent', (j) =>
+        j
+          .onRef('parent.workspace_id', '=', 'child.workspace_id')
+          .onRef('parent.id', '=', 'child.parent_id'),
+      )
+      .select('child.id')
+      .where('child.workspace_id', '=', 'demo')
+      .whereRef('parent.id', '!=', 'parent.hub_id')
+      .execute()
+    expect(nested.map((f) => f.id)).toContain('product-triage')
+  })
+
+  it('keeps counters, seq ids, and the revision log consistent', async () => {
+    const mismatched = await sql<{ id: string }>`
+      SELECT f.id FROM folder f
+      WHERE f.item_count <> (
+        SELECT count(*) FROM item i
+        WHERE i.workspace_id = f.workspace_id
+          AND (CASE WHEN f.parent_id IS NULL THEN i.hub_id ELSE i.folder_id END) = f.id
+      )`.execute(db)
+    expect(mismatched.rows).toEqual([])
+
+    const ws = await db.selectFrom('workspace').select(['id', 'next_revision_seq']).execute()
+    for (const { id, next_revision_seq } of ws) {
+      const { n } = await db
+        .selectFrom('revision')
+        .select(sql<number>`count(*)::int`.as('n'))
+        .where('workspace_id', '=', id)
+        .executeTakeFirstOrThrow()
+      expect(next_revision_seq).toBe(n + 1)
+    }
+
+    const badSeq = await sql<{ id: string }>`
+      SELECT h.id FROM folder h
+      WHERE h.parent_id IS NULL
+        AND h.next_seq <> 1 + (SELECT count(*) FROM item i WHERE i.workspace_id = h.workspace_id AND i.hub_id = h.id)`.execute(
+      db,
+    )
+    expect(badSeq.rows).toEqual([])
+  })
+
+  it('makes every principal an author, and the dev principal an owner in each workspace', async () => {
+    const owners = await db
+      .selectFrom('principal')
+      .select('workspace_id')
+      .where('id', '=', ACTOR)
+      .where('workspace_role', '=', 'owner')
+      .execute()
+    expect(owners.map((o) => o.workspace_id).sort()).toEqual(['acme', 'demo'])
+
+    const authors = await db
+      .selectFrom('item')
+      .select('updated_by')
+      .distinct()
+      .where('workspace_id', '=', 'demo')
+      .execute()
+    expect(authors.map((a) => a.updated_by).sort()).toEqual([
+      'dev-owner',
+      'leo',
+      'mina',
+      'triage-bot',
+    ])
+  })
+
+  it('stores only values that pass the core contracts', async () => {
+    for (const ws of demoSeed(ACTOR)) {
+      for (const hub of ws.hubs) {
+        const items = await db
+          .selectFrom('item')
+          .select(['folder_id', 'values'])
+          .where('workspace_id', '=', ws.id)
+          .where('hub_id', '=', hub.id)
+          .limit(hub.items + 1)
+          .execute()
+        expect(items).toHaveLength(hub.items)
+        const definitions = new Map<string, Awaited<ReturnType<typeof folderDefinitions>>>()
+        for (const item of items) {
+          let defs = definitions.get(item.folder_id)
+          if (!defs) {
+            defs = await folderDefinitions(db, ws.id, item.folder_id)
+            definitions.set(item.folder_id, defs)
+          }
+          expect(validateItemValues(defs, item.values, { partial: false }).ok).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('writes nothing on a second run', async () => {
+    const before = await tableCounts()
+    const result = await applySeed(db, { devPrincipalId: ACTOR })
+    expect(result.itemsCreated).toBe(0)
+    expect(await tableCounts()).toEqual(before)
+  }, 60_000)
+
+  it('does not bring back an item deleted through the API', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/v1/workspaces/demo/items/hiring-0001?version=1',
+      headers: auth,
+    })
+    expect(res.statusCode).toBe(204)
+
+    const result = await applySeed(db, { devPrincipalId: ACTOR })
+    expect(result.itemsCreated).toBe(0)
+    const gone = await app.inject({
+      method: 'GET',
+      url: '/v1/workspaces/demo/items/hiring-0001',
+      headers: auth,
+    })
+    expect(gone.statusCode).toBe(404)
+    const hiring = (await hubs('demo')).find((h) => h.id === 'hiring')
+    expect(hiring?.itemCount).toBe(5)
+  }, 60_000)
+
+  it('fills in a workspace that is only partly seeded', async () => {
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .deleteFrom('revision')
+        .where('workspace_id', '=', 'acme')
+        .where('item_id', '=', 'events-0003')
+        .execute()
+      await trx
+        .deleteFrom('item')
+        .where('workspace_id', '=', 'acme')
+        .where('id', '=', 'events-0003')
+        .execute()
+      await trx
+        .updateTable('folder')
+        .set({ item_count: sql`item_count - 1` })
+        .where('workspace_id', '=', 'acme')
+        .where('id', '=', 'events')
+        .execute()
+    })
+    const result = await applySeed(db, { devPrincipalId: ACTOR })
+    expect(result.itemsCreated).toBe(1)
+    const events = (await hubs('acme')).find((h) => h.id === 'events')
+    expect(events?.itemCount).toBe(3)
+  }, 60_000)
+})
