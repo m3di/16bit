@@ -14,7 +14,11 @@ const router = () =>
     history: createMemoryHistory(),
     routes: [
       { path: '/', component: { render: () => null } },
-      { path: '/hubs/:id', name: 'hub', component: { render: () => null } },
+      {
+        path: '/w/:workspaceId/hubs/:hubId/:folderId?',
+        name: 'hub',
+        component: { render: () => null },
+      },
     ],
   })
 
@@ -62,9 +66,9 @@ describe('HubCard', () => {
       name: 'A',
       color: 'teal',
       count: 0,
-      to: { name: 'hub', params: { id: 'eng' } },
+      to: { name: 'hub', params: { workspaceId: 'w', hubId: 'eng' } },
     })
-    expect(html).toMatch(/^<a [^>]*href="\/hubs\/eng"/)
+    expect(html).toMatch(/^<a [^>]*href="\/w\/w\/hubs\/eng"/)
   })
 })
 
@@ -83,6 +87,7 @@ describe('WorkspaceSection', () => {
     expect(html).toContain('<h2 id="workspace-w"')
     expect(html).toContain('Parcel Tracker')
     expect(html.match(/data-hub-card/g)).toHaveLength(1)
+    expect(html).toMatch(/<a [^>]*href="\/w\/w\/hubs\/eng"/)
   })
 
   const states: [string, WorkspaceEntry['hubs'], string][] = [
