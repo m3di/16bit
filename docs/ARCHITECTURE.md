@@ -38,7 +38,7 @@ Every workspace-scoped table carries `workspace_id` as the leading column of its
 ```sql
 account          (id, email unique, password_hash, name, created_at)      -- installation-level (D46)
 session          (id_hash, account_id, created_at, last_seen_at, expires_at) -- installation-level
-workspace        (id, name, created_at, next_revision_seq)
+workspace        (id, name, created_at, next_revision_seq, next_access_seq)
 principal        (workspace_id, id, kind,           -- 'user' | 'agent'
                   name, workspace_role, account_id) -- account_id for users only
 invite           (workspace_id, id, token_hash, workspace_role, created_by, expires_at, used_at)
@@ -63,6 +63,7 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `item.values` is keyed by attribute ID.
 - A person has one `account` and one `principal` per workspace they belong to. An agent key is a `principal` of kind `agent` with workspace role `member` and exactly one `hub_grant` (D47); `agent_key` only holds its secret hash and lifecycle.
 - `item_index` is written in the same transaction as the item, only for attributes with `indexed = true`.
+- `access_log.seq` is taken from `workspace.next_access_seq` in the same transaction as the access change.
 - `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.
 - `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
@@ -126,7 +127,7 @@ Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE
 
 **M0 auth:** a single development API key from the environment, sent as a bearer token, mapped to a seeded owner. Real authentication, sessions, and agent keys arrive in M1.
 
-**M1 auth:** people sign in at `POST /v1/auth/login` and get a session cookie (D42); `POST /v1/auth/logout`, invite acceptance under `/v1/auth/invites/:token`, and `GET /v1/me` (the account and its workspaces, or, for an agent key, its workspace and hub) are the only routes besides `/health` outside `/v1/workspaces/:workspaceId` (D46, an exception to D40). Agent keys are bearer tokens. Passwords are reset only by the installation operator through a CLI command. Every request runs its queries in a transaction that sets the principal and workspace with `SET LOCAL` for row-level security.
+**M1 auth:** people sign in at `POST /v1/auth/login` and get a session cookie (D42); `POST /v1/auth/logout`, invite acceptance under `/v1/auth/invites/:token`, and `GET /v1/me` (the account and its workspaces, or, for an agent key, its workspace and hub) are the only routes besides `/health` outside `/v1/workspaces/:workspaceId` (D46, an exception to D40). Agent keys are bearer tokens. Passwords are reset only by the installation operator through a CLI command. Every request runs its queries in a transaction that sets the principal and workspace with `SET LOCAL` for row-level security. Two lookups happen before a workspace is known, so they go through narrow `SECURITY DEFINER` functions owned by the migration role, each returning only what auth needs: resolving an agent key's secret hash to its principal, workspace and hub; and listing an account's memberships (workspace, principal, role) for `GET /v1/me` and workspace selection. The app role has no other way to read across workspaces.
 
 ## Client data layer (from M3)
 
