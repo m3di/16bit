@@ -11,7 +11,10 @@ describe('web', () => {
     const app = createSSRApp(App).use(router)
     await router.push('/')
     await router.isReady()
-    expect(await renderToString(app)).toContain('16bit.info')
+    const html = await renderToString(app)
+    expect(html).toContain('16bit.info')
+    expect(html).toContain('<h1')
+    expect(html).toContain('Loading workspaces')
   })
 
   it('serves the component kit in development', () => {
