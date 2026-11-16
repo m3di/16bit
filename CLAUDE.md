@@ -57,5 +57,6 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm build`: build all packages.
 - `pnpm seed`: load the demo workspaces (`demo`, `acme`). Safe to re-run. Refuses `NODE_ENV=production` without `--force`.
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
+- `pnpm e2e`: Playwright end-to-end tests in `e2e`. Needs a seeded database; reuses a running `pnpm dev` or starts the API and web app itself.
 
-Still to come in M0: `pnpm e2e` (#12). Keep this list up to date as they land.
+Keep this list up to date as scripts land.

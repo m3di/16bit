@@ -41,6 +41,7 @@ If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` 
 | `pnpm seed` | Runs migrations, then loads two demo workspaces whose hubs cover every size-meter step (0 to 1,200 items). Safe to run again: nothing is duplicated, and existing rows are left as they are, except that `DEV_PRINCIPAL_ID` is made owner again. Refuses to run when `NODE_ENV=production` unless you pass `--force`. |
 | `pnpm seed:build-hub` | Imports this repository's GitHub issues into the "Build" hub of a local `team` workspace, one item per issue. Needs `gh` signed in. Re-running updates items in place; GitHub wins over local edits of imported values, and items you delete stay deleted. An issue the hub rejects (version conflict, invalid value) is listed at the end and the rest still import; the command then exits non-zero. |
 | `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `DATABASE_URL`; API integration tests create and drop a throwaway database there. |
+| `pnpm e2e` | Playwright end-to-end tests in `e2e`, also run in CI. Needs a migrated and seeded database (`pnpm seed`). Reuses a running `pnpm dev`, or starts the API and web app itself. One-time setup: `pnpm --filter @16bit/e2e exec playwright install chromium`. If port 5173 is taken, set `E2E_WEB_PORT`; set `E2E_BASE_URL` to test an app that is already running elsewhere. Each test creates its own items, in the seeded workspaces. |
 | `docker compose down` | Stops Postgres. Add `-v` to delete its data. |
 
 ### Installing Node.js and pnpm
