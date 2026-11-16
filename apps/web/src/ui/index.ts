@@ -1,6 +1,8 @@
+export { default as AppShell } from './AppShell.vue'
 export { default as BaseButton } from './BaseButton.vue'
 export { default as BaseInput } from './BaseInput.vue'
 export { default as BaseSelect } from './BaseSelect.vue'
+export { default as HubCard } from './HubCard.vue'
 export { default as PaletteChip } from './PaletteChip.vue'
 export { default as PixelAvatar } from './PixelAvatar.vue'
 export { default as SizeMeter } from './SizeMeter.vue'
