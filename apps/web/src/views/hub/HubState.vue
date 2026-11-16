@@ -17,11 +17,21 @@ defineSlots<{ default(): unknown }>()
 
 <template>
   <StateBlock v-if="hub.state === 'loading'" state="loading" title="Loading hub" :rows="6" />
+  <!-- A hub without a grant answers 404 like a missing one (docs/ROLES.md), so both read alike. -->
   <StateBlock
-    v-else-if="hub.state === 'error' && (hub.error.isNoPermission || hub.error.status === 404)"
-    state="no-permission"
+    v-else-if="hub.state === 'error' && hub.error.isNotFound"
+    state="empty"
     title="This hub is not available"
     message="It may not exist, or it may not be shared with you."
+  >
+    <template #action>
+      <RouterLink to="/" class="text-accent">Back to workspaces</RouterLink>
+    </template>
+  </StateBlock>
+  <StateBlock
+    v-else-if="hub.state === 'error' && hub.error.isNoPermission"
+    state="no-permission"
+    title="You do not have access to this hub"
   >
     <template #action>
       <RouterLink to="/" class="text-accent">Back to workspaces</RouterLink>

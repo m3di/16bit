@@ -22,6 +22,12 @@ const headingId = computed(() => `workspace-${entry.workspace.id}`)
       title="You do not have access to this workspace's hubs"
     />
     <StateBlock
+      v-else-if="entry.hubs.state === 'error' && entry.hubs.error.isNotFound"
+      state="empty"
+      title="This workspace is not available"
+      message="It may have been deleted, or you may no longer belong to it."
+    />
+    <StateBlock
       v-else-if="entry.hubs.state === 'error'"
       state="error"
       title="The hubs could not be loaded"
