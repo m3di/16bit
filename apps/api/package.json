@@ -8,6 +8,7 @@
     "start": "node src/server.ts",
     "migrate": "node --env-file-if-exists=../../.env src/migrate.ts",
     "seed": "node --env-file-if-exists=../../.env src/seed.ts",
+    "seed:build-hub": "node --env-file-if-exists=../../.env src/seed-build-hub.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },

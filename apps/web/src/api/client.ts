@@ -1,0 +1,84 @@
+import { apiErrorSchema, MAX_PAGE_LIMIT, type ApiErrorCode, type Page } from '@16bit/core'
+
+/** Anything with a zod-style `parse`. Responses are checked against the `@16bit/core` schemas. */
+export interface Schema<T> {
+  parse(data: unknown): T
+}
+
+export type Fetch = typeof fetch
+
+/** `network`: no response. `bad_response`: a response that does not match the contract. */
+export type RequestErrorCode = ApiErrorCode | 'network' | 'bad_response'
+
+export class ApiRequestError extends Error {
+  readonly code: RequestErrorCode
+  /** HTTP status, or 0 when there was no response. */
+  readonly status: number
+
+  constructor(code: RequestErrorCode, message: string, status = 0) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.code = code
+    this.status = status
+  }
+
+  /** The caller may not see this: the key was refused, or the resource is not theirs. */
+  get isNoPermission(): boolean {
+    return this.status === 401 || this.status === 403
+  }
+}
+
+/** Stops a misbehaving cursor from looping forever: 50 pages of 200 is 10,000 entries. */
+export const MAX_PAGES = 50
+
+/** GETs `path` (same origin, `/v1/...`) and checks the body against `schema`. */
+export async function getJson<T>(path: string, schema: Schema<T>, fetchFn: Fetch = fetch) {
+  let response: Response
+  try {
+    response = await fetchFn(path, { headers: { Accept: 'application/json' } })
+  } catch {
+    throw new ApiRequestError('network', 'The server could not be reached.')
+  }
+
+  const body: unknown = await response.json().catch(() => undefined)
+
+  if (!response.ok) {
+    const error = apiErrorSchema.safeParse(body)
+    if (error.success)
+      throw new ApiRequestError(error.data.error, error.data.message, response.status)
+    throw new ApiRequestError(
+      'internal',
+      `The server answered ${String(response.status)}.`,
+      response.status,
+    )
+  }
+
+  try {
+    return schema.parse(body)
+  } catch {
+    throw new ApiRequestError(
+      'bad_response',
+      'The server sent an unexpected response.',
+      response.status,
+    )
+  }
+}
+
+/** GETs every page of a list endpoint by following `nextCursor`. */
+export async function getAllPages<T>(
+  path: string,
+  pageSchema: Schema<Page<T>>,
+  fetchFn: Fetch = fetch,
+): Promise<T[]> {
+  const entries: T[] = []
+  let cursor: string | null = null
+  for (let n = 0; n < MAX_PAGES; n++) {
+    const query = new URLSearchParams({ limit: String(MAX_PAGE_LIMIT) })
+    if (cursor) query.set('cursor', cursor)
+    const page: Page<T> = await getJson(`${path}?${query.toString()}`, pageSchema, fetchFn)
+    entries.push(...page.items)
+    cursor = page.nextCursor
+    if (!cursor) return entries
+  }
+  throw new ApiRequestError('bad_response', 'The list did not end.')
+}
