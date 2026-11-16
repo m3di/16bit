@@ -26,6 +26,15 @@ import ThemeSwitch from './ThemeSwitch.vue'
         <ThemeSwitch />
       </div>
     </header>
-    <slot />
+    <!-- Inside a hub: a light sidebar. At phone width it stacks above the content. -->
+    <div v-if="$slots.sidebar" class="flex flex-1 flex-wrap items-stretch">
+      <div
+        class="box-border flex min-w-0 grow basis-[208px] flex-col gap-4 border-b border-line bg-surface px-2.5 py-4 md:grow-0 md:border-r md:border-b-0"
+      >
+        <slot name="sidebar" />
+      </div>
+      <div class="flex min-w-0 flex-[999_1_480px] flex-col"><slot /></div>
+    </div>
+    <slot v-else />
   </div>
 </template>

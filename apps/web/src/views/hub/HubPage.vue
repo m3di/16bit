@@ -1,0 +1,241 @@
+<script setup lang="ts">
+import type { Item, ItemValues } from '@16bit/core'
+import { ApiRequestError } from '../../api/client.ts'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { AppShell, BaseButton, ItemPanel } from '../../ui/index.ts'
+import type { Load } from '../home/useDashboard.ts'
+import FolderSidebar from './FolderSidebar.vue'
+import HubState from './HubState.vue'
+import ItemDetails from './ItemDetails.vue'
+import ItemPanelBody from './ItemPanelBody.vue'
+import ItemsBlock from './ItemsBlock.vue'
+import NewItemForm from './NewItemForm.vue'
+import { folderColumns, truncatedNote, useHub } from './useHub.ts'
+import { inHub, useItems, valueErrors } from './useItems.ts'
+
+const { workspaceId, hubId, folderId, itemId } = defineProps<{
+  workspaceId: string
+  hubId: string
+  /** `null` shows the hub's own items. */
+  folderId: string | null
+  itemId: string | null
+}>()
+
+const router = useRouter()
+const { hub, tree, load: loadHub } = useHub(workspaceId, hubId)
+const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
+const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '')
+const { list, rows, notice } = items
+
+const openFolderId = computed(() => folderId ?? hubId)
+const folder = computed(() => {
+  const d = description.value
+  if (!d) return null
+  return d.hub.id === openFolderId.value
+    ? d.hub
+    : (d.folders.find((f) => f.id === openFolderId.value) ?? null)
+})
+const columns = computed(() =>
+  description.value ? folderColumns(description.value, openFolderId.value) : [],
+)
+
+// The hub's own count includes every folder, so it is only shown when the hub has no folders.
+const countLine = computed(() => {
+  const f = folder.value
+  const d = description.value
+  if (!f || !d || (f.id === d.hub.id && d.folders.length > 0)) return ''
+  return `${new Intl.NumberFormat('en').format(f.itemCount)} ${f.itemCount === 1 ? 'item' : 'items'}`
+})
+
+// The server caps the hub description. Say so rather than show a partial list as complete.
+const truncated = computed(() => (description.value ? truncatedNote(description.value) : ''))
+
+const treeLoad = computed<Load<typeof tree.value>>(() =>
+  hub.value.state === 'ready' ? { state: 'ready', data: tree.value } : hub.value,
+)
+
+onMounted(() => {
+  void loadHub()
+})
+
+// "New item" opens a form in the panel. On submit the row appears at once (see useItems).
+const creating = ref(false)
+const createBusy = ref(false)
+const createErrors = ref<Record<string, string>>({})
+
+watch(
+  openFolderId,
+  (id) => {
+    creating.value = false
+    void items.openFolder(id)
+  },
+  { immediate: true },
+)
+
+// The item panel follows `?item=`. An item from another hub is treated as missing here.
+const selected = ref<Load<string> | null>(null)
+async function loadSelected(id: string | null) {
+  if (!id) {
+    selected.value = null
+    return
+  }
+  selected.value = { state: 'loading' }
+  const result = inHub(await items.openItem(id), hubId)
+  if (id !== itemId) return
+  selected.value = result.state === 'ready' ? { state: 'ready', data: id } : result
+}
+watch(
+  () => itemId,
+  (id) => {
+    creating.value = false
+    void loadSelected(id)
+  },
+  { immediate: true },
+)
+const retryPanel = () => void loadSelected(itemId)
+
+const panelItem = computed<Load<Item> | null>(() => {
+  const s = selected.value
+  if (s?.state !== 'ready') return s
+  const item = items.view(s.data)
+  return item
+    ? { state: 'ready', data: item }
+    : { state: 'error', error: new ApiRequestError('not_found', 'This item is gone.', 404) }
+})
+const selectedItem = computed(() =>
+  panelItem.value?.state === 'ready' ? panelItem.value.data : undefined,
+)
+
+const itemLink = (item: Item) => ({ query: { item: item.id } })
+const openItem = (item: Item) => void router.push(itemLink(item))
+const closePanel = () => {
+  creating.value = false
+  void router.push({ query: {} })
+}
+
+function startCreate() {
+  createErrors.value = {}
+  creating.value = true
+  if (itemId) void router.push({ query: {} })
+}
+async function submitCreate(values: ItemValues) {
+  createBusy.value = true
+  const result = await items.create(values)
+  createBusy.value = false
+  if (result.ok) {
+    creating.value = false
+    void router.push(itemLink(result.item))
+  } else {
+    createErrors.value = valueErrors(result.error)
+  }
+}
+</script>
+
+<template>
+  <AppShell>
+    <template #sidebar>
+      <FolderSidebar
+        :workspace-id="workspaceId"
+        :hub-name="description?.hub.name ?? null"
+        :tree="treeLoad"
+        :folder-id="openFolderId"
+      />
+    </template>
+
+    <div class="flex flex-1 flex-wrap items-stretch">
+      <main class="box-border flex min-w-0 flex-[999_1_420px] flex-col gap-6 px-4 py-6 sm:px-7">
+        <HubState
+          :workspace-id="workspaceId"
+          :hub-id="hubId"
+          :hub="hub"
+          :folder-found="folder !== null"
+          @retry="loadHub()"
+        >
+          <template v-if="folder && hub.state === 'ready'">
+            <div class="flex flex-wrap items-end justify-between gap-3">
+              <div class="flex min-w-0 flex-col gap-1">
+                <h1 class="m-0 font-display text-page-title font-medium tracking-[-0.01em]">
+                  {{ folder.name }}
+                </h1>
+                <span v-if="countLine" class="text-ink2" data-count>{{ countLine }}</span>
+                <span v-if="truncated" class="text-secondary text-ink3" data-truncated>{{
+                  truncated
+                }}</span>
+              </div>
+              <BaseButton
+                variant="primary"
+                :disabled="list.state !== 'ready'"
+                data-new-item-button
+                @click="startCreate"
+                >New item</BaseButton
+              >
+            </div>
+
+            <div
+              v-if="notice"
+              role="alert"
+              class="flex flex-wrap items-center justify-between gap-2 rounded-control border border-danger px-3 py-2 text-danger"
+              data-notice
+            >
+              <span class="min-w-0 flex-[1_1_240px]">{{ notice }}</span>
+              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                >Dismiss</BaseButton
+              >
+            </div>
+
+            <ItemsBlock
+              :folder-name="folder.name"
+              :list="list"
+              :rows="rows"
+              :columns="columns"
+              :id-prefix="hub.data.hub.idPrefix"
+              :selected-id="itemId"
+              :item-link="itemLink"
+              :is-creating="items.isCreating"
+              @open="openItem"
+              @retry="items.openFolder(openFolderId)"
+              @more="items.loadMore()"
+              @create="startCreate"
+            />
+          </template>
+        </HubState>
+      </main>
+
+      <ItemPanel
+        v-if="creating && folder"
+        title="New item"
+        label="New item"
+        class="flex-[1_1_320px]"
+        @close="closePanel"
+      >
+        <NewItemForm
+          :columns="columns"
+          :busy="createBusy"
+          :server-errors="createErrors"
+          @submit="submitCreate"
+          @cancel="closePanel"
+        />
+      </ItemPanel>
+      <ItemPanel
+        v-else-if="itemId && panelItem"
+        :title="selectedItem && description ? items.label(selectedItem) : 'Item'"
+        class="flex-[1_1_320px]"
+        @close="closePanel"
+      >
+        <ItemPanelBody :item="panelItem" @retry="retryPanel">
+          <template #default="{ item }">
+            <ItemDetails
+              :key="item.id"
+              :item="item"
+              :columns="description ? folderColumns(description, item.folderId) : []"
+              :saving="items.isSaving(item.id)"
+              :disabled="items.isCreating(item.id)"
+              @save="items.save(item.id, $event)"
+            />
+          </template>
+        </ItemPanelBody>
+      </ItemPanel>
+    </div>
+  </AppShell>
+</template>

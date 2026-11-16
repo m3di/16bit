@@ -39,7 +39,13 @@ const headingId = computed(() => `workspace-${entry.workspace.id}`)
     />
     <ul v-else class="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 p-0">
       <li v-for="hub in entry.hubs.data" :key="hub.id" class="flex min-w-0 flex-col">
-        <HubCard :name="hub.name" :color="hub.color" :count="hub.itemCount" class="flex-1" />
+        <HubCard
+          :name="hub.name"
+          :color="hub.color"
+          :count="hub.itemCount"
+          :to="{ name: 'hub', params: { workspaceId: hub.workspaceId, hubId: hub.id } }"
+          class="flex-1"
+        />
       </li>
     </ul>
   </section>

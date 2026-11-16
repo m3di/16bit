@@ -17,6 +17,12 @@ describe('web', () => {
     expect(html).toContain('Loading workspaces')
   })
 
+  it('routes a hub, with an optional folder', () => {
+    const router = makeRouter(createMemoryHistory())
+    expect(router.resolve('/w/w1/hubs/h1').params).toMatchObject({ workspaceId: 'w1', hubId: 'h1' })
+    expect(router.resolve('/w/w1/hubs/h1/f1').params).toMatchObject({ folderId: 'f1' })
+  })
+
   it('serves the component kit in development', () => {
     const router = makeRouter(createMemoryHistory())
     expect(router.hasRoute('kit')).toBe(import.meta.env.DEV)
