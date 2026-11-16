@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { avatarSprite, hashId, spritePath, SPRITE_SIZE } from './avatar.ts'
-import { PALETTE } from './palette.ts'
+import { PALETTE_COLORS } from './palette.ts'
 
 const ids = Array.from({ length: 2000 }, (_, i) => `principal-${String(i)}`)
 
@@ -49,7 +49,7 @@ describe('avatarSprite', () => {
     const keys = new Set(ids.map((id) => JSON.stringify(avatarSprite(id))))
     expect(keys.size).toBeGreaterThan(ids.length * 0.95)
     const colors = new Set(ids.map((id) => avatarSprite(id).color))
-    expect(colors.size).toBe(PALETTE.length)
+    expect(colors.size).toBe(PALETTE_COLORS.length)
   })
 
   it('changes with a one-character difference', () => {

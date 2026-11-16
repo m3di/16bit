@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PALETTE } from '../ui/palette.ts'
+import { PALETTE_COLORS } from '../ui/palette.ts'
 import css from './tokens.css?raw'
 
 type Vars = Record<string, string>
@@ -55,7 +55,7 @@ describe.each(['light', 'dark'] as const)('%s theme tokens', (name) => {
     expect(contrast(get('on-accent'), get('accent'))).toBeGreaterThanOrEqual(TEXT)
   })
 
-  it.each([...PALETTE])('%s chip ink is readable on its tint and on the page', (color) => {
+  it.each([...PALETTE_COLORS])('%s chip ink is readable on its tint and on the page', (color) => {
     const ink = get(`pal-${color}-ink`)
     for (const bg of [get(`pal-${color}-tint`), get('bg'), get('surface')]) {
       expect(contrast(ink, bg)).toBeGreaterThanOrEqual(TEXT)
@@ -68,7 +68,7 @@ describe.each(['light', 'dark'] as const)('%s theme tokens', (name) => {
     }
   })
 
-  it.each([...PALETTE])('%s base colour is at least 3:1 on the page', (color) => {
+  it.each([...PALETTE_COLORS])('%s base colour is at least 3:1 on the page', (color) => {
     expect(contrast(get(`pal-${color}`), get('bg'))).toBeGreaterThanOrEqual(NON_TEXT)
   })
 

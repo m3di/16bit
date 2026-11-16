@@ -4,7 +4,7 @@ import {
   BaseButton,
   BaseInput,
   BaseSelect,
-  PALETTE,
+  PALETTE_COLORS,
   PaletteChip,
   PixelAvatar,
   SizeMeter,
@@ -83,7 +83,7 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
     <section class="flex flex-col gap-3">
       <h3 class="m-0 border-b border-line pb-2 text-body font-medium">Palette</h3>
       <ul class="m-0 flex list-none flex-wrap gap-3 p-0">
-        <li v-for="c in PALETTE" :key="c" class="flex items-center gap-2">
+        <li v-for="c in PALETTE_COLORS" :key="c" class="flex items-center gap-2">
           <span class="size-2.5 shrink-0" :style="{ background: paletteVar(c) }" />
           <PaletteChip :color="c">{{ c }}</PaletteChip>
         </li>
@@ -178,7 +178,7 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
           :key="n"
           class="flex items-center gap-2 text-secondary text-ink3"
         >
-          <SizeMeter :count="n" :color="PALETTE[i * 2] ?? 'indigo'" />
+          <SizeMeter :count="n" :color="PALETTE_COLORS[i * 2] ?? 'indigo'" />
           {{ n.toLocaleString('en') }} items
         </li>
       </ul>

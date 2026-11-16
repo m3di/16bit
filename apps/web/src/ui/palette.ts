@@ -1,24 +1,7 @@
-/** The 16-colour palette from docs/DESIGN.md, in display order. Values live in styles/tokens.css. */
-export const PALETTE = [
-  'indigo',
-  'blue',
-  'cyan',
-  'teal',
-  'green',
-  'lime',
-  'yellow',
-  'amber',
-  'orange',
-  'red',
-  'pink',
-  'magenta',
-  'violet',
-  'slate',
-  'ink',
-  'grey',
-] as const
+import type { PaletteColor } from '@16bit/core'
 
-export type PaletteColor = (typeof PALETTE)[number]
+/** The palette names come from @16bit/core (one source of truth). Values live in styles/tokens.css. */
+export { PALETTE_COLORS, type PaletteColor } from '@16bit/core'
 
 export type PaletteShade = 'base' | 'tint' | 'ink'
 
