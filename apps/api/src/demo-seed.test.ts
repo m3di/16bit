@@ -1,3 +1,6 @@
+import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { hubPageSchema, validateItemValues, workspacePageSchema, type Folder } from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
@@ -202,6 +205,55 @@ describe('demo seed', () => {
     expect(hiring?.itemCount).toBe(5)
   }, 60_000)
 
+  it('gives no agent a role that manages members or billing (D28)', async () => {
+    const agents = await db
+      .selectFrom('principal')
+      .select(['workspace_id', 'id', 'workspace_role'])
+      .where('kind', '=', 'agent')
+      .where('workspace_role', 'in', ['owner', 'admin', 'finance'])
+      .execute()
+    expect(agents).toEqual([])
+  })
+
+  it('makes the dev principal owner again if its row has a lower role', async () => {
+    await db
+      .updateTable('principal')
+      .set({ workspace_role: 'member' })
+      .where('workspace_id', '=', 'demo')
+      .where('id', '=', ACTOR)
+      .execute()
+    await applySeed(db, { devPrincipalId: ACTOR })
+    const row = await db
+      .selectFrom('principal')
+      .select('workspace_role')
+      .where('workspace_id', '=', 'demo')
+      .where('id', '=', ACTOR)
+      .executeTakeFirstOrThrow()
+    expect(row.workspace_role).toBe('owner')
+  }, 60_000)
+
+  it('refuses to run with NODE_ENV=production unless --force is passed', async () => {
+    const script = fileURLToPath(new URL('./seed.ts', import.meta.url))
+    // No DATABASE_URL: the guard must fire before anything else, so nothing can be written.
+    const env = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' }
+    const run = async (args: string[]): Promise<{ code: unknown; stderr: string }> => {
+      try {
+        await promisify(execFile)(process.execPath, [script, ...args], { env })
+        return { code: 0, stderr: '' }
+      } catch (error) {
+        const { code, stderr } = error as { code: unknown; stderr: string }
+        return { code, stderr }
+      }
+    }
+    const refused = await run([])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('NODE_ENV=production')
+    const forced = await run(['--force'])
+    expect(forced.code).toBe(1)
+    expect(forced.stderr).toContain('DATABASE_URL is not set')
+  }, 30_000)
+
+  // Must stay the last test: it leaves the hub's next_seq ahead of its item count.
   it('fills in a workspace that is only partly seeded', async () => {
     await db.transaction().execute(async (trx) => {
       await trx

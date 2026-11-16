@@ -38,7 +38,7 @@ If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` 
 |---|---|
 | `pnpm dev` | Waits for Postgres, runs migrations, starts the API and the web dev server. Ctrl-C stops both. |
 | `pnpm db:migrate` | Runs migrations only. |
-| `pnpm seed` | Runs migrations, then loads two demo workspaces whose hubs cover every size-meter step (0 to 1,200 items). Safe to run again: nothing is duplicated, and existing rows are left as they are. |
+| `pnpm seed` | Runs migrations, then loads two demo workspaces whose hubs cover every size-meter step (0 to 1,200 items). Safe to run again: nothing is duplicated, and existing rows are left as they are, except that `DEV_PRINCIPAL_ID` is made owner again. Refuses to run when `NODE_ENV=production` unless you pass `--force`. |
 | `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `DATABASE_URL`; API integration tests create and drop a throwaway database there. |
 | `docker compose down` | Stops Postgres. Add `-v` to delete its data. |
 

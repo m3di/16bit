@@ -3,6 +3,12 @@
 import { createDb, migrateToLatest } from './db/database.ts'
 import { applySeed } from './demo-seed.ts'
 
+// The seed creates an owner principal, so it must never reach a production database by accident.
+if (process.env['NODE_ENV'] === 'production' && !process.argv.includes('--force')) {
+  console.error('seed: refusing to run with NODE_ENV=production. Pass --force to override.')
+  process.exit(1)
+}
+
 const databaseUrl = process.env['DATABASE_URL']
 if (!databaseUrl) {
   console.error('seed: DATABASE_URL is not set. See .env.example.')

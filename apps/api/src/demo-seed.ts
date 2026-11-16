@@ -15,7 +15,8 @@ import { createItem } from './items.ts'
 // inserted with ON CONFLICT DO NOTHING. Items go through `createItem`, the API's own write path,
 // so counters, `seq_id`, and `revision` stay consistent; an item whose ID already appears in
 // `revision` is skipped, which also means an item deleted through the API is not brought back.
-// Changing a definition here does not update rows that already exist.
+// Changing a definition here does not update rows that already exist. One exception: the dev
+// principal is set back to `owner` if its row exists with a lower role.
 
 type AttributeSeed = Pick<Attribute, 'id' | 'name' | 'type' | 'config'> & { required?: boolean }
 
@@ -175,8 +176,9 @@ export function demoSeed(devPrincipalId: string): WorkspaceSeed[] {
       name: 'Acme Studio',
       people: [
         owner,
-        { id: 'sam', kind: 'user', name: 'Sam Okafor', workspace_role: 'member' },
-        { id: 'ledger-bot', kind: 'agent', name: 'Ledger bot', workspace_role: 'finance' },
+        { id: 'sam', kind: 'user', name: 'Sam Okafor', workspace_role: 'finance' },
+        // D28: agents never manage members or billing, so no agent gets owner, admin, or finance.
+        { id: 'ledger-bot', kind: 'agent', name: 'Ledger bot', workspace_role: 'member' },
       ],
       hubs: [
         {
@@ -347,11 +349,26 @@ export async function applySeed(
         .values({ id: ws.id, name: ws.name })
         .onConflict((oc) => oc.column('id').doNothing())
         .execute()
+      const [devOwner, ...others] = ws.people
+      // The dev key relies on this principal being owner (#6), so an existing row with a lower
+      // role is corrected. Every other existing principal is left as it is.
       await trx
         .insertInto('principal')
-        .values(ws.people.map((p) => ({ ...p, workspace_id: ws.id })))
-        .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
+        .values({ ...devOwner, workspace_id: ws.id })
+        .onConflict((oc) =>
+          oc
+            .columns(['workspace_id', 'id'])
+            .doUpdateSet({ workspace_role: 'owner' })
+            .where('principal.workspace_role', '<>', 'owner'),
+        )
         .execute()
+      if (others.length > 0) {
+        await trx
+          .insertInto('principal')
+          .values(others.map((p) => ({ ...p, workspace_id: ws.id })))
+          .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
+          .execute()
+      }
 
       for (const hub of ws.hubs) {
         const folders = flatten(hub, null)
@@ -449,6 +466,8 @@ async function seedItems(
     }
     if (used.has(id)) continue
     // createItem validates the values with the core contract against the stored attributes.
+    // The `??` fallbacks below never apply (both arrays are non-empty and indexed modulo their
+    // length); they only satisfy noUncheckedIndexedAccess.
     await createItem(db, ws.id, (ws.people[index % ws.people.length] ?? ws.people[0]).id, {
       id,
       folderId: folders[index % folders.length] ?? hub.id,
