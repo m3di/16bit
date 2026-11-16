@@ -551,7 +551,8 @@ describe('typed calls', () => {
 
     // Type-level check only: never called.
     // @ts-expect-error: a hub action needs its scope.
-    void (() => can(user('owner'), 'hub.read'))
+    const missingScope = () => can(user('owner'), 'hub.read')
+    expect(missingScope).toBeTypeOf('function')
     // @ts-expect-error: a workspace action takes no scope.
     can(user('owner'), 'workspace.read', { hubGrant: null })
     // @ts-expect-error: key.create needs the key's role.
