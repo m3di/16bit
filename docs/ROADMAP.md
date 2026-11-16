@@ -25,9 +25,9 @@ The smallest thing that proves the shape: a green pipeline, a running app, and v
 
 ## M1: data API and access
 
-Authentication and sessions for people, agent keys scoped to hubs, workspace and hub roles, row-level security, the full attribute type set with `item_index`, filters and sorting in the query endpoint, relations and the `link` table.
+Authentication and sessions for people, agent keys scoped to hubs, workspace and hub roles, row-level security, the attribute type set except file and rollup (D44) with `item_index`, filters and sorting in the query endpoint, relations and the `link` table.
 
-*Exit:* two people and one agent key with different roles see and can do exactly what the role matrix says, proven by end-to-end tests.
+*Exit:* two people and one agent key with different roles see and can do exactly what the role matrix (`docs/ROLES.md`) says, proven by end-to-end tests. The dashboard requires sign-in, and D41's anonymous dev owner is gone.
 
 ## M2: dashboard and settings
 
