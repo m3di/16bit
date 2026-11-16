@@ -29,6 +29,8 @@ pnpm dev                  # migrations, then the API on :3000 and the web app on
 
 On its first run `pnpm dev` copies `.env.example` to `.env`. Every variable is documented there.
 
+If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` from `.env.example`; the API will not start without the key.
+
 **Without Docker.** Create a database in your own Postgres, set `DATABASE_URL` in `.env` (or export it in your shell, which takes precedence), and run `pnpm dev`.
 
 | Command | What it does |

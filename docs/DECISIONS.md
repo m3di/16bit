@@ -70,3 +70,4 @@ Decisions made before the build started. Each has a short reason. To change one,
 | D37 | Code is Apache 2.0. The name "16bit.info" and the logo are reserved. | Anyone may fork and sell under another name. Only the maintainer uses the name. |
 | D38 | Public issues and pull requests are welcome. Only the maintainer merges contributions from outside the agent team. | Personal project with one owner. |
 | D39 | Light theme first, with every colour a CSS variable so dark mode is a token swap. | Both themes from one design. |
+| D40 | API routes are scoped by workspace in the path: `/v1/workspaces/:workspaceId/...`. | IDs are unique per workspace (keys lead with `workspace_id`), and the workspace is visible in links and logs. Decided during M0 (#6). |
