@@ -146,6 +146,14 @@ async function hubCount(id: string): Promise<number> {
 const revisions = () =>
   db.selectFrom('revision').selectAll().where('workspace_id', '=', 'w1').orderBy('seq').execute()
 
+/** Every w2 row the item routes could write to. Compared before and after to prove isolation. */
+const w2Rows = async () => ({
+  workspace: await db.selectFrom('workspace').selectAll().where('id', '=', 'w2').execute(),
+  folders: await db.selectFrom('folder').selectAll().where('workspace_id', '=', 'w2').execute(),
+  items: await db.selectFrom('item').selectAll().where('workspace_id', '=', 'w2').execute(),
+  revisions: await db.selectFrom('revision').selectAll().where('workspace_id', '=', 'w2').execute(),
+})
+
 describe('health', () => {
   it('answers without auth when the database is up', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
@@ -256,7 +264,8 @@ describe('workspaces and hubs', () => {
         id_prefix: 'BLD',
       })
       .execute()
-    // Four more attributes on build: 7 + 1 (bugs) + 3 (tasks) = 11 folder attributes, over 10.
+    // Four more attributes on build, two on tasks: 7 + 1 (bugs) + 2 (tasks) = 10 folder
+    // attributes, exactly the cap of 10 (maxHubEntries * 10). A third on tasks goes over.
     const extra = ['a1', 'a2', 'a3', 'a4']
     const text = (id: string) => ({
       workspace_id: 'w1',
@@ -281,8 +290,15 @@ describe('workspaces and hubs', () => {
         ...extra.map((id, i) => fa('build', id, 3 + i)),
         fa('tasks', 'title', 0),
         fa('tasks', 'points', 1),
-        fa('tasks', 'stage', 2),
       ])
+      .execute()
+    const faAtCap = await describeBuild()
+    expect(faAtCap.folderAttributes).toHaveLength(10)
+    expect(faAtCap.truncated.folderAttributes).toBe(false)
+
+    await db
+      .insertInto('folder_attribute')
+      .values(fa('tasks', 'stage', 2))
       .execute()
     const over = await describeBuild()
     expect(over.folders.map((f) => f.id)).toEqual(['bugs'])
@@ -391,11 +407,13 @@ describe('create item', () => {
   })
 
   it('cannot create in another workspace’s folder', async () => {
+    const before = await w2Rows()
     const res = await request('POST', '/v1/workspaces/w2/items', {
       folderId: 'secret',
       values: {},
     })
     expect(res.statusCode).toBe(404)
+    expect(await w2Rows()).toEqual(before)
   })
 })
 
@@ -570,6 +588,7 @@ describe('workspace isolation', () => {
   it('returns 404 on get, patch and delete of another workspace’s item', async () => {
     await foreignItem('foreign')
     const before = await foreignRow('foreign')
+    const w2Before = await w2Rows()
     for (const ws of ['w1', 'w2']) {
       const url = `/v1/workspaces/${ws}/items/foreign`
       expect((await request('GET', url)).statusCode, `GET ${ws}`).toBe(404)
@@ -579,18 +598,21 @@ describe('workspace isolation', () => {
     }
     expect(await foreignRow('foreign')).toEqual(before)
     expect(await revisions()).toHaveLength(0)
+    expect(await w2Rows()).toEqual(w2Before)
   })
 
   it('touches only its own workspace’s item when IDs collide', async () => {
     const item = await create({ title: 'Ours' })
     await foreignItem(item.id)
     const before = await foreignRow(item.id)
+    const w2Before = await w2Rows()
     const url = `/v1/workspaces/w1/items/${item.id}`
     expect((await request('GET', url)).json()).toMatchObject({ values: { title: 'Ours' } })
     const patched = await request('PATCH', url, { version: 1, values: { title: 'Two' } })
     expect(patched.statusCode).toBe(200)
     expect((await request('DELETE', `${url}?version=2`)).statusCode).toBe(204)
     expect(await foreignRow(item.id)).toEqual(before)
+    expect(await w2Rows()).toEqual(w2Before)
   })
 })
 

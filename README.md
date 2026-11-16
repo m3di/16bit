@@ -37,7 +37,7 @@ If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` 
 |---|---|
 | `pnpm dev` | Waits for Postgres, runs migrations, starts the API and the web dev server. Ctrl-C stops both. |
 | `pnpm db:migrate` | Runs migrations only. |
-| `pnpm seed:build-hub` | Imports this repository's GitHub issues into the "Build" hub of a local `team` workspace, one item per issue. Needs `gh` signed in. Re-running updates items in place; GitHub wins over local edits of imported values, and items you delete stay deleted. |
+| `pnpm seed:build-hub` | Imports this repository's GitHub issues into the "Build" hub of a local `team` workspace, one item per issue. Needs `gh` signed in. Re-running updates items in place; GitHub wins over local edits of imported values, and items you delete stay deleted. An issue the hub rejects (version conflict, invalid value) is listed at the end and the rest still import; the command then exits non-zero. |
 | `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `DATABASE_URL`; API integration tests create and drop a throwaway database there. |
 | `docker compose down` | Stops Postgres. Add `-v` to delete its data. |
 
