@@ -1,4 +1,4 @@
-import { PALETTE, type PaletteColor } from './palette.ts'
+import { PALETTE_COLORS, type PaletteColor } from './palette.ts'
 
 export const SPRITE_SIZE = 5
 
@@ -36,7 +36,7 @@ function countBits(n: number): number {
  */
 export function avatarSprite(id: string): AvatarSprite {
   const h = hashId(id)
-  const color = PALETTE[h & 0xf] as PaletteColor
+  const color = PALETTE_COLORS[h & 0xf] as PaletteColor
   let bits = (h >>> 4) & 0x7fff
   const filled = countBits(bits)
   if (filled < 3 || filled > 12) bits ^= 0x5555
