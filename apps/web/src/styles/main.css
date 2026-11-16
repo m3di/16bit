@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+/*
+ * Map the tokens into Tailwind. Default colours, weights, shadows, radii, and type sizes are
+ * removed, so only the design system's values exist as utilities.
+ */
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-ink: var(--ink);
+  --color-ink2: var(--ink2);
+  --color-ink3: var(--ink3);
+  --color-empty: var(--empty);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-selected: var(--selected);
+  --color-pal-indigo: var(--pal-indigo);
+  --color-pal-indigo-tint: var(--pal-indigo-tint);
+  --color-pal-indigo-ink: var(--pal-indigo-ink);
+  --color-pal-blue: var(--pal-blue);
+  --color-pal-blue-tint: var(--pal-blue-tint);
+  --color-pal-blue-ink: var(--pal-blue-ink);
+  --color-pal-cyan: var(--pal-cyan);
+  --color-pal-cyan-tint: var(--pal-cyan-tint);
+  --color-pal-cyan-ink: var(--pal-cyan-ink);
+  --color-pal-teal: var(--pal-teal);
+  --color-pal-teal-tint: var(--pal-teal-tint);
+  --color-pal-teal-ink: var(--pal-teal-ink);
+  --color-pal-green: var(--pal-green);
+  --color-pal-green-tint: var(--pal-green-tint);
+  --color-pal-green-ink: var(--pal-green-ink);
+  --color-pal-lime: var(--pal-lime);
+  --color-pal-lime-tint: var(--pal-lime-tint);
+  --color-pal-lime-ink: var(--pal-lime-ink);
+  --color-pal-yellow: var(--pal-yellow);
+  --color-pal-yellow-tint: var(--pal-yellow-tint);
+  --color-pal-yellow-ink: var(--pal-yellow-ink);
+  --color-pal-amber: var(--pal-amber);
+  --color-pal-amber-tint: var(--pal-amber-tint);
+  --color-pal-amber-ink: var(--pal-amber-ink);
+  --color-pal-orange: var(--pal-orange);
+  --color-pal-orange-tint: var(--pal-orange-tint);
+  --color-pal-orange-ink: var(--pal-orange-ink);
+  --color-pal-red: var(--pal-red);
+  --color-pal-red-tint: var(--pal-red-tint);
+  --color-pal-red-ink: var(--pal-red-ink);
+  --color-pal-pink: var(--pal-pink);
+  --color-pal-pink-tint: var(--pal-pink-tint);
+  --color-pal-pink-ink: var(--pal-pink-ink);
+  --color-pal-magenta: var(--pal-magenta);
+  --color-pal-magenta-tint: var(--pal-magenta-tint);
+  --color-pal-magenta-ink: var(--pal-magenta-ink);
+  --color-pal-violet: var(--pal-violet);
+  --color-pal-violet-tint: var(--pal-violet-tint);
+  --color-pal-violet-ink: var(--pal-violet-ink);
+  --color-pal-slate: var(--pal-slate);
+  --color-pal-slate-tint: var(--pal-slate-tint);
+  --color-pal-slate-ink: var(--pal-slate-ink);
+  --color-pal-ink: var(--pal-ink);
+  --color-pal-ink-tint: var(--pal-ink-tint);
+  --color-pal-ink-ink: var(--pal-ink-ink);
+  --color-pal-grey: var(--pal-grey);
+  --color-pal-grey-tint: var(--pal-grey-tint);
+  --color-pal-grey-ink: var(--pal-grey-ink);
+
+  --font-*: initial;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Two weights only. Nothing bold. */
+  --font-weight-*: initial;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+
+  --text-*: initial;
+  --text-caption: 11px;
+  --text-caption--line-height: 1.45;
+  --text-secondary: 12px;
+  --text-secondary--line-height: 1.45;
+  --text-body: 13px;
+  --text-body--line-height: 1.45;
+  /* Hub and brand names in the Home mockup. Not in the DESIGN.md type table yet (see #8). */
+  --text-name: 14px;
+  --text-name--line-height: 1.45;
+  --text-card-title: 18px;
+  --text-card-title--line-height: 1.45;
+  --text-page-title: 24px;
+  --text-page-title--line-height: 1.45;
+  --text-number: 26px;
+  --text-number--line-height: 1.45;
+
+  --leading-ui: 1.45;
+  --leading-long: 1.6;
+
+  --radius-*: initial;
+  --radius-chip: 3px;
+  --radius-control: 5px;
+  --radius-card: 6px;
+
+  /* No shadows. */
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --text-shadow-*: initial;
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    color: var(--ink);
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--leading-ui);
+    font-weight: 400;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}

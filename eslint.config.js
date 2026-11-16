@@ -15,7 +15,6 @@ export default defineConfig(
   vue.configs['flat/recommended'],
   {
     languageOptions: {
-      globals: { ...globals.node },
       parserOptions: {
         projectService: true,
         tsconfigRootDir: import.meta.dirname,
@@ -27,6 +26,14 @@ export default defineConfig(
     files: ['**/*.vue'],
     languageOptions: {
       parserOptions: { parser: tseslint.parser },
+    },
+  },
+  {
+    // Node globals for tooling, config, and the API. The web app gets browser globals only, and
+    // packages/core gets neither, since it must run in both (docs/ARCHITECTURE.md).
+    ignores: ['apps/web/src/**', 'packages/core/src/**'],
+    languageOptions: {
+      globals: { ...globals.node },
     },
   },
   {

@@ -8,6 +8,8 @@ export default mergeConfig(
       name: 'web',
       include: ['src/**/*.test.ts'],
       environment: 'node',
+      // tokens.test.ts reads tokens.css as text to check contrast.
+      css: { include: [/tokens\.css/] },
     },
   }),
 )
