@@ -5,9 +5,11 @@ import {
   folderSchema,
   idSchema,
   itemSchema,
+  timestampSchema,
   workspaceSchema,
 } from './entities.ts'
 import { boundedFilterSchema, sortSchema } from './query.ts'
+import { agentHubRoleSchema } from './roles.ts'
 
 // Request and response shapes of the HTTP API (v1), shared by `apps/api` and `apps/web`.
 // Every route is scoped to a workspace: `/v1/workspaces/:workspaceId/...`.
@@ -103,6 +105,47 @@ export type PatchItem = z.infer<typeof patchItemSchema>
 export const deleteItemQuerySchema = z.strictObject({
   version: z.coerce.number().int().min(1),
 })
+
+/**
+ * An agent key (D47). `id` is the key's agent principal. Its hub and role are the principal's
+ * one hub grant. The secret is never part of this shape: it is returned once, at creation.
+ */
+export const agentKeySchema = z.strictObject({
+  workspaceId: idSchema,
+  id: idSchema,
+  name: z.string().min(1).max(200),
+  hubId: idSchema,
+  hubRole: agentHubRoleSchema,
+  /** The principal who created the key. */
+  createdBy: idSchema,
+  createdAt: timestampSchema,
+  /** `null`: the key does not expire. */
+  expiresAt: timestampSchema.nullable(),
+  revokedAt: timestampSchema.nullable(),
+})
+export type AgentKey = z.infer<typeof agentKeySchema>
+
+/**
+ * `POST /v1/workspaces/:workspaceId/hubs/:hubId/agent-keys`. `hubRole` is at most the
+ * creator's effective hub role. `expiresAt`, if set, must be in the future.
+ */
+export const createAgentKeySchema = z.strictObject({
+  name: z.string().trim().min(1).max(200),
+  hubRole: agentHubRoleSchema,
+  expiresAt: timestampSchema.nullable().default(null),
+})
+export type CreateAgentKey = z.input<typeof createAgentKeySchema>
+
+/** The 201 response of creating a key. `secret` is shown this once and stored only hashed. */
+export const createdAgentKeySchema = z.strictObject({
+  key: agentKeySchema,
+  /** Sent as `Authorization: Bearer <secret>`. */
+  secret: z.string().min(1),
+})
+export type CreatedAgentKey = z.infer<typeof createdAgentKeySchema>
+
+/** `GET /v1/workspaces/:workspaceId/hubs/:hubId/agent-keys`: newest first, revoked included. */
+export const agentKeyPageSchema = pageSchema(agentKeySchema)
 
 /** Every error response has this shape. Some codes add fields, listed below. */
 export const API_ERROR_CODES = [

@@ -1,4 +1,5 @@
 import {
+  createAgentKeySchema,
   createItemSchema,
   deleteItemQuerySchema,
   idSchema,
@@ -13,6 +14,8 @@ import {
 import Fastify, { type FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
+import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
+import { agentHubCheck } from './auth/agent-key.ts'
 import {
   registerAuthHook,
   requireIdentity,
@@ -61,6 +64,7 @@ const nameCursorSchema = z.tuple([z.string(), z.string()])
 const workspaceParams = z.object({ workspaceId: idSchema })
 const hubParams = z.object({ workspaceId: idSchema, hubId: idSchema })
 const itemParams = z.object({ workspaceId: idSchema, itemId: idSchema })
+const keyParams = z.object({ workspaceId: idSchema, keyId: idSchema })
 
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
@@ -136,6 +140,16 @@ export function buildApp(options: AppOptions): FastifyInstance {
           }))
           return page(workspaces, limit, (w) => [w.name, w.id])
         }
+        if (identity.kind === 'agent') {
+          // An agent has exactly one workspace, its key's, taken from the key lookup (RLS-safe
+          // like the branch above). One row never yields a next cursor, so any cursor is past it.
+          const workspace: Workspace = {
+            id: identity.workspaceId,
+            name: identity.workspaceName,
+            createdAt: identity.workspaceCreatedAt.toISOString(),
+          }
+          return page(after ? [] : [workspace], limit, (w) => [w.name, w.id])
+        }
         let q = db
           .selectFrom('workspace as w')
           .innerJoin('principal as p', 'p.workspace_id', 'w.id')
@@ -168,6 +182,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
               .selectAll()
               .where('workspace_id', '=', workspaceId)
               .where('parent_id', 'is', null)
+            // An agent sees its one hub (D28). People: hub grants arrive with #43.
+            if (request.identity?.kind === 'agent') q = q.where('id', '=', request.identity.hubId)
             if (cursor) {
               const [name, id] = decodeCursor(nameCursorSchema, cursor)
               q = q.where(sql<boolean>`(name, id) > (${name}, ${id})`)
@@ -182,6 +198,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.get('/hubs/:hubId', async (request): Promise<HubDescription> => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
+            agentHubCheck(request.identity, request.principal, hubId, 'hub.read', 'Hub')
             const folders = await db
               .selectFrom('folder')
               .selectAll()
@@ -231,36 +248,69 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            return queryItems(db, workspaceId, parse(itemQuerySchema, request.body))
+            const query = parse(itemQuerySchema, request.body)
+            if (request.identity?.kind === 'agent') {
+              const hubId = await folderHub(workspaceId, query.from)
+              agentHubCheck(request.identity, request.principal, hubId, 'hub.read', 'Folder')
+            }
+            return queryItems(db, workspaceId, query)
           })
 
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
-            const item = await createItem(
-              db,
-              workspaceId,
-              request.principal.id,
-              parse(createItemSchema, request.body),
-            )
+            const body = parse(createItemSchema, request.body)
+            if (request.identity?.kind === 'agent') {
+              const hubId = await folderHub(workspaceId, body.folderId)
+              agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Folder')
+            }
+            const item = await createItem(db, workspaceId, request.principal.id, body)
             return reply.status(201).send(item)
           })
 
           ws.get('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
-            return getItem(db, workspaceId, itemId)
+            const item = await getItem(db, workspaceId, itemId)
+            agentHubCheck(request.identity, request.principal, item.hubId, 'hub.read', 'Item')
+            return item
           })
 
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
+            if (request.identity?.kind === 'agent') {
+              const hubId = await itemHub(workspaceId, itemId)
+              agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Item')
+            }
             return patchItem(db, workspaceId, request.principal.id, itemId, body)
           })
 
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { version } = parse(deleteItemQuerySchema, request.query)
+            if (request.identity?.kind === 'agent') {
+              const hubId = await itemHub(workspaceId, itemId)
+              agentHubCheck(request.identity, request.principal, hubId, 'item.write', 'Item')
+            }
             await deleteItem(db, workspaceId, request.principal.id, itemId, version)
             return reply.status(204).send()
+          })
+
+          ws.post('/hubs/:hubId/agent-keys', async (request, reply) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const body = parse(createAgentKeySchema, request.body)
+            const created = await createAgentKey(db, workspaceId, request.principal, hubId, body)
+            return reply.status(201).header('cache-control', 'no-store').send(created)
+          })
+
+          ws.get('/hubs/:hubId/agent-keys', async (request) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const query = parse(pageQuerySchema, request.query)
+            return listAgentKeys(db, workspaceId, request.principal, hubId, query)
+          })
+
+          ws.post('/agent-keys/:keyId/revoke', async (request) => {
+            const { workspaceId, keyId } = parse(keyParams, request.params)
+            return revokeAgentKey(db, workspaceId, request.principal, keyId)
           })
 
           wsDone()
@@ -272,6 +322,29 @@ export function buildApp(options: AppOptions): FastifyInstance {
     },
     { prefix: '/v1' },
   )
+
+  /** The hub of a folder, or 404. Item hubs never change, so a check before the write holds. */
+  async function folderHub(workspaceId: string, folderId: string): Promise<string> {
+    const row = await db
+      .selectFrom('folder')
+      .select('hub_id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', folderId)
+      .executeTakeFirst()
+    if (!row) throw notFound('Folder')
+    return row.hub_id
+  }
+
+  async function itemHub(workspaceId: string, itemId: string): Promise<string> {
+    const row = await db
+      .selectFrom('item')
+      .select('hub_id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', itemId)
+      .executeTakeFirst()
+    if (!row) throw notFound('Item')
+    return row.hub_id
+  }
 
   return app
 }

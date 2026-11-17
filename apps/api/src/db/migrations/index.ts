@@ -3,6 +3,7 @@ import * as m0001 from './0001_initial.ts'
 import * as m0002 from './0002_item_index.ts'
 import * as m0003 from './0003_auth_access.ts'
 import * as m0004 from './0004_auth_functions.ts'
+import * as m0005 from './0005_agent_key_lookup.ts'
 
 // Listed explicitly instead of read from disk, so migrations survive bundling into the image.
 // Names sort in run order.
@@ -11,4 +12,5 @@ export const migrations: Record<string, Migration> = {
   '0002_item_index': m0002,
   '0003_auth_access': m0003,
   '0004_auth_functions': m0004,
+  '0005_agent_key_lookup': m0005,
 }

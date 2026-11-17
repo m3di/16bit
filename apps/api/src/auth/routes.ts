@@ -118,6 +118,16 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
 
   v1.get('/me', async (request): Promise<Me> => {
     const identity = requireIdentity(request)
+    if (identity.kind === 'agent') {
+      // Names come from the key lookup, so nothing is read before a workspace is set (#44).
+      return {
+        kind: 'agent',
+        principalId: identity.principalId,
+        workspace: { id: identity.workspaceId, name: identity.workspaceName },
+        hub: { id: identity.hubId, name: identity.hubName },
+        hubRole: identity.hubRole,
+      }
+    }
     if (identity.kind !== 'person') {
       throw new HttpError('unauthorized', 'The development key has no account. Sign in.')
     }

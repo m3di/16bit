@@ -32,6 +32,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Create a hub (the creator becomes its hub admin) | ✓ | ✓ | — | — | — | — |
 | Grant or revoke access on any hub | ✓ | ✓ ¹ | — | — | — | — |
 | Create agent keys on a hub they hold a grant on, up to their own hub role ² | ✓ | ✓ | — | — | — | — |
+| List the agent keys of a hub they hold a grant on (same people as create) | ✓ | ✓ | — | — | — | — |
 | Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
 | Delete a hub | ✓ | ✓ | — | — | — | — |
@@ -52,6 +53,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Rename the hub, manage folders and attributes | ✓ | — | — | — |
 | Grant or revoke access on this hub | ✓ ³ | — | — | — |
 | Create and revoke agent keys for this hub | ✓ | — | — | — |
+| List the agent keys of this hub | ✓ | — | — | — |
 
 ³ A hub admin can grant any hub role, including hub admin, to others. They cannot change or revoke their own grant, or the grant of a workspace owner or admin.
 
@@ -60,6 +62,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 - Scoped to one hub, with role `editor`, `commenter` or `viewer`. Never `hub admin` (D28).
 - A key's role is at most its creator's effective hub role on that hub (least privilege). An owner holding a viewer grant can only create viewer keys.
 - They can never manage members, grants, keys, folders or attributes, and never touch billing.
+- They see their own workspace's ID, name and creation date (every path needs the ID), never its member list.
 - Shown once when created and stored hashed. They can be revoked, and an optional expiry date can be set. Creating or revoking a key is recorded in `access_log`.
 - Writes are recorded with the key's principal as `updated_by`.
 
