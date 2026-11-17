@@ -368,6 +368,20 @@ describe('useItems: a sort that went stale (#81)', () => {
     expect(s.notice.value).toBe(notice)
   })
 
+  it('clears the notice once the rows are sorted again (#87)', async () => {
+    const points = { attribute: 'points', direction: 'desc' } as const
+    const { s } = await sortedThen((body) =>
+      body.sort.length && (body.sort[0] as { attribute: string }).attribute === 'stage'
+        ? refused()
+        : page([item('i2', 2)]),
+    )
+    await s.openFolder('bld')
+    expect(s.notice.value).toBe(notice)
+    await s.setSort(points)
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { sort: points } })
+    expect(s.notice.value).toBeNull()
+  })
+
   it('does not claim the default order when a dropped sort is followed by a failed read', async () => {
     const { s } = await sortedThen(() => json({ error: 'internal', message: 'Down' }, 500))
     await s.openFolder('bld', [], ['points'])
