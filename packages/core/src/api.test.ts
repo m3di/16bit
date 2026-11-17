@@ -8,6 +8,9 @@ import {
   hubListEntrySchema,
   setHubGrantSchema,
   deleteItemQuerySchema,
+  getItemQuerySchema,
+  hubDescriptionSchema,
+  itemReadSchema,
   itemQueryResultSchema,
   itemQuerySchema,
   pageQuerySchema,
@@ -134,5 +137,49 @@ describe('api contracts', () => {
         hidden: MAX_HIDDEN_BACKLINKS + 1,
       }).success,
     ).toBe(false)
+  })
+
+  it('reads expand on a single item from a comma list, repeated keys, or both', () => {
+    const expand = (q: unknown) => getItemQuerySchema.safeParse(q)
+    expect(expand({}).data).toEqual({ expand: [] })
+    expect(expand({ expand: '' }).data).toEqual({ expand: [] })
+    expect(expand({ expand: 'r1' }).data).toEqual({ expand: ['r1'] })
+    expect(expand({ expand: 'r1,r2' }).data).toEqual({ expand: ['r1', 'r2'] })
+    expect(expand({ expand: ['r1,r2', 'r3'] }).data).toEqual({ expand: ['r1', 'r2', 'r3'] })
+    expect(expand({ expand: 'r1,r2,r3,r4' }).success).toBe(false)
+    expect(expand({ expand: ['r1', 'r1'] }).success).toBe(false)
+    expect(expand({ expand: 'r1,,r2' }).success).toBe(false)
+    expect(expand({ expand: 'r 1' }).success).toBe(false)
+    expect(expand({ other: 'x' }).success).toBe(false)
+
+    expect(itemReadSchema.parse(item)).toEqual(item)
+    const linked = { i2: { access: 'read', item }, i3: { access: 'none' } }
+    expect(itemReadSchema.parse({ ...item, linked, linkedTruncated: false }).linked).toEqual(linked)
+    expect(
+      itemReadSchema.safeParse({ ...item, linked: { i3: { access: 'none', item } } }).success,
+    ).toBe(false)
+  })
+
+  it("carries the caller's hub role in a hub description", () => {
+    const hub = {
+      workspaceId: 'w1',
+      id: 'h1',
+      hubId: 'h1',
+      parentId: null,
+      name: 'Hub',
+      color: 'blue',
+      idPrefix: 'HUB',
+      itemCount: 0,
+      version: 1,
+    }
+    const body = {
+      hub,
+      folders: [],
+      attributes: [],
+      folderAttributes: [],
+      truncated: { folders: false, attributes: false, folderAttributes: false },
+    }
+    expect(hubDescriptionSchema.safeParse(body).success).toBe(false)
+    expect(hubDescriptionSchema.parse({ ...body, hubRole: 'viewer' }).hubRole).toBe('viewer')
   })
 })

@@ -80,6 +80,7 @@ export const attributes: Attribute[] = [
 
 export const description: HubDescription = {
   hub: folder('bld', null, 'Build'),
+  hubRole: 'hub_admin',
   folders: [folder('b', 'bld', 'Bugs'), folder('a', 'bld', 'Archive'), folder('a1', 'a', 'Old')],
   attributes,
   truncated: { folders: false, attributes: false, folderAttributes: false },
