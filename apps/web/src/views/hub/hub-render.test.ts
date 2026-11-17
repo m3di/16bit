@@ -38,7 +38,15 @@ const render = async (c: Component, props: Record<string, unknown> = {}, slot?: 
 const columns = folderColumns(description, 'bld')
 const ready = (ids: string[], nextCursor: string | null = null): Load<ItemList> => ({
   state: 'ready',
-  data: { ids, nextCursor, more: false, moreError: null, sort: null, sorting: false },
+  data: {
+    ids,
+    nextCursor,
+    more: false,
+    moreError: null,
+    moreRefused: false,
+    sort: null,
+    sorting: false,
+  },
 })
 
 const block = (
@@ -124,6 +132,16 @@ describe('ItemsBlock', () => {
   it('offers more when there is a next page', async () => {
     expect(await block(ready(['i1'], 'c1'))).toContain('Load more')
     expect(await block(ready(['i1']))).not.toContain('Load more')
+  })
+
+  it('offers the default order instead of "Load more" once the sort was refused (#85)', async () => {
+    const list = ready(['i1'], 'c1')
+    if (list.state === 'ready') list.data.moreRefused = true
+    const html = await block(list, undefined, false, { attribute: 'stage', direction: 'asc' })
+    expect(html).toContain('Ship')
+    expect(html).not.toContain('Load more')
+    expect(html).toContain('More items cannot be loaded in this order.')
+    expect(html).toMatch(/<button[^>]*>(<!--\[-->)?Show newest update first(<!--\]-->)?<\/button>/)
   })
 
   const states: [string, Load<ItemList>, string][] = [
