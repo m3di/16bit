@@ -192,9 +192,34 @@ export interface Database {
 const types = new pg.TypeOverrides()
 types.setTypeParser(pg.types.builtins.INT8, Number)
 
+/**
+ * A pool whose `end()` resolves only once every client's socket has closed (#103). pg-pool's own
+ * `end()` resolves as soon as it has asked its idle clients to end, before their sockets close,
+ * so a server-side termination in that window (`DROP DATABASE ... WITH (FORCE)` in tests, a
+ * restart in production) reached a client with no one listening and crashed the process.
+ */
+export class ClosingPool extends pg.Pool {
+  readonly #open = new Set<pg.PoolClient>()
+
+  constructor(config: pg.PoolConfig) {
+    super(config)
+    this.on('connect', (client) => {
+      this.#open.add(client)
+      client.once('end', () => this.#open.delete(client))
+    })
+  }
+
+  override async end(): Promise<void> {
+    await super.end()
+    await Promise.all(
+      [...this.#open].map((client) => new Promise<void>((done) => client.once('end', done))),
+    )
+  }
+}
+
 export function createDb(connectionString: string): Kysely<Database> {
   return new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString, max: 10, types }) }),
+    dialect: new PostgresDialect({ pool: new ClosingPool({ connectionString, max: 10, types }) }),
   })
 }
 
