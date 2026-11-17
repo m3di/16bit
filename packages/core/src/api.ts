@@ -5,11 +5,13 @@ import {
   folderSchema,
   idSchema,
   itemSchema,
+  principalSchema,
   timestampSchema,
   workspaceSchema,
 } from './entities.ts'
+import { paletteColorSchema } from './palette.ts'
 import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
-import { agentHubRoleSchema } from './roles.ts'
+import { agentHubRoleSchema, hubRoleSchema, workspaceRoleSchema } from './roles.ts'
 
 // Request and response shapes of the HTTP API (v1), shared by `apps/api` and `apps/web`.
 // Every route is scoped to a workspace: `/v1/workspaces/:workspaceId/...`.
@@ -41,8 +43,73 @@ export interface Page<T> {
 /** `GET /v1/workspaces`: the workspaces the caller belongs to, by name. */
 export const workspacePageSchema = pageSchema(workspaceSchema)
 
+/**
+ * One entry of the hub list. `granted`: the caller holds a grant on the hub; `hubRole` is their
+ * effective hub role (the grant capped by workspace role, docs/ROLES.md). `none`: owners and
+ * admins also see hubs they hold no grant on, by name only (D45). Everything inside such a hub
+ * is a 404 to them until they grant themselves access.
+ */
+export const hubListEntrySchema = z.discriminatedUnion('access', [
+  folderSchema.extend({ access: z.literal('granted'), hubRole: hubRoleSchema }),
+  z.strictObject({
+    access: z.literal('none'),
+    workspaceId: idSchema,
+    id: idSchema,
+    name: folderSchema.shape.name,
+    color: paletteColorSchema,
+  }),
+])
+export type HubListEntry = z.infer<typeof hubListEntrySchema>
+
 /** `GET /v1/workspaces/:workspaceId/hubs`: hubs by name. `itemCount` is the hub's total. */
-export const hubPageSchema = pageSchema(folderSchema)
+export const hubPageSchema = pageSchema(hubListEntrySchema)
+
+/**
+ * `POST /v1/workspaces/:workspaceId/hubs`, owners and admins. The creator becomes the hub's
+ * hub admin (docs/ROLES.md). `id` is optional; the server makes one if absent. Returns 201 with
+ * the new hub as a `granted` hub list entry.
+ */
+export const createHubSchema = z.strictObject({
+  id: idSchema.optional(),
+  name: z.string().trim().min(1).max(200),
+  color: paletteColorSchema,
+  idPrefix: folderSchema.shape.idPrefix,
+})
+export type CreateHub = z.input<typeof createHubSchema>
+
+/**
+ * `GET /v1/workspaces/:workspaceId/members`: the people of the workspace, by name. Agent
+ * principals are listed through their keys, removed members not at all. Agents get 403.
+ */
+export const memberPageSchema = pageSchema(principalSchema)
+
+/**
+ * `PATCH /v1/workspaces/:workspaceId/members/:principalId`. Returns the member. An admin cannot
+ * change an owner or make one, and the last owner cannot stop being one (docs/ROLES.md).
+ * `DELETE` on the same path removes the member (204): their hub grants are revoked, their
+ * unused invites expire, and they can no longer sign in to the workspace. The principal stays
+ * so history keeps its actor; agent keys they created stay until revoked.
+ */
+export const changeMemberRoleSchema = z.strictObject({ workspaceRole: workspaceRoleSchema })
+export type ChangeMemberRole = z.infer<typeof changeMemberRoleSchema>
+
+/** A principal's access to one hub (D27). */
+export const hubGrantSchema = z.strictObject({
+  workspaceId: idSchema,
+  hubId: idSchema,
+  principalId: idSchema,
+  hubRole: hubRoleSchema,
+})
+export type HubGrant = z.infer<typeof hubGrantSchema>
+
+/**
+ * `PUT /v1/workspaces/:workspaceId/hubs/:hubId/grants/:principalId`: grants or changes a
+ * person's hub role and returns the grant. Owners and admins may grant themselves (self-grant,
+ * D45). `DELETE` on the same path revokes (204, also when there was no grant). Agent grants
+ * come and go with their keys. Every change is written to `access_log` (D48).
+ */
+export const setHubGrantSchema = z.strictObject({ hubRole: hubRoleSchema })
+export type SetHubGrant = z.infer<typeof setHubGrantSchema>
 
 /** `GET /v1/workspaces/:workspaceId/hubs/:hubId`: a hub with its folders and attributes. */
 export const hubDescriptionSchema = z.strictObject({

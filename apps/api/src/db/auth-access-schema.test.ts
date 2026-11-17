@@ -1,7 +1,6 @@
 import { sql, type Kysely } from 'kysely'
 import { Migrator } from 'kysely/migration'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { applySeed } from '../demo-seed.ts'
 import { createDb, migrateToLatest, type Database } from './database.ts'
 import { migrations } from './migrations/index.ts'
 import { createTestDatabase } from './test-database.ts'
@@ -27,12 +26,27 @@ afterEach(async () => {
 const migrator = () =>
   new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
 
-// The demo seed is slow under a full parallel run, hence the longer timeouts.
+/**
+ * M0-shaped data, written with the 0001 schema only. (The demo seed can't run here any more: it
+ * writes hub grants, which arrive in 0003.)
+ */
+async function seedAt0001(): Promise<void> {
+  await sql`
+    INSERT INTO workspace (id, name) VALUES ('demo', 'Demo'), ('acme', 'Acme');
+    INSERT INTO principal (workspace_id, id, kind, name, workspace_role) VALUES
+      ('demo', 'dev-owner', 'user', 'Dev', 'owner'),
+      ('demo', 'bot', 'agent', 'Bot', 'member'),
+      ('acme', 'dev-owner', 'user', 'Dev', 'owner');
+    INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
+      VALUES ('demo', 'h', 'h', NULL, 'Hub', 'blue', 'H');
+  `.execute(db)
+}
+
 describe('upgrading a database already migrated with 0001', () => {
   it('keeps existing data and fills the new columns with defaults', async () => {
     const { error } = await migrator().migrateTo('0001_initial')
     expect(error).toBeUndefined()
-    await applySeed(db, { devPrincipalId: 'dev-owner' })
+    await seedAt0001()
     const before = await db.selectFrom('principal').select(['workspace_id', 'id', 'kind']).execute()
     expect(before.length).toBeGreaterThan(0)
 
@@ -42,6 +56,7 @@ describe('upgrading a database already migrated with 0001', () => {
       '0004_auth_functions',
       '0005_agent_key_lookup',
       '0006_link',
+      '0007_principal_removed',
     ])
 
     const principals = await db
@@ -57,7 +72,7 @@ describe('upgrading a database already migrated with 0001', () => {
 
   it('migrates back down to 0001 and keeps the data', async () => {
     await migrator().migrateTo('0001_initial')
-    await applySeed(db, { devPrincipalId: 'dev-owner' })
+    await seedAt0001()
     const count = async () =>
       Number((await sql<{ n: string }>`SELECT count(*) AS n FROM principal`.execute(db)).rows[0]?.n)
     const before = await count()

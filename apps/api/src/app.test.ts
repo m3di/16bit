@@ -117,6 +117,14 @@ async function seed(): Promise<void> {
       fa('bugs', 'title', 0, true),
     ])
     .execute()
+  // Owners see nothing inside a hub without a grant (D45).
+  await db
+    .insertInto('hub_grant')
+    .values([
+      { workspace_id: 'w1', hub_id: 'build', principal_id: ACTOR, hub_role: 'hub_admin' },
+      { workspace_id: 'w1', hub_id: 'docs', principal_id: ACTOR, hub_role: 'hub_admin' },
+    ])
+    .execute()
 }
 
 function request(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) {
@@ -201,7 +209,9 @@ describe('workspaces and hubs', () => {
     const first = hubPageSchema.parse(
       (await request('GET', '/v1/workspaces/w1/hubs?limit=1')).json(),
     )
-    expect(first.items.map((h) => [h.id, h.itemCount])).toEqual([['build', 1]])
+    expect(first.items.map((h) => h.access === 'granted' && [h.id, h.itemCount])).toEqual([
+      ['build', 1],
+    ])
     expect(first.nextCursor).not.toBeNull()
     const second = hubPageSchema.parse(
       (

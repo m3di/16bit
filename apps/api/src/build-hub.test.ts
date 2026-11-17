@@ -156,6 +156,20 @@ describe('ensureBuildHub', () => {
       .orderBy('position')
       .execute()
     expect(attributes.map((a) => a.attribute_id)).toEqual(Object.values(ATTR))
+    // Owners see nothing inside a hub without a grant (D45), so the dev principal gets one,
+    // logged once however often this runs.
+    const grants = await db
+      .selectFrom('hub_grant')
+      .select(['hub_id', 'principal_id', 'hub_role'])
+      .where('workspace_id', '=', WS)
+      .execute()
+    expect(grants).toEqual([{ hub_id: BUILD_HUB.id, principal_id: OWNER, hub_role: 'hub_admin' }])
+    const log = await db
+      .selectFrom('access_log')
+      .select(['action', 'target'])
+      .where('workspace_id', '=', WS)
+      .execute()
+    expect(log).toEqual([{ action: 'grant.set', target: OWNER }])
   })
 
   it('leaves an existing workspace and principal untouched', async () => {
@@ -353,6 +367,7 @@ describe('importIssues', () => {
   })
 
   it('still stops the run on an error that is not about one issue', async () => {
+    await db.deleteFrom('hub_grant').execute()
     await db.deleteFrom('folder_attribute').execute()
     await db.deleteFrom('attribute').execute()
     await db.deleteFrom('folder').execute()

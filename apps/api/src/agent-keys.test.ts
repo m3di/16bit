@@ -17,6 +17,7 @@ import { createSession, DEFAULT_SESSION_POLICY, SESSION_COOKIE } from './auth/se
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { encodeCursor } from './http.ts'
+import { createItem } from './items.ts'
 
 // Integration tests for agent keys (#42, D47, D48, docs/ROLES.md) against a real Postgres.
 // People are authenticated with the dev key, one app per principal: sessions are covered in
@@ -156,8 +157,8 @@ async function seed(): Promise<void> {
     ['b1', 'build'],
     ['d1', 'docs'],
   ] as const) {
-    const res = await person('own', 'POST', '/v1/workspaces/w1/items', { id, folderId: folder })
-    expect(res.statusCode).toBe(201)
+    // Straight through the write path: `own` holds no grant, so the API would hide both hubs.
+    await createItem(db, 'w1', 'own', { id, folderId: folder, values: {} })
   }
 }
 

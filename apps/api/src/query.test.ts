@@ -93,6 +93,10 @@ async function seedWorkspace(ws: string): Promise<void> {
       id_prefix: 'H',
     })
     .execute()
+  await db
+    .insertInto('hub_grant')
+    .values({ workspace_id: ws, hub_id: 'h', principal_id: ACTOR, hub_role: 'hub_admin' })
+    .execute()
   const attribute = (id: string, type: string, config: object, indexed = true) => ({
     workspace_id: ws,
     id,
