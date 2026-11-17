@@ -23,9 +23,16 @@ export { default as RichTextView } from './RichTextView.vue'
 export { default as SignInForm } from './SignInForm.vue'
 export { default as UrlLink } from './UrlLink.vue'
 export { default as ValueState } from './ValueState.vue'
-export type { Actor, RelationTarget, SignInState, ValueStateName } from './value-types.ts'
+export type {
+  Actor,
+  RelationTarget,
+  UnknownActor,
+  SignInState,
+  ValueStateName,
+} from './value-types.ts'
 // RichTextEditor is not exported here: it pulls in Tiptap. Import it from
 // './RichTextEditor.vue' behind a dynamic import so it stays out of the main bundle.
 export { chipsFor, type Chip, type ChipOption } from './chips.ts'
 export { displayUrl } from './url.ts'
+export { shortId } from './actor.ts'
 export { isRichTextEmpty, normalizeRichText, richTextToPlain, type RichDoc } from './rich-text.ts'

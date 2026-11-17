@@ -1,7 +1,7 @@
 import { memberPageSchema, type Me, type Principal } from '@16bit/core'
 import { computed, ref } from 'vue'
 import { asRequestError, getAllPages, type ApiRequestError, type Fetch } from '../../api/client.ts'
-import type { Actor } from '../../ui/index.ts'
+import { shortId, type Actor } from '../../ui/index.ts'
 
 /**
  * Names for actor values. People come from `GET /members` and the signed-in account. The list
@@ -19,8 +19,6 @@ export type MembersState =
   | { state: 'ready' }
   | { state: 'unavailable' }
   | { state: 'error'; error: ApiRequestError }
-
-export const shortId = (id: string) => id.slice(0, 8)
 
 export function usePrincipals(
   workspaceId: string,

@@ -1,4 +1,6 @@
 <script setup lang="ts" generic="Row extends { id: string }">
+import SortIcon from './SortIcon.vue'
+
 export interface TableColumn {
   key: string
   label: string
@@ -22,8 +24,6 @@ const { selectedId = null, busy } = defineProps<{
 }>()
 
 const emit = defineEmits<{ select: [row: Row]; sort: [key: string] }>()
-
-const arrows = { ascending: '↑', descending: '↓' } as const
 
 defineSlots<{ cell(props: { row: Row; column: TableColumn }): unknown }>()
 
@@ -59,6 +59,8 @@ function onRowClick(event: MouseEvent, row: Row) {
             :aria-sort="column.sort && column.sort !== 'none' ? column.sort : undefined"
             :data-sort="column.sort"
           >
+            <!-- In a right-aligned column the sort icon leads, so the label lines up with the
+                 numbers' right edge. Elsewhere it follows the label. -->
             <button
               v-if="column.sort"
               type="button"
@@ -66,10 +68,9 @@ function onRowClick(event: MouseEvent, row: Row) {
               :class="column.sort !== 'none' && 'font-medium text-ink'"
               @click="emit('sort', column.key)"
             >
-              {{ column.label
-              }}<span v-if="column.sort !== 'none'" aria-hidden="true">{{
-                arrows[column.sort]
-              }}</span>
+              <SortIcon v-if="column.align === 'end'" :sort="column.sort" />
+              {{ column.label }}
+              <SortIcon v-if="column.align !== 'end'" :sort="column.sort" />
             </button>
             <template v-else>{{ column.label }}</template>
           </th>

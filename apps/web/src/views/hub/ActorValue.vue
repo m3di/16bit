@@ -47,9 +47,7 @@ const overflow = computed(() => actors.value.length - shown.value.length)
       :data-actor="actor.id"
       :data-known="actor.known ? 'true' : 'false'"
     >
-      <!-- An actor that cannot be named shows its avatar and a short ID, never a made-up name. -->
-      <ActorChip :actor="actor" />
-      <span v-if="!actor.known" class="sr-only">: not in the member list</span>
+      <ActorChip :actor="actor.known ? actor : { id: actor.id, kind: 'unknown' }" />
       <button
         v-if="removable"
         type="button"

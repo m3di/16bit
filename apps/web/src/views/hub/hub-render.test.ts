@@ -87,7 +87,7 @@ describe('ItemsBlock', () => {
   it('makes headers of indexed, sortable attributes sort buttons', async () => {
     const html = await block(ready(['i1']))
     // Stage is indexed; Title and Points are not, and the ID column has no attribute.
-    expect(header(html, 'Stage')).toMatch(/<button type="button"[^>]*>\s*Stage/)
+    expect(header(html, 'Stage')).toMatch(/<button type="button"[^>]*>(\s|<!---->)*Stage/)
     expect(header(html, 'Stage')).toContain('data-sort="none"')
     expect(header(html, 'Stage')).not.toContain('aria-sort')
     for (const label of ['ID', 'Title', 'Points']) {
@@ -102,13 +102,13 @@ describe('ItemsBlock', () => {
       direction: 'asc',
     })
     expect(header(asc, 'Stage')).toContain('aria-sort="ascending"')
-    expect(header(asc, 'Stage')).toMatch(/<span aria-hidden="true">↑<\/span>/)
+    expect(header(asc, 'Stage')).toContain('data-sort-icon="ascending"')
     const desc = await block(ready(['i1']), undefined, false, {
       attribute: 'stage',
       direction: 'desc',
     })
     expect(header(desc, 'Stage')).toContain('aria-sort="descending"')
-    expect(header(desc, 'Stage')).toContain('↓')
+    expect(header(desc, 'Stage')).toContain('data-sort-icon="descending"')
   })
 
   it('keeps the rows while a new order loads, and holds "Load more" back', async () => {

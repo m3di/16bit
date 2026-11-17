@@ -12,6 +12,7 @@ const {
   removable,
   label,
   state = 'ready',
+  inline,
 } = defineProps<{
   /** Option IDs, as a multi-select stores them. */
   value: readonly string[]
@@ -24,6 +25,11 @@ const {
   label: string
   /** Overrides the value. An empty value shows the empty state on its own. */
   state?: Exclude<ValueStateName, 'empty'> | 'ready'
+  /**
+   * One line that never wraps, for table cells. Long labels are cut with an ellipsis (the full
+   * label is the chip's title) and the "+N" count always stays visible.
+   */
+  inline?: boolean
 }>()
 
 defineEmits<{ remove: [id: string] }>()
@@ -40,15 +46,32 @@ const hidden = computed(() =>
 <template>
   <ValueState v-if="state !== 'ready'" :state="state" />
   <ValueState v-else-if="view.chips.length === 0 && view.overflow === 0" state="empty" />
-  <ul v-else :aria-label="label" class="m-0 inline-flex list-none flex-wrap items-center gap-1 p-0">
-    <li v-for="chip in view.chips" :key="chip.id" class="inline-flex">
-      <PaletteChip v-if="chip.color" :color="chip.color" class="min-h-5 gap-1">
-        {{ chip.label }}
+  <ul
+    v-else
+    :aria-label="label"
+    :class="[
+      'm-0 inline-flex list-none items-center gap-1 p-0',
+      inline ? 'max-w-full min-w-0 flex-nowrap whitespace-nowrap' : 'flex-wrap',
+    ]"
+    :data-inline="inline || undefined"
+  >
+    <li
+      v-for="chip in view.chips"
+      :key="chip.id"
+      :class="['inline-flex', inline && 'min-w-0']"
+      :title="inline ? chip.label : undefined"
+    >
+      <PaletteChip
+        v-if="chip.color"
+        :color="chip.color"
+        :class="['min-h-5 gap-1', inline && 'min-w-0 max-w-full']"
+      >
+        <span :class="inline && 'truncate'">{{ chip.label }}</span>
         <button
           v-if="removable"
           type="button"
           :aria-label="`Remove ${chip.label}`"
-          class="-mr-1 inline-flex size-4 cursor-pointer items-center justify-center rounded-chip border-0 bg-transparent p-0 text-current hover:bg-bg"
+          class="-mr-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-chip border-0 bg-transparent p-0 text-current hover:bg-bg"
           @click="$emit('remove', chip.id)"
         >
           <svg aria-hidden="true" focusable="false" viewBox="0 0 8 8" class="size-2">
@@ -61,14 +84,15 @@ const hidden = computed(() =>
         :class="[
           'inline-flex min-h-5 items-center gap-1 rounded-chip border px-1.5 text-caption',
           chip.missing ? 'border-dashed border-line3 text-ink3' : 'border-line2 text-ink2',
+          inline && 'min-w-0 max-w-full',
         ]"
       >
-        {{ chip.label }}
+        <span :class="inline && 'truncate'">{{ chip.label }}</span>
         <button
           v-if="removable"
           type="button"
           :aria-label="`Remove ${chip.label}`"
-          class="-mr-1 inline-flex size-4 cursor-pointer items-center justify-center rounded-chip border-0 bg-transparent p-0 text-current hover:bg-selected"
+          class="-mr-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-chip border-0 bg-transparent p-0 text-current hover:bg-selected"
           @click="$emit('remove', chip.id)"
         >
           <svg aria-hidden="true" focusable="false" viewBox="0 0 8 8" class="size-2">
@@ -77,7 +101,7 @@ const hidden = computed(() =>
         </button>
       </span>
     </li>
-    <li v-if="view.overflow > 0" class="inline-flex">
+    <li v-if="view.overflow > 0" class="inline-flex shrink-0">
       <span class="text-caption text-ink3" :title="hidden"
         >+{{ view.overflow }}<span class="sr-only"> more: {{ hidden }}</span></span
       >

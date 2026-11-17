@@ -8,6 +8,15 @@ export interface Actor {
   kind: 'person' | 'agent'
 }
 
+/**
+ * A principal whose name cannot be resolved, for example an agent or a removed member that is
+ * not in the member list. Shown by avatar and short ID, never by an invented name.
+ */
+export interface UnknownActor {
+  id: string
+  kind: 'unknown'
+}
+
 /** A linked item as the query endpoint expands it, or the marker for one the reader cannot see. */
 export type RelationTarget =
   | { access: 'ok'; id: string; title: string; displayId?: string | undefined }

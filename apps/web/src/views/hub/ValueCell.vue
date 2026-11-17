@@ -33,7 +33,7 @@ const empty = computed(
     :options="attribute.config.options"
     :label="attribute.name"
     :limit="CELL_LIMIT"
-    class="flex-nowrap! whitespace-nowrap"
+    inline
   />
   <UrlLink v-else-if="attribute.type === 'url'" :value="typeof value === 'string' ? value : null" />
   <ActorValue
