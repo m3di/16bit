@@ -3,8 +3,10 @@ import {
   compileItemQuery,
   indexEntries,
   validateItemValues,
+  MAX_HIDDEN_BACKLINKS,
+  MAX_LINKED_ITEMS,
   type Attribute,
-  type Backlink,
+  type BacklinkPage,
   type CompiledFilter,
   type CompiledSort,
   type Filter,
@@ -13,14 +15,13 @@ import {
   type ItemQueryResult,
   type ItemValues,
   type LinkedItem,
-  type Page,
   type PatchItem,
   type Subject,
   type ValueError,
 } from '@16bit/core'
 import { sql, type Kysely, type RawBuilder, type Transaction } from 'kysely'
 import { z } from 'zod'
-import { loadSubject, readableHubs } from './access.ts'
+import { allReadableHubs, loadSubject, readableHubs } from './access.ts'
 import type { Database } from './db/database.ts'
 import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
 import { toAttribute, toItem } from './mappers.ts'
@@ -158,10 +159,16 @@ const linkedIds = (values: ItemValues, attribute: RelationAttribute): string[] =
   (values[attribute.id] as string[] | null | undefined) ?? []
 
 /**
- * Checks every item a relation value links to and locks it FOR KEY SHARE until commit. A
- * target must exist, sit in the attribute's target hub, stay inside the attribute's own hub
- * unless `crossHub` is on (D11), and be readable by the writer. A missing target and one the
- * writer cannot read get the same error, so hidden items cannot be probed.
+ * Checks every item a relation value links to and locks it FOR KEY SHARE until commit. Returns
+ * `values` with stale IDs dropped.
+ *
+ * Every target must exist, sit in the attribute's target hub, and stay inside the attribute's
+ * own hub unless `crossHub` is on (D11). A target that is new compared with `stored` (the
+ * item's value before this write, per attribute) must also be readable by the writer; one
+ * already stored is kept even if the writer cannot read it, since they already see its ID. A
+ * stored target that has since been deleted is dropped silently, so a client can send back
+ * the value it read. A missing new target and an unreadable new one get the same error, so
+ * hidden items cannot be probed.
  */
 async function checkTargets(
   trx: Trx,
@@ -169,9 +176,10 @@ async function checkTargets(
   actor: string,
   relations: RelationAttribute[],
   values: ItemValues,
-): Promise<void> {
+  stored: ItemValues,
+): Promise<ItemValues> {
   const ids = [...new Set(relations.flatMap((a) => linkedIds(values, a)))].sort()
-  if (ids.length === 0) return
+  if (ids.length === 0) return values
   const rows = await trx
     .selectFrom('item')
     .select(['id', 'hub_id'])
@@ -189,12 +197,17 @@ async function checkTargets(
   )
 
   const errors: ValueError[] = []
+  const kept: ItemValues = { ...values }
   for (const attribute of relations) {
-    for (const id of linkedIds(values, attribute)) {
+    const before = new Set(linkedIds(stored, attribute))
+    const ids = linkedIds(values, attribute)
+    for (const id of ids) {
       const hub = hubOf.get(id)
       const fail = (message: string) =>
         errors.push({ attributeId: attribute.id, code: 'invalid_value', message })
-      if (hub === undefined || !readable.has(hub)) {
+      if (hub === undefined) {
+        if (!before.has(id)) fail(`Item "${id}" not found`)
+      } else if (!before.has(id) && !readable.has(hub)) {
         fail(`Item "${id}" not found`)
       } else if (hub !== attribute.hubId && !attribute.config.crossHub) {
         fail(`Item "${id}" is in another hub, and this relation does not allow cross-hub links`)
@@ -202,10 +215,14 @@ async function checkTargets(
         fail(`Item "${id}" is not in this relation's target hub`)
       }
     }
+    const live = ids.filter((id) => hubOf.has(id))
+    // An empty relation is stored as no value, as validation does for `[]`.
+    if (live.length < ids.length) kept[attribute.id] = live.length > 0 ? live : null
   }
   if (errors.length > 0) {
     throw new HttpError('invalid_values', 'Some values are not valid', { errors })
   }
+  return kept
 }
 
 /**
@@ -322,7 +339,7 @@ export async function createItem(
     if (used) throw new HttpError('id_taken', 'This item ID is already used')
 
     // Before the hub row: see the lock order above.
-    await checkTargets(trx, workspaceId, actor, relations, values)
+    await checkTargets(trx, workspaceId, actor, relations, values, {})
 
     const { seq_id } = await trx
       .updateTable('folder')
@@ -375,11 +392,24 @@ export async function patchItem(
 ): Promise<Item> {
   const before = await getItem(db, workspaceId, id)
   const definitions = await folderDefinitions(db, workspaceId, before.folderId)
-  const patch = validate(definitions, input.values, true)
-  const cleared = Object.keys(patch).filter((key) => patch[key] === null)
-  const relations = touchedRelations(definitions, patch)
+  const validated = validate(definitions, input.values, true)
+  const relations = touchedRelations(definitions, validated)
 
   return db.transaction().execute(async (trx) => {
+    // NO KEY UPDATE, like the UPDATE below, so writers linking to this item are not blocked.
+    const current = await trx
+      .selectFrom('item')
+      .selectAll()
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', id)
+      .forNoKeyUpdate()
+      .executeTakeFirst()
+    if (!current) throw notFound('Item')
+    if (current.version !== input.version) throw conflict(toItem(current))
+
+    // The item cannot change folder, so the definitions read before the transaction still apply.
+    const patch = await checkTargets(trx, workspaceId, actor, relations, validated, current.values)
+    const cleared = Object.keys(patch).filter((key) => patch[key] === null)
     const row = await trx
       .updateTable('item')
       .set({
@@ -391,14 +421,9 @@ export async function patchItem(
       })
       .where('workspace_id', '=', workspaceId)
       .where('id', '=', id)
-      .where('version', '=', input.version)
       .returningAll()
-      .executeTakeFirst()
-    // Zero rows: the item was deleted (404) or its version moved (409 with the current item).
-    if (!row) throw conflict(await getItem(trx, workspaceId, id))
+      .executeTakeFirstOrThrow()
 
-    // The item cannot change folder, so the definitions read before the transaction still apply.
-    await checkTargets(trx, workspaceId, actor, relations, patch)
     await writeLinks(trx, workspaceId, id, relations, patch, true)
     await writeIndex(trx, workspaceId, id, definitions, patch, true)
     await appendRevision(trx, workspaceId, id, row.version, { op: 'update', values: patch }, actor)
@@ -594,6 +619,7 @@ export async function queryItems(
   workspaceId: string,
   actor: Subject,
   query: ItemQuery,
+  caps: { maxLinkedItems?: number } = {},
 ): Promise<ItemQueryResult> {
   const { statement, keys, expand } = await itemQueryStatement(db, workspaceId, query)
   const { rows } = await statement.execute(db)
@@ -610,21 +636,25 @@ export async function queryItems(
         : null,
   }
   if (expand.length > 0) {
-    result.linked = await linkedItems(
+    const { linked, truncated } = await linkedItems(
       db,
       workspaceId,
       actor,
       page.map((row) => row.id),
       expand,
+      caps.maxLinkedItems ?? MAX_LINKED_ITEMS,
     )
+    result.linked = linked
+    result.linkedTruncated = truncated
   }
   return result
 }
 
 /**
  * The items that `fromIds` link to through `attributeIds`, keyed by ID: the item where the
- * caller can read its hub, a "no access" marker otherwise. Bounded by the page: at most
- * 200 items x 3 attributes x 100 links.
+ * caller can read its hub, a "no access" marker otherwise. The first `cap` by ID, with
+ * `truncated` set if there were more. Without the cap a page could pull in
+ * 200 items x 3 attributes x 100 links = 60,000 items.
  */
 async function linkedItems(
   db: Db,
@@ -632,8 +662,9 @@ async function linkedItems(
   actor: Subject,
   fromIds: string[],
   attributeIds: string[],
-): Promise<Record<string, LinkedItem>> {
-  if (fromIds.length === 0) return {}
+  cap: number,
+): Promise<{ linked: Record<string, LinkedItem>; truncated: boolean }> {
+  if (fromIds.length === 0) return { linked: {}, truncated: false }
   const rows = await db
     .selectFrom('item')
     .selectAll()
@@ -646,27 +677,34 @@ async function linkedItems(
         .where('from_item', 'in', fromIds)
         .where('attribute_id', 'in', attributeIds),
     )
+    .orderBy('id')
+    .limit(cap + 1)
     .execute()
+  const shown = rows.slice(0, cap)
   const readable = await readableHubs(
     db,
     workspaceId,
     actor,
-    rows.map((r) => r.hub_id),
+    shown.map((r) => r.hub_id),
   )
-  return Object.fromEntries(
-    rows.map((row): [string, LinkedItem] => [
-      row.id,
-      readable.has(row.hub_id) ? { access: 'read', item: toItem(row) } : { access: 'none' },
-    ]),
-  )
+  return {
+    linked: Object.fromEntries(
+      shown.map((row): [string, LinkedItem] => [
+        row.id,
+        readable.has(row.hub_id) ? { access: 'read', item: toItem(row) } : { access: 'none' },
+      ]),
+    ),
+    truncated: rows.length > cap,
+  }
 }
 
 const backlinkCursorSchema = z.tuple([z.string().min(1).max(64), z.string().min(1).max(64)])
 
 /**
  * The items that link to `id`, by linking item ID, then attribute ID. The item itself must be
- * readable (404 otherwise, docs/ROLES.md). Linking items in hubs the caller cannot read come
- * back as "no access", without their values.
+ * readable (404 otherwise, docs/ROLES.md). Only linking items the caller can read are listed;
+ * the others are counted in `hidden`, up to `maxHidden`, and never named, so a hub the caller
+ * cannot see does not show through.
  */
 export async function backlinks(
   db: Db,
@@ -674,45 +712,56 @@ export async function backlinks(
   actor: Subject,
   id: string,
   page: { limit: number; cursor?: string | undefined },
-): Promise<Page<Backlink>> {
+  maxHidden: number = MAX_HIDDEN_BACKLINKS,
+): Promise<BacklinkPage> {
   const target = await getItem(db, workspaceId, id)
-  const targetReadable = await readableHubs(db, workspaceId, actor, [target.hubId])
-  if (!targetReadable.has(target.hubId)) throw notFound('Item')
+  const readable = await allReadableHubs(db, workspaceId, actor)
+  if (!readable.includes(target.hubId)) throw notFound('Item')
 
-  let q = db
-    .selectFrom('link as l')
-    .innerJoin('item as i', (join) =>
-      join.onRef('i.workspace_id', '=', 'l.workspace_id').onRef('i.id', '=', 'l.from_item'),
-    )
+  const linking = () =>
+    db
+      .selectFrom('link as l')
+      .innerJoin('item as i', (join) =>
+        join.onRef('i.workspace_id', '=', 'l.workspace_id').onRef('i.id', '=', 'l.from_item'),
+      )
+      .where('l.workspace_id', '=', workspaceId)
+      .where('l.to_item', '=', id)
+
+  let q = linking()
     .selectAll('i')
     .select('l.attribute_id as link_attribute_id')
-    .where('l.workspace_id', '=', workspaceId)
-    .where('l.to_item', '=', id)
+    .where('i.hub_id', 'in', readable)
   if (page.cursor) {
     const [from, attribute] = decodeCursor(backlinkCursorSchema, page.cursor)
     q = q.where(sql<boolean>`(l.from_item, l.attribute_id) > (${from}, ${attribute})`)
   }
-  const rows = await q
-    .orderBy('l.from_item')
-    .orderBy('l.attribute_id')
-    .limit(page.limit + 1)
-    .execute()
+  const [rows, hidden] = await Promise.all([
+    q
+      .orderBy('l.from_item')
+      .orderBy('l.attribute_id')
+      .limit(page.limit + 1)
+      .execute(),
+    db
+      .selectFrom(
+        linking()
+          .select(sql<number>`1`.as('one'))
+          .where('i.hub_id', 'not in', readable)
+          .limit(maxHidden)
+          .as('h'),
+      )
+      .select((eb) => eb.fn.countAll<string>().as('n'))
+      .executeTakeFirstOrThrow(),
+  ])
   const shown = rows.slice(0, page.limit)
-  const readable = await readableHubs(
-    db,
-    workspaceId,
-    actor,
-    shown.map((r) => r.hub_id),
-  )
   const last = shown.at(-1)
   return {
-    items: shown.map(({ link_attribute_id: attributeId, ...row }): Backlink =>
-      readable.has(row.hub_id)
-        ? { access: 'read', itemId: row.id, attributeId, item: toItem(row) }
-        : { access: 'none', itemId: row.id, attributeId },
-    ),
+    items: shown.map(({ link_attribute_id: attributeId, ...row }) => ({
+      attributeId,
+      item: toItem(row),
+    })),
     nextCursor:
       rows.length > page.limit && last ? encodeCursor([last.id, last.link_attribute_id]) : null,
+    hidden: Number(hidden.n),
   }
 }
 

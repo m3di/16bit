@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import ShellUser from '../session/ShellUser.vue'
 import { AppShell } from '../ui/index.ts'
 import { useDashboard } from './home/useDashboard.ts'
 import WorkspaceList from './home/WorkspaceList.vue'
@@ -22,6 +23,7 @@ const summary = computed(() =>
 
 <template>
   <AppShell>
+    <template #actions><ShellUser /></template>
     <main
       class="mx-auto box-border flex w-full max-w-[1280px] min-w-0 flex-col gap-9 px-4 py-8 sm:px-7"
     >

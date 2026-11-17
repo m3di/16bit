@@ -80,6 +80,16 @@ describe('ItemsBlock', () => {
       { state: 'error', error: new ApiRequestError('unauthorized', 'No', 401) },
       'You do not have access to this folder',
     ],
+    [
+      'forbidden',
+      { state: 'error', error: new ApiRequestError('forbidden', 'No', 403) },
+      'You do not have access to this folder',
+    ],
+    [
+      'not found',
+      { state: 'error', error: new ApiRequestError('not_found', 'Gone', 404) },
+      'This folder is not available',
+    ],
   ]
   it.each(states)('renders the %s state without a table', async (_name, list, expected) => {
     const html = await block(list, list.state === 'ready' ? [] : [item('i1', 1)])
@@ -185,7 +195,7 @@ describe('DataTable and ItemPanel', () => {
   })
 })
 
-const failed = (code: 'internal' | 'unauthorized' | 'not_found', status: number) =>
+const failed = (code: 'internal' | 'unauthorized' | 'forbidden' | 'not_found', status: number) =>
   ({ state: 'error', error: new ApiRequestError(code, 'Boom', status) }) as const
 
 describe('HubState', () => {
@@ -204,13 +214,19 @@ describe('HubState', () => {
     expect(html).not.toContain('FOLDER')
   })
 
-  it.each([
-    ['a missing hub', failed('not_found', 404)],
-    ['no permission', failed('unauthorized', 403)],
-  ])('renders %s as unavailable, with a way back', async (_name, state) => {
-    const html = await hub(state)
-    expect(html).toContain('data-state="no-permission"')
+  it('renders a 404 (missing, or no grant) as not found, with a way back', async () => {
+    const html = await hub(failed('not_found', 404))
+    expect(html).toContain('data-state="empty"')
     expect(html).toContain('This hub is not available')
+    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Back to workspaces<\/a>/)
+    expect(html).not.toContain('Try again')
+    expect(html).not.toContain('FOLDER')
+  })
+
+  it('renders a 403 as no permission, with a way back', async () => {
+    const html = await hub(failed('forbidden', 403))
+    expect(html).toContain('data-state="no-permission"')
+    expect(html).toContain('You do not have access to this hub')
     expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Back to workspaces<\/a>/)
     expect(html).not.toContain('Try again')
     expect(html).not.toContain('FOLDER')

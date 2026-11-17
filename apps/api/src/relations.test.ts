@@ -8,7 +8,7 @@ import {
 import type { FastifyInstance } from 'fastify'
 import type { Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { loadSubject, readableHubs } from './access.ts'
+import { allReadableHubs, loadSubject, readableHubs } from './access.ts'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
@@ -193,6 +193,15 @@ function getBacklinks(app: FastifyInstance, id: string, qs = '') {
   })
 }
 
+async function versionOf(id: string): Promise<number> {
+  const row = await db
+    .selectFrom('item')
+    .select('version')
+    .where('id', '=', id)
+    .executeTakeFirstOrThrow()
+  return row.version
+}
+
 /** Link rows from `from`, as `attribute:to`, sorted. */
 async function linksFrom(from: string): Promise<string[]> {
   const rows = await db
@@ -302,13 +311,13 @@ describe('link maintenance', () => {
     ])
   })
 
-  it('refuses a target outside the relation’s target hub', async () => {
+  it("refuses a target outside the relation's target hub", async () => {
     const errors = valueErrors(await createRaw(owner, 'c', 'h1', { cross: ['a'] }))
     expect(errors).toEqual([
       {
         attributeId: 'cross',
         code: 'invalid_value',
-        message: 'Item "a" is not in this relation’s target hub'.replace('’', "'"),
+        message: `Item "a" is not in this relation's target hub`,
       },
     ])
   })
@@ -330,6 +339,81 @@ describe('link maintenance', () => {
     expect(errors[0]?.attributeId).toBe('one')
     errors = valueErrors(await createRaw(owner, 'c', 'h1', { rel: ['a', 'a'] }))
     expect(errors[0]?.attributeId).toBe('rel')
+  })
+
+  it('keeps a stored link to an item the writer cannot read, but refuses a new one', async () => {
+    await create(insider, 's', 'h3', { title3: 'Secret' })
+    await create(insider, 's2', 'h3', { title3: 'Secret 2' })
+    // Linked by the insider; the owner sees the ID but cannot read h3.
+    await create(insider, 'c', 'h1', { secret: ['s'], rel: ['a'] })
+
+    // Re-sending the stored ID next to other changes is fine, and the link stays.
+    const res = await patch(owner, 'c', await versionOf('c'), { secret: ['s'], rel: ['a', 'b'] })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(itemSchema.parse(res.json()).values['secret']).toEqual(['s'])
+    expect(await linksFrom('c')).toEqual(['rel:a', 'rel:b', 'secret:s'])
+
+    // Adding another unreadable item is refused, and only that ID is named.
+    const version = await versionOf('c')
+    const errors = valueErrors(await patch(owner, 'c', version, { secret: ['s', 's2'] }))
+    expect(errors).toEqual([
+      { attributeId: 'secret', code: 'invalid_value', message: 'Item "s2" not found' },
+    ])
+    expect(await versionOf('c')).toBe(version)
+    expect(await linksFrom('c')).toEqual(['rel:a', 'rel:b', 'secret:s'])
+
+    // Stored is per attribute: `s` in `secret` does not make it new-but-allowed elsewhere.
+    const other = valueErrors(await patch(owner, 'c', version, { rel: ['a', 's'] }))
+    expect(other).toEqual([
+      { attributeId: 'rel', code: 'invalid_value', message: 'Item "s" not found' },
+    ])
+  })
+
+  it('still checks the hub rules for stored IDs', async () => {
+    const c = await create(owner, 'c', 'h1', { rel: ['a'] })
+    // A stored ID that breaks the rules (written around the API) is not grandfathered in.
+    await db
+      .updateTable('item')
+      .set({ values: JSON.stringify({ cross: ['a'] }) })
+      .where('id', '=', 'c')
+      .execute()
+    const errors = valueErrors(await patch(owner, 'c', c.version, { cross: ['a'] }))
+    expect(errors[0]?.message).toBe(`Item "a" is not in this relation's target hub`)
+  })
+
+  it('drops stored IDs of deleted items on patch, but refuses unknown new ones', async () => {
+    const c = await create(owner, 'c', 'h1', { rel: ['a', 'b'], one: ['b'] })
+    expect((await remove(owner, 'b', await versionOf('b'))).statusCode).toBe(204)
+
+    // The client sends back the value it read, with a new target added.
+    await create(owner, 'd', 'h1')
+    let res = await patch(owner, 'c', c.version, { rel: ['a', 'b', 'd'] })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(itemSchema.parse(res.json()).values['rel']).toEqual(['a', 'd'])
+    expect(await linksFrom('c')).toEqual(['rel:a', 'rel:d'])
+    const revision = await db
+      .selectFrom('revision')
+      .select('patch')
+      .where('item_id', '=', 'c')
+      .orderBy('seq', 'desc')
+      .executeTakeFirstOrThrow()
+    expect(revision.patch).toEqual({ op: 'update', values: { rel: ['a', 'd'] } })
+
+    // Only stale IDs left: the value is cleared, as `[]` would be.
+    res = await patch(owner, 'c', c.version + 1, { one: ['b'] })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(itemSchema.parse(res.json()).values).not.toHaveProperty('one')
+
+    // A deleted ID that was never stored in this attribute is new, so it is still a 422.
+    const errors = valueErrors(await patch(owner, 'c', c.version + 2, { one: ['b'] }))
+    expect(errors).toEqual([
+      { attributeId: 'one', code: 'invalid_value', message: 'Item "b" not found' },
+    ])
+  })
+
+  it('answers 404 for a patch of a missing item', async () => {
+    const res = await patch(owner, 'nope', 1, { rel: ['a'] })
+    expect(res.statusCode, res.body).toBe(404)
   })
 
   it('removes links from and to an item when it is deleted', async () => {
@@ -420,6 +504,24 @@ describe('expand', () => {
     expect(body.linked?.['x']).toMatchObject({ access: 'read', item: { id: 'x' } })
     // No values, no hub, nothing but the marker.
     expect(body.linked?.['s']).toEqual({ access: 'none' })
+    expect(body.linkedTruncated).toBe(false)
+  })
+
+  it('caps the linked items per response and says so', async () => {
+    const capped = buildApp({ db, devApiKey: KEY, devPrincipalId: 'owner', maxLinkedItems: 2 })
+    try {
+      let body = itemQueryResultSchema.parse(
+        (await query(capped, { expand: ['rel', 'cross', 'secret'] })).json(),
+      )
+      // The first two by ID.
+      expect(Object.keys(body.linked ?? {}).sort()).toEqual(['a', 's'])
+      expect(body.linkedTruncated).toBe(true)
+      body = itemQueryResultSchema.parse((await query(capped, { expand: ['rel', 'cross'] })).json())
+      expect(Object.keys(body.linked ?? {}).sort()).toEqual(['a', 'x'])
+      expect(body.linkedTruncated).toBe(false)
+    } finally {
+      await capped.close()
+    }
   })
 
   it('shows the same link readable to a caller with a grant', async () => {
@@ -475,34 +577,64 @@ describe('backlinks', () => {
     await create(insider, 's', 'h3', { back: ['a'] })
   })
 
-  it('lists linking items, with "no access" for hubs the caller cannot read', async () => {
-    const res = await getBacklinks(owner, 'a')
+  it('lists only linking items the caller can read and counts the rest', async () => {
+    let res = await getBacklinks(owner, 'a')
     expect(res.statusCode, res.body).toBe(200)
-    const body = backlinkPageSchema.parse(res.json())
+    let body = backlinkPageSchema.parse(res.json())
     expect(body.nextCursor).toBeNull()
-    expect(body.items.map((l) => `${l.itemId}:${l.attributeId}:${l.access}`)).toEqual([
-      'b:one:read',
-      'b:rel:read',
-      'c:rel:read',
-      's:back:none',
+    expect(body.items.map((l) => `${l.item.id}:${l.attributeId}`)).toEqual([
+      'b:one',
+      'b:rel',
+      'c:rel',
     ])
-    expect(body.items[3]).toEqual({ access: 'none', itemId: 's', attributeId: 'back' })
-    expect(body.items[0]).toMatchObject({ item: { id: 'b' } })
+    expect(body.items[0]).toMatchObject({ item: { id: 'b', values: { rel: ['a'] } } })
+    // `s` in h3 is hidden from the owner: counted, never named.
+    expect(body.hidden).toBe(1)
+    expect(res.body).not.toContain('"s"')
+    expect(res.body).not.toContain('back')
+
+    res = await getBacklinks(insider, 'a')
+    body = backlinkPageSchema.parse(res.json())
+    expect(body.items.map((l) => `${l.item.id}:${l.attributeId}`)).toEqual([
+      'b:one',
+      'b:rel',
+      'c:rel',
+      's:back',
+    ])
+    expect(body.hidden).toBe(0)
   })
 
-  it('pages with a cursor', async () => {
-    const seen: string[] = []
-    let cursor: string | null = null
-    do {
-      const qs: string = `?limit=1${cursor ? `&cursor=${cursor}` : ''}`
-      const res = await getBacklinks(insider, 'a', qs)
-      expect(res.statusCode, res.body).toBe(200)
-      const body = backlinkPageSchema.parse(res.json())
-      expect(body.items).toHaveLength(1)
-      seen.push(...body.items.map((l) => `${l.itemId}:${l.attributeId}:${l.access}`))
-      cursor = body.nextCursor
-    } while (cursor)
-    expect(seen).toEqual(['b:one:read', 'b:rel:read', 'c:rel:read', 's:back:read'])
+  it('caps the hidden count', async () => {
+    await create(insider, 's2', 'h3', { back: ['a'] })
+    expect(backlinkPageSchema.parse((await getBacklinks(owner, 'a')).json()).hidden).toBe(2)
+    const capped = buildApp({ db, devApiKey: KEY, devPrincipalId: 'owner', maxHiddenBacklinks: 1 })
+    try {
+      const body = backlinkPageSchema.parse((await getBacklinks(capped, 'a')).json())
+      expect(body.hidden).toBe(1)
+      expect(body.items).toHaveLength(3)
+    } finally {
+      await capped.close()
+    }
+  })
+
+  it('pages with a cursor, over readable items only', async () => {
+    const pages = async (app: FastifyInstance) => {
+      const seen: string[] = []
+      let cursor: string | null = null
+      do {
+        const qs: string = `?limit=1${cursor ? `&cursor=${cursor}` : ''}`
+        const res = await getBacklinks(app, 'a', qs)
+        expect(res.statusCode, res.body).toBe(200)
+        const body = backlinkPageSchema.parse(res.json())
+        expect(body.items).toHaveLength(1)
+        seen.push(...body.items.map((l) => `${l.item.id}:${l.attributeId}`))
+        cursor = body.nextCursor
+      } while (cursor)
+      return seen
+    }
+    expect(await pages(insider)).toEqual(['b:one', 'b:rel', 'c:rel', 's:back'])
+    // No trailing empty page for the hidden link.
+    expect(await pages(owner)).toEqual(['b:one', 'b:rel', 'c:rel'])
   })
 
   it('answers 404 for a missing item and for one in a hub the caller cannot read', async () => {
@@ -527,5 +659,10 @@ describe('readableHubs', () => {
     expect(await subject('stranger')).toBeNull()
     expect(await readable('stranger', ['h1'])).toEqual([])
     expect(await readable('owner', [])).toEqual([])
+
+    const all = async (id: string) => (await allReadableHubs(db, WS, await subject(id))).sort()
+    expect(await all('owner')).toEqual(['h1', 'h2'])
+    expect(await all('insider')).toEqual(['h1', 'h2', 'h3'])
+    expect(await all('stranger')).toEqual([])
   })
 })

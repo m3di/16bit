@@ -59,3 +59,24 @@ export async function readableHubs(
     ),
   )
 }
+
+/**
+ * Every hub in the workspace whose items `subject` may read. Only hubs with a grant can be
+ * readable (D45), so this is the principal's grants filtered by `can()`: at most one row per hub.
+ */
+export async function allReadableHubs(
+  db: Db,
+  workspaceId: string,
+  subject: Subject | null,
+): Promise<string[]> {
+  if (!subject) return []
+  const rows = await db
+    .selectFrom('hub_grant')
+    .select(['hub_id', 'hub_role'])
+    .where('workspace_id', '=', workspaceId)
+    .where('principal_id', '=', subject.id)
+    .execute()
+  return rows
+    .filter((r) => can(subject, 'hub.read', { hubGrant: r.hub_role }) === 'allow')
+    .map((r) => r.hub_id)
+}

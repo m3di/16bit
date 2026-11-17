@@ -103,6 +103,16 @@ describe('WorkspaceSection', () => {
       { state: 'error', error: new ApiRequestError('unauthorized', 'No', 401) },
       'You do not have access',
     ],
+    [
+      'forbidden',
+      { state: 'error', error: new ApiRequestError('forbidden', 'No', 403) },
+      'You do not have access',
+    ],
+    [
+      'not found',
+      { state: 'error', error: new ApiRequestError('not_found', 'Gone', 404) },
+      'This workspace is not available',
+    ],
   ]
   it.each(states)('renders the %s state', async (_name, hubs, expected) => {
     const html = await render(WorkspaceSection, { entry: entry(hubs) })

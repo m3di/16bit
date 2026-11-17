@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   backlinkPageSchema,
+  MAX_HIDDEN_BACKLINKS,
   conflictErrorSchema,
   createItemSchema,
   deleteItemQuerySchema,
@@ -68,7 +69,9 @@ describe('api contracts', () => {
     const page = { items: [item], nextCursor: null }
     expect(itemQueryResultSchema.parse(page)).toEqual(page)
     const linked = { i2: { access: 'read', item }, i3: { access: 'none' } }
-    expect(itemQueryResultSchema.parse({ ...page, linked }).linked).toEqual(linked)
+    const expanded = itemQueryResultSchema.parse({ ...page, linked, linkedTruncated: false })
+    expect(expanded.linked).toEqual(linked)
+    expect(expanded.linkedTruncated).toBe(false)
     // A hidden item never carries its values.
     expect(
       itemQueryResultSchema.safeParse({ ...page, linked: { i3: { access: 'none', item } } })
@@ -76,19 +79,22 @@ describe('api contracts', () => {
     ).toBe(false)
   })
 
-  it('describes backlinks with and without access', () => {
-    const body = {
-      items: [
-        { access: 'read', itemId: 'i1', attributeId: 'rel', item },
-        { access: 'none', itemId: 'i9', attributeId: 'rel' },
-      ],
-      nextCursor: null,
-    }
+  it('lists readable backlinks only and counts the hidden ones', () => {
+    const body = { items: [{ attributeId: 'rel', item }], nextCursor: null, hidden: 2 }
     expect(backlinkPageSchema.parse(body)).toEqual(body)
+    // A hidden linking item is never named.
     expect(
       backlinkPageSchema.safeParse({
-        items: [{ access: 'none', itemId: 'i9', attributeId: 'rel', item }],
+        ...body,
+        items: [{ access: 'none', itemId: 'i9', attributeId: 'rel' }],
+      }).success,
+    ).toBe(false)
+    expect(backlinkPageSchema.safeParse({ items: [], nextCursor: null }).success).toBe(false)
+    expect(
+      backlinkPageSchema.safeParse({
+        items: [],
         nextCursor: null,
+        hidden: MAX_HIDDEN_BACKLINKS + 1,
       }).success,
     ).toBe(false)
   })

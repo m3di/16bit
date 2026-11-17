@@ -94,6 +94,16 @@ describe('workspace actions (ROLES.md "Workspace actions")', () => {
       [F, F, N, N, N, N],
     ],
     [
+      'list agent keys on a hub they hold a grant on',
+      (a) => check(a, 'key.list', { hubGrant: 'viewer' }),
+      [Y, Y, F, F, F, F],
+    ],
+    [
+      'list agent keys on a hub they hold no grant on',
+      (a) => check(a, 'key.list', { hubGrant: null }),
+      [F, F, N, N, N, N],
+    ],
+    [
       'revoke any agent key, without a grant',
       (a) => check(a, 'key.revoke', { hubGrant: null }),
       [Y, Y, N, N, N, N],
@@ -214,6 +224,11 @@ describe('hub actions (ROLES.md "Hub actions")', () => {
     [
       'create agent keys for this hub',
       (g) => check(actor, 'key.create', { hubGrant: g, role: 'viewer' }),
+      [Y, F, F, F],
+    ],
+    [
+      'list agent keys for this hub',
+      (g) => check(actor, 'key.list', { hubGrant: g }),
       [Y, F, F, F],
     ],
     [
@@ -523,6 +538,7 @@ describe('agent keys (ROLES.md "Agent keys", D28, D47)', () => {
       [F, F, F],
     ],
     ['create keys', (g) => check(agent, 'key.create', { hubGrant: g, role: 'viewer' }), [F, F, F]],
+    ['list keys', (g) => check(agent, 'key.list', { hubGrant: g }), [F, F, F]],
     ['revoke keys', (g) => check(agent, 'key.revoke', { hubGrant: g }), [F, F, F]],
     ['delete the hub', (g) => check(agent, 'hub.delete', { hubGrant: g }), [F, F, F]],
   ]

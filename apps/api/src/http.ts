@@ -1,4 +1,4 @@
-import type { ApiErrorCode, Item } from '@16bit/core'
+import type { ApiErrorCode, Decision, Item } from '@16bit/core'
 import { z } from 'zod'
 
 const STATUS: Record<ApiErrorCode, number> = {
@@ -34,6 +34,14 @@ export class HttpError extends Error {
 }
 
 export const notFound = (what: string) => new HttpError('not_found', `${what} not found`)
+
+/** Turns a `can()` decision into 403 or 404. `what` names the thing a 404 hides. */
+export function enforce(decision: Decision, what: string): void {
+  if (decision === 'not_found') throw notFound(what)
+  if (decision === 'forbidden') {
+    throw new HttpError('forbidden', 'Your role does not allow this action')
+  }
+}
 export const conflict = (current: Item) =>
   new HttpError('conflict', 'The item has changed since this version', { current })
 
