@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { PASSWORD_MIN_LENGTH } from '@16bit/core'
 import { asRequestError } from '../api/client.ts'
 import {
-  inviteOutcome,
+  acceptInvite,
   isInviteToken,
   newAccountErrors,
   type InviteOutcome,
@@ -45,13 +45,7 @@ async function accept(body: Parameters<typeof session.acceptInvite>[1]) {
   busy.value = true
   outcome.value = null
   try {
-    await session.acceptInvite(token.value, body)
-    await router.replace('/')
-  } catch (error) {
-    const result = inviteOutcome(asRequestError(error))
-    // The session ended between loading the page and accepting: show the signed-out choices.
-    if (result.kind === 'signed-out') session.expire()
-    else outcome.value = result
+    outcome.value = await acceptInvite(session, router, token.value, body)
   } finally {
     busy.value = false
   }

@@ -20,6 +20,9 @@ describe('safeNext', () => {
     ['javascript', 'javascript:alert(1)'],
     ['relative', 'w/w1'],
     ['the sign-in page', '/sign-in?next=/'],
+    ['the sign-in page with a trailing slash', '/sign-in/'],
+    ['the sign-in page in another case', '/Sign-In'],
+    ['the sign-in page in capitals, with slashes', '/SIGN-IN//?next=/'],
   ])('falls back to / for %s', (_, value) => {
     expect(safeNext(value)).toBe('/')
   })

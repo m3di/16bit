@@ -5,8 +5,11 @@ import {
   newPasswordSchema,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
+  type AcceptInvite,
 } from '@16bit/core'
-import type { ApiRequestError } from '../api/client.ts'
+import type { Router } from 'vue-router'
+import { asRequestError, type ApiRequestError } from '../api/client.ts'
+import type { Session } from './session.ts'
 
 export interface NewAccount {
   name: string
@@ -54,4 +57,27 @@ export function inviteOutcome(error: ApiRequestError): InviteOutcome {
     default:
       return { kind: 'error', message: error.message }
   }
+}
+
+/**
+ * Accepts the invite and goes to the workspaces. Returns what to show when the API refused it,
+ * or `null` when there is nothing to show: accepted, or the session ended in between (then the
+ * session is expired, and the page shows its signed-out choices).
+ */
+export async function acceptInvite(
+  session: Session,
+  router: Router,
+  token: string,
+  body: AcceptInvite,
+): Promise<Exclude<InviteOutcome, { kind: 'signed-out' }> | null> {
+  try {
+    await session.acceptInvite(token, body)
+  } catch (error) {
+    const result = inviteOutcome(asRequestError(error))
+    if (result.kind !== 'signed-out') return result
+    session.expire()
+    return null
+  }
+  await router.replace('/')
+  return null
 }

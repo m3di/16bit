@@ -78,9 +78,9 @@ export type Session = ReturnType<typeof createSession>
 
 export const sessionKey: InjectionKey<Session> = Symbol('session')
 
-let fallback: Session | null = null
-
-/** The app's session, provided in `main.ts`. Without a provider, one shared default. */
+/** The app's session, provided in `main.ts`. A missing provider is a bug, not a second session. */
 export function useSession(): Session {
-  return inject(sessionKey, null) ?? (fallback ??= createSession())
+  const session = inject(sessionKey, null)
+  if (!session) throw new Error('useSession() needs a session provided with sessionKey')
+  return session
 }

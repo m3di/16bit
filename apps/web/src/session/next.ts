@@ -1,7 +1,11 @@
 import type { LocationQueryValue } from 'vue-router'
 
-/** Paths that make no sense to return to after signing in. */
+/**
+ * Paths that make no sense to return to after signing in. Compared like vue-router matches:
+ * case-insensitive, with or without a trailing slash.
+ */
 const SKIP = ['/sign-in']
+const isSkipped = (pathname: string) => SKIP.includes(pathname.toLowerCase().replace(/\/+$/, ''))
 
 /**
  * The `next` query of the sign-in page as a path in this app, or `/`. Only same-origin paths
@@ -20,7 +24,7 @@ export function safeNext(value: LocationQueryValue | LocationQueryValue[] | unde
   }
   if (url.origin !== 'http://app.invalid') return '/'
   // `/.//host` normalises to `//host`, which a browser would read as another origin.
-  if (url.pathname.startsWith('//') || SKIP.includes(url.pathname)) return '/'
+  if (url.pathname.startsWith('//') || isSkipped(url.pathname)) return '/'
   return `${url.pathname}${url.search}${url.hash}`
 }
 
