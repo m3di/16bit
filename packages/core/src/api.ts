@@ -114,6 +114,11 @@ export type SetHubGrant = z.infer<typeof setHubGrantSchema>
 /** `GET /v1/workspaces/:workspaceId/hubs/:hubId`: a hub with its folders and attributes. */
 export const hubDescriptionSchema = z.strictObject({
   hub: folderSchema,
+  /**
+   * The caller's effective role in this hub: their grant capped by their workspace role
+   * (docs/ROLES.md), as in the hub list. Lets a client show read-only states before a 403.
+   */
+  hubRole: hubRoleSchema,
   /** Every folder in the hub except the hub itself, by name. */
   folders: z.array(folderSchema),
   attributes: z.array(attributeSchema),
@@ -156,7 +161,7 @@ export const linkedItemSchema = z.discriminatedUnion('access', [
 ])
 export type LinkedItem = z.infer<typeof linkedItemSchema>
 
-/** Most linked items one `POST /query` response carries in `linked`. */
+/** Most linked items one `POST /query` or `GET /items/:itemId` response carries in `linked`. */
 export const MAX_LINKED_ITEMS = 1000
 
 /**
@@ -191,6 +196,36 @@ export const backlinkPageSchema = pageSchema(backlinkSchema).extend({
   hidden: z.int().min(0).max(MAX_HIDDEN_BACKLINKS),
 })
 export type BacklinkPage = z.infer<typeof backlinkPageSchema>
+
+/**
+ * Query string of `GET /v1/workspaces/:workspaceId/items/:itemId`. `expand` names relation
+ * attributes shown on the item's folder, as in `POST /query`: comma-separated
+ * (`?expand=a,b`), repeated (`?expand=a&expand=b`), or both. Same rules: at most 3, each once.
+ * An empty `?expand=` is the same as none.
+ */
+export const getItemQuerySchema = z.strictObject({
+  expand: z
+    .preprocess(
+      (v) => (typeof v === 'string' ? [v] : v),
+      // An empty value (`?expand=`, a joined empty list) asks for nothing; `a,,b` is refused.
+      z.array(z.string()).transform((v) => v.filter((p) => p !== '').flatMap((p) => p.split(','))),
+    )
+    .pipe(expandSchema)
+    .default([]),
+})
+export type GetItemQuery = z.input<typeof getItemQuerySchema>
+
+/**
+ * The response of `GET /items/:itemId`: the item, and with a non-empty `expand`, `linked` and
+ * `linkedTruncated` with the same meaning as in `POST /query`. An ID in an expanded relation
+ * value with no `linked` entry (and `linkedTruncated` false) no longer exists; `{ access:
+ * "none" }` means it exists in a hub the caller cannot read. Without `expand`, just the item.
+ */
+export const itemReadSchema = itemSchema.extend({
+  linked: z.record(idSchema, linkedItemSchema).optional(),
+  linkedTruncated: z.boolean().optional(),
+})
+export type ItemRead = z.infer<typeof itemReadSchema>
 
 /** Values as sent by a client, before they are checked against the folder's attributes. */
 export const itemValuesInputSchema = z.record(idSchema, z.unknown())

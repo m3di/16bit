@@ -13,6 +13,7 @@ import {
   type FolderAttributeDefinition,
   type Item,
   type ItemQueryResult,
+  type ItemRead,
   type ItemValues,
   type LinkedItem,
   type PatchItem,
@@ -703,6 +704,51 @@ async function linkedItems(
   }
 }
 
+/**
+ * One item with the items it links to through `expand`, as `POST /query` returns them for a
+ * page: the same attribute rules (relations shown on the item's folder) and the same cap. The
+ * caller must already be allowed to read the item.
+ */
+export async function expandItem(
+  db: Db,
+  workspaceId: string,
+  actor: Subject,
+  item: Item,
+  expand: string[],
+  caps: { maxLinkedItems?: number } = {},
+): Promise<ItemRead> {
+  const definitions = await folderDefinitions(db, workspaceId, item.folderId)
+  const compiled = compileOrThrow(definitions, { where: null, sort: [], expand })
+  const { linked, truncated } = await linkedItems(
+    db,
+    workspaceId,
+    actor,
+    [item.id],
+    compiled.expand,
+    caps.maxLinkedItems ?? MAX_LINKED_ITEMS,
+  )
+  return { ...item, linked, linkedTruncated: truncated }
+}
+
+/** `compileItemQuery`, with its problems as a 400 `invalid_request` listing every one. */
+function compileOrThrow(
+  definitions: FolderAttributeDefinition[],
+  query: Parameters<typeof compileItemQuery>[1],
+): Extract<ReturnType<typeof compileItemQuery>, { ok: true }> {
+  const compiled = compileItemQuery(
+    definitions.map((d) => d.attribute),
+    query,
+  )
+  if (!compiled.ok) {
+    throw new HttpError(
+      'invalid_request',
+      compiled.errors.map((e) => `${e.path}: ${e.message}`).join('; '),
+      { errors: compiled.errors },
+    )
+  }
+  return compiled
+}
+
 const backlinkCursorSchema = z.tuple([z.string().min(1).max(64), z.string().min(1).max(64)])
 
 /**
@@ -792,19 +838,11 @@ export async function itemQueryStatement(
   let expand: string[] = []
   if (query.where || query.sort.length > 0 || (query.expand?.length ?? 0) > 0) {
     const definitions = await folderDefinitions(db, workspaceId, folder.id)
-    const compiled = compileItemQuery(
-      definitions.map((d) => d.attribute),
-      { where: query.where, sort: query.sort, expand: query.expand },
-    )
-    if (!compiled.ok) {
-      throw new HttpError(
-        'invalid_request',
-        compiled.errors.map((e) => `${e.path}: ${e.message}`).join('; '),
-        {
-          errors: compiled.errors,
-        },
-      )
-    }
+    const compiled = compileOrThrow(definitions, {
+      where: query.where,
+      sort: query.sort,
+      expand: query.expand,
+    })
     where = compiled.where
     sorts = compiled.sort
     expand = compiled.expand
