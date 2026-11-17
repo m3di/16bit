@@ -99,6 +99,13 @@ The reviewer reads the diff against the issue's acceptance criteria and the docs
 
 The reviewer checks, in order: does it do what the issue asks, is it tested, does it respect `docs/DECISIONS.md`, is it the simplest thing that works, is anything unsafe.
 
+## Practices added during M1
+
+- **Lead merges `main` for approved branches.** When an approved pull request only needs `main` merged in (a conflict-free merge), the lead does it, waits for CI, and asks the reviewer to confirm the merge adds nothing beyond `main` before merging.
+- **Two channels for running agents.** A constraint sent to a running subagent is also posted as a comment on its issue, because a message can sit unread until the agent's next step.
+- **Cleanup per confirmed merge.** Remove a worktree and its branch only after confirming that pull request is `MERGED`, one pull request at a time.
+- **QA inside the pull request.** Each user-visible pull request adds or extends an end-to-end test before it merges. Use `qa:not-needed` only when nothing is user-visible.
+
 ## Human gates
 
 The lead never merges these without the maintainer's explicit yes in the conversation or on the pull request:

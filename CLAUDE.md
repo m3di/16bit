@@ -21,7 +21,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 
 ## Current milestone
 
-**M1, data API and access.** Exit: two people and one agent key with different roles see and can do exactly what `docs/ROLES.md` says, proven by end-to-end tests. Full list in `docs/ROADMAP.md`. M0 is done (`docs/reports/M0.md`).
+**M1, data API and access: complete, waiting for the maintainer's feedback** (see `docs/reports/M1.md`). Do not start M2 until the maintainer has looked. M0 and M1 reports are in `docs/reports/`.
 
 ## Rules that always apply
 
@@ -62,6 +62,6 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
 - `pnpm account:reset-password <email>`: operator-only password reset; ends the account's sessions (D42).
 - `pnpm e2e`: Playwright end-to-end tests in `e2e`. Needs a seeded database; reuses a running `pnpm dev` or starts the API and web app itself.
-- `docker compose up --build`: the whole stack from the container image on http://localhost:8080. Seed it with `docker compose run --rm app node src/seed.ts --force`, then sign in as a seeded person (README). Compose sets `ALLOW_DEV_PASSWORD=1` behind its 127.0.0.1 binding.
+- `docker compose up --build`: the whole stack from the container image on http://localhost:8080. Seed it with `docker compose run --rm migrate node src/seed.ts --force`, then sign in as a seeded person (README). Compose sets `ALLOW_DEV_PASSWORD=1` on `app` behind its 127.0.0.1 binding; never set it on a deployment.
 
 Keep this list up to date as scripts land.
