@@ -32,6 +32,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 - **Stop for the maintainer** on anything labelled `needs-human`: database migrations, changes to `packages/core` contracts, `docs/ROLES.md`, authentication or row-level security, CI secrets, deployment, licence files, deleting data, and any decision not covered by `docs/DECISIONS.md`.
 - **No secrets in the repository.** Use `.env` locally and `.env.example` in git.
 - **Migrations:** apply them only to your own throwaway databases, never to the shared dev database. Never edit a merged migration; add a new one.
+- **Scratch files:** any script or file a subagent writes to the shared scratchpad has the issue number in its name (for example `run-47.sh`). Two agents once shared a file name and one ran a command in the other's worktree.
 - **Stay inside this repository.** No destructive commands outside it, no force pushes, no rewriting published history.
 - **Pin and check versions.** When adding a dependency, use the current stable release and read its current documentation instead of relying on memory.
 
@@ -59,6 +60,7 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm build`: build all packages.
 - `pnpm seed`: load the demo workspaces (`demo`, `acme`). Safe to re-run. Refuses `NODE_ENV=production` without `--force`.
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
+- `pnpm account:reset-password <email>`: operator-only password reset; ends the account's sessions (D42).
 - `pnpm e2e`: Playwright end-to-end tests in `e2e`. Needs a seeded database; reuses a running `pnpm dev` or starts the API and web app itself.
 - `docker compose up --build`: the whole stack from the container image on http://localhost:8080 (D41: anonymous dev owner, loopback only).
 
