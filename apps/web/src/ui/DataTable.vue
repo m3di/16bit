@@ -4,17 +4,26 @@ export interface TableColumn {
   label: string
   /** Numbers read better right-aligned. */
   align?: 'start' | 'end'
+  /**
+   * Set on a column that can be sorted: its header becomes a button that emits `sort`.
+   * `none` is sortable but not sorted. Leave it out for a column that cannot be sorted.
+   */
+  sort?: 'ascending' | 'descending' | 'none'
 }
 
-const { selectedId = null } = defineProps<{
+const { selectedId = null, busy } = defineProps<{
   /** Read by screen readers as the table's name. */
   caption: string
   columns: readonly TableColumn[]
   rows: readonly Row[]
   selectedId?: string | null
+  /** The rows are being replaced, for example by a new sort. */
+  busy?: boolean
 }>()
 
-const emit = defineEmits<{ select: [row: Row] }>()
+const emit = defineEmits<{ select: [row: Row]; sort: [key: string] }>()
+
+const arrows = { ascending: '↑', descending: '↓' } as const
 
 defineSlots<{ cell(props: { row: Row; column: TableColumn }): unknown }>()
 
@@ -31,11 +40,13 @@ function onRowClick(event: MouseEvent, row: Row) {
   <!-- Wide tables scroll inside their own box. `relative` keeps absolutely placed screen-reader
        text in cells (links' "opens in a new tab") inside the box, not widening the page. -->
   <div class="relative min-w-0 overflow-x-auto">
-    <table class="w-full border-collapse text-left">
+    <table class="w-full border-collapse text-left" :aria-busy="busy ? 'true' : undefined">
       <caption class="sr-only">
         {{
           caption
-        }}
+        }}<template v-if="columns.some((c) => c.sort)"
+          >, column headers with buttons are sortable</template
+        >
       </caption>
       <thead>
         <tr class="border-b border-line">
@@ -45,8 +56,22 @@ function onRowClick(event: MouseEvent, row: Row) {
             scope="col"
             class="h-9 px-2 text-secondary font-normal whitespace-nowrap text-ink3"
             :class="column.align === 'end' && 'text-right'"
+            :aria-sort="column.sort && column.sort !== 'none' ? column.sort : undefined"
+            :data-sort="column.sort"
           >
-            {{ column.label }}
+            <button
+              v-if="column.sort"
+              type="button"
+              class="inline-flex cursor-pointer items-center gap-1 rounded-control hover:text-ink"
+              :class="column.sort !== 'none' && 'font-medium text-ink'"
+              @click="emit('sort', column.key)"
+            >
+              {{ column.label
+              }}<span v-if="column.sort !== 'none'" aria-hidden="true">{{
+                arrows[column.sort]
+              }}</span>
+            </button>
+            <template v-else>{{ column.label }}</template>
           </th>
         </tr>
       </thead>
