@@ -12,11 +12,7 @@ import type { Load } from '../views/home/useDashboard.ts'
 
 const quiet = { quiet401: true }
 
-/**
- * Who is signed in, from `GET /v1/me`. `null` means signed out. With the development proxy key
- * (until #51) the data routes answer while `/v1/me` says 401, so the dashboard still works and
- * the shell offers sign-in.
- */
+/** Who is signed in, from `GET /v1/me`. `null` means signed out. */
 export function createSession(fetchFn: Fetch = (...args) => fetch(...args)) {
   const me = ref<Load<Me | null>>({ state: 'loading' })
   let loading: Promise<void> | null = null

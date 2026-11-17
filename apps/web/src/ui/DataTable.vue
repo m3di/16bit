@@ -28,8 +28,9 @@ function onRowClick(event: MouseEvent, row: Row) {
 </script>
 
 <template>
-  <!-- Wide tables scroll inside their own box. -->
-  <div class="min-w-0 overflow-x-auto">
+  <!-- Wide tables scroll inside their own box. `relative` keeps absolutely placed screen-reader
+       text in cells (links' "opens in a new tab") inside the box, not widening the page. -->
+  <div class="relative min-w-0 overflow-x-auto">
     <table class="w-full border-collapse text-left">
       <caption class="sr-only">
         {{

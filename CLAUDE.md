@@ -62,6 +62,6 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
 - `pnpm account:reset-password <email>`: operator-only password reset; ends the account's sessions (D42).
 - `pnpm e2e`: Playwright end-to-end tests in `e2e`. Needs a seeded database; reuses a running `pnpm dev` or starts the API and web app itself.
-- `docker compose up --build`: the whole stack from the container image on http://localhost:8080 (D41: anonymous dev owner, loopback only).
+- `docker compose up --build`: the whole stack from the container image on http://localhost:8080. Seed it with `docker compose run --rm app node src/seed.ts --force`, then sign in as a seeded person (README). Compose sets `ALLOW_DEV_PASSWORD=1` behind its 127.0.0.1 binding.
 
 Keep this list up to date as scripts land.

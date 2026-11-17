@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { Item, ItemValues } from '@16bit/core'
+import { MAX_EXPAND_ATTRIBUTES, type Item, type ItemValues } from '@16bit/core'
 import { ApiRequestError } from '../../api/client.ts'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useSession } from '../../session/session.ts'
 import ShellUser from '../../session/ShellUser.vue'
 import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -12,8 +13,11 @@ import ItemDetails from './ItemDetails.vue'
 import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
+import { provideValueContext } from './context.ts'
 import { folderColumns, truncatedNote, useHub } from './useHub.ts'
+import { useHubDirectory } from './useHubDirectory.ts'
 import { inHub, useItems, valueErrors } from './useItems.ts'
+import { usePrincipals } from './usePrincipals.ts'
 
 const { workspaceId, hubId, folderId, itemId } = defineProps<{
   workspaceId: string
@@ -28,6 +32,43 @@ const { hub, tree, load: loadHub } = useHub(workspaceId, hubId)
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
 const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '')
 const { list, rows, notice } = items
+
+// Names for actors, and the hubs that linked items live in, for cells and editors.
+const session = useSession()
+const fetchFn: typeof fetch = (...args) => fetch(...args)
+const directory = useHubDirectory(workspaceId, fetchFn)
+const principals = usePrincipals(
+  workspaceId,
+  () => (session.me.value.state === 'ready' ? session.me.value.data : null),
+  fetchFn,
+)
+watch(description, (d) => {
+  if (d) directory.seed(d)
+})
+provideValueContext({
+  workspaceId,
+  fetchFn,
+  actor: principals.actor,
+  actorChoices: () => principals.choices.value,
+  members: () => principals.status.value,
+  retryMembers: () => void principals.load(),
+  linkState: items.linkState,
+  resolveLinked: items.resolveLinked,
+  rememberLinked: items.rememberLinked,
+  hub: directory.get,
+  hubLookup: directory.lookup,
+  ensureHubs: directory.ensure,
+  retryHub: directory.retry,
+  itemLink: (item) => ({
+    name: 'hub',
+    params: {
+      workspaceId,
+      hubId: item.hubId,
+      ...(item.folderId === item.hubId ? {} : { folderId: item.folderId }),
+    },
+    query: { item: item.id },
+  }),
+})
 
 const openFolderId = computed(() => folderId ?? hubId)
 const folder = computed(() => {
@@ -57,7 +98,8 @@ const treeLoad = computed<Load<typeof tree.value>>(() =>
 )
 
 onMounted(() => {
-  void loadHub()
+  void session.ensure()
+  void principals.load()
 })
 
 // "New item" opens a form in the panel. On submit the row appears at once (see useItems).
@@ -65,11 +107,29 @@ const creating = ref(false)
 const createBusy = ref(false)
 const createErrors = ref<Record<string, string>>({})
 
+// The folder's query expands its relation columns (at most MAX_EXPAND_ATTRIBUTES), so the
+// table can show linked items, or "no access", without a request per row.
+async function openFolder(id: string) {
+  if (hub.value.state !== 'ready') await loadHub()
+  if (id !== openFolderId.value) return
+  const d = description.value
+  const expand = d
+    ? folderColumns(d, id)
+        .filter((c) => c.attribute.type === 'relation')
+        .slice(0, MAX_EXPAND_ATTRIBUTES)
+        .map((c) => c.attribute.id)
+    : []
+  await items.openFolder(id, expand)
+}
+async function retryHub() {
+  await loadHub()
+  void openFolder(openFolderId.value)
+}
 watch(
   openFolderId,
   (id) => {
     creating.value = false
-    void items.openFolder(id)
+    void openFolder(id)
   },
   { immediate: true },
 )
@@ -116,6 +176,7 @@ const closePanel = () => {
 }
 
 function startCreate() {
+  if (items.readOnly.value) return
   createErrors.value = {}
   creating.value = true
   if (itemId) void router.push({ query: {} })
@@ -127,6 +188,9 @@ async function submitCreate(values: ItemValues) {
   if (result.ok) {
     creating.value = false
     void router.push(itemLink(result.item))
+  } else if (items.readOnly.value) {
+    // The hub refused the write: the form cannot succeed, the notice says why.
+    creating.value = false
   } else {
     createErrors.value = valueErrors(result.error)
   }
@@ -152,7 +216,7 @@ async function submitCreate(values: ItemValues) {
           :hub-id="hubId"
           :hub="hub"
           :folder-found="folder !== null"
-          @retry="loadHub()"
+          @retry="retryHub()"
         >
           <template v-if="folder && hub.state === 'ready'">
             <div class="flex flex-wrap items-end justify-between gap-3">
@@ -165,7 +229,11 @@ async function submitCreate(values: ItemValues) {
                   truncated
                 }}</span>
               </div>
+              <span v-if="items.readOnly.value" class="text-secondary text-ink3" data-read-only
+                >You can view the items in this hub but not add or change them.</span
+              >
               <BaseButton
+                v-else
                 variant="primary"
                 :disabled="list.state !== 'ready'"
                 data-new-item-button
@@ -192,8 +260,9 @@ async function submitCreate(values: ItemValues) {
               :selected-id="itemId"
               :item-link="itemLink"
               :is-creating="items.isCreating"
+              :read-only="items.readOnly.value"
               @open="openItem"
-              @retry="items.openFolder(openFolderId)"
+              @retry="openFolder(openFolderId)"
               @more="items.loadMore()"
               @create="startCreate"
             />
@@ -230,6 +299,7 @@ async function submitCreate(values: ItemValues) {
               :columns="description ? folderColumns(description, item.folderId) : []"
               :saving="items.isSaving(item.id)"
               :disabled="items.isCreating(item.id)"
+              :read-only="items.readOnly.value"
               @save="items.save(item.id, $event)"
             />
           </template>

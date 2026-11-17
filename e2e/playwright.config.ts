@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, devices } from '@playwright/test'
+import { OWNER_STATE } from './tests/support/auth-state.ts'
 
 // Read the repository-root .env like the API and web app do. Shell variables win, so CI sets
 // everything in the job's env and has no .env.
@@ -17,7 +18,8 @@ const webUrl = `http://localhost:${webPort}`
 
 // Specs live in tests/*.spec.ts. Each one sets up its own items through the API, so specs can run
 // in any order, in parallel, and across shards. The database must be migrated and seeded first
-// (`pnpm seed`); the seeded workspaces and hubs are read but never changed.
+// (`pnpm seed`); the seeded workspaces and hubs are read but never changed. Specs run signed in
+// as the seeded owner (tests/auth.setup.ts).
 export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.spec.ts',
@@ -30,7 +32,15 @@ export default defineConfig({
     baseURL: externalBaseUrl ?? webUrl,
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    // Signs in once as the seeded owner; every spec starts from that session (#51).
+    { name: 'setup', testMatch: /auth\.setup\.ts$/ },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], storageState: OWNER_STATE },
+      dependencies: ['setup'],
+    },
+  ],
   // Locally, a running `pnpm dev` is reused. In CI both servers are started fresh.
   webServer: externalBaseUrl
     ? undefined

@@ -1,6 +1,9 @@
 import { sql, type Kysely } from 'kysely'
 import pg from 'pg'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ATTR,
   BUILD_HUB,
@@ -15,13 +18,15 @@ import {
 } from './build-hub.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { DEV_OWNER, DEV_PASSWORD } from './dev-accounts.ts'
+import { verifyPassword } from './auth/password.ts'
 import { workspaceSnapshot } from './db/test-snapshot.ts'
 import { deleteItem, getItem, patchItem } from './items.ts'
 
 // Integration tests against a fresh, migrated Postgres per test. `gh` is not called:
 // the importer takes parsed issues, so fixtures stand in for its output.
 
-const OWNER = 'dev-owner'
+const OWNER = DEV_OWNER.id
 const WS = BUILD_WORKSPACE.id
 
 let db: Kysely<Database>
@@ -34,7 +39,7 @@ beforeEach(async () => {
   dbUrl = test.url
   db = createDb(test.url)
   await migrateToLatest(db)
-  await ensureBuildHub(db, OWNER)
+  await ensureBuildHub(db)
 })
 
 afterEach(async () => {
@@ -136,18 +141,26 @@ describe('parseIssues', () => {
 })
 
 describe('ensureBuildHub', () => {
-  it('is idempotent and makes the hub visible to the dev principal', async () => {
-    await ensureBuildHub(db, OWNER)
+  it('is idempotent and makes the hub visible to the dev owner', async () => {
+    await ensureBuildHub(db)
     const principals = await db
       .selectFrom('principal')
-      .select(['id', 'kind', 'workspace_role'])
+      .select(['id', 'kind', 'workspace_role', 'account_id'])
       .where('workspace_id', '=', WS)
       .orderBy('id')
       .execute()
     expect(principals).toEqual([
-      { id: OWNER, kind: 'user', workspace_role: 'owner' },
-      { id: IMPORT_ACTOR.id, kind: 'agent', workspace_role: 'member' },
+      { id: OWNER, kind: 'user', workspace_role: 'owner', account_id: OWNER },
+      { id: IMPORT_ACTOR.id, kind: 'agent', workspace_role: 'member', account_id: null },
     ])
+    // The owner signs in with the development password (#51).
+    const account = await db
+      .selectFrom('account')
+      .select(['email', 'password_hash'])
+      .where('id', '=', OWNER)
+      .executeTakeFirstOrThrow()
+    expect(account.email).toBe(DEV_OWNER.email)
+    expect(await verifyPassword(DEV_PASSWORD, account.password_hash)).toBe(true)
     const attributes = await db
       .selectFrom('folder_attribute')
       .select(['attribute_id', 'position', 'required'])
@@ -172,9 +185,28 @@ describe('ensureBuildHub', () => {
     expect(log).toEqual([{ action: 'grant.set', target: OWNER }])
   })
 
+  it('warns when the dev owner’s account ID is taken by another email', async () => {
+    await db
+      .updateTable('account')
+      .set({ email: 'renamed@example.com' })
+      .where('id', '=', OWNER)
+      .execute()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      await ensureBuildHub(db)
+      expect(warn).toHaveBeenCalledWith(
+        `seed: ${DEV_OWNER.email} not created, account ID ${OWNER} is taken; not linked`,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+    const emails = await db.selectFrom('account').select('email').execute()
+    expect(emails).toEqual([{ email: 'renamed@example.com' }])
+  })
+
   it('leaves an existing workspace and principal untouched', async () => {
     await db.updateTable('workspace').set({ name: 'Renamed' }).where('id', '=', WS).execute()
-    await ensureBuildHub(db, OWNER)
+    await ensureBuildHub(db)
     const ws = await db.selectFrom('workspace').select('name').where('id', '=', WS).execute()
     expect(ws).toEqual([{ name: 'Renamed' }])
   })
@@ -436,3 +468,26 @@ async function waitForLockWait(): Promise<void> {
   }
   throw new Error('The importer never waited on the row lock')
 }
+
+describe('seed:build-hub', () => {
+  it('refuses to run with NODE_ENV=production unless --force is passed', async () => {
+    const script = fileURLToPath(new URL('./seed-build-hub.ts', import.meta.url))
+    // No MIGRATION_DATABASE_URL: the guard must fire before anything else, so nothing is written.
+    const env = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' }
+    const run = async (args: string[]): Promise<{ code: unknown; stderr: string }> => {
+      try {
+        await promisify(execFile)(process.execPath, [script, ...args], { env })
+        return { code: 0, stderr: '' }
+      } catch (error) {
+        const { code, stderr } = error as { code: unknown; stderr: string }
+        return { code, stderr }
+      }
+    }
+    const refused = await run([])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('NODE_ENV=production')
+    const forced = await run(['--force'])
+    expect(forced.code).toBe(1)
+    expect(forced.stderr).toContain('MIGRATION_DATABASE_URL is not set')
+  }, 30_000)
+})

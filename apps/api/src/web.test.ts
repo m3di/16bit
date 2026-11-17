@@ -9,7 +9,6 @@ import { createDb, type Database } from './db/database.ts'
 
 // No request here reaches the database: the pool is lazy and never connects.
 
-const KEY = 'test-key'
 const html = { accept: 'text/html,application/xhtml+xml' }
 
 let root: string
@@ -34,14 +33,7 @@ afterEach(async () => {
 })
 
 function start(options: Partial<AppOptions> = {}): FastifyInstance {
-  app = buildApp({
-    db,
-    devDb: db,
-    devApiKey: KEY,
-    devPrincipalId: 'dev-owner',
-    webRoot: root,
-    ...options,
-  })
+  app = buildApp({ db, webRoot: root, ...options })
   return app
 }
 
@@ -84,7 +76,7 @@ describe('web app', () => {
   it('keeps JSON 404s under /v1, even for a browser', async () => {
     const res = await start().inject({
       url: '/v1/nope',
-      headers: { ...html, authorization: `Bearer ${KEY}` },
+      headers: html,
     })
     expect(res.statusCode).toBe(404)
     expect(res.json()).toEqual({ error: 'not_found', message: 'Route not found' })
@@ -97,32 +89,17 @@ describe('web app', () => {
   })
 })
 
-describe('anonymousAsDevPrincipal', () => {
-  // Auth runs before the handler. Past auth, the handler queries a database that refuses the
-  // connection, so 500 means the request got through and 401 means it did not.
-  it('is off by default: no key is 401', async () => {
-    const res = await start().inject({ url: '/v1/workspaces' })
-    expect(res.statusCode).toBe(401)
-  })
-
-  it('lets a request without a key through when on', async () => {
-    const res = await start({ anonymousAsDevPrincipal: true }).inject({ url: '/v1/workspaces' })
-    expect(res.statusCode).toBe(500)
-  })
-
-  it('still refuses an empty Authorization header when on', async () => {
-    const res = await start({ anonymousAsDevPrincipal: true }).inject({
-      url: '/v1/workspaces',
-      headers: { authorization: '' },
-    })
-    expect(res.statusCode).toBe(401)
-  })
-
-  it('still refuses a wrong key when on', async () => {
-    const res = await start({ anonymousAsDevPrincipal: true }).inject({
-      url: '/v1/workspaces',
-      headers: { authorization: 'Bearer wrong' },
-    })
-    expect(res.statusCode).toBe(401)
-  })
+describe('API auth beside the web app', () => {
+  // D41 is retired: the image no longer lets anonymous requests act as an owner. Auth runs
+  // before any handler, so these never reach the (unreachable) database.
+  it.each([undefined, '', 'Bearer wrong', 'Bearer dev-only-key'])(
+    'refuses /v1/workspaces with authorization %j',
+    async (authorization) => {
+      const res = await start().inject({
+        url: '/v1/workspaces',
+        headers: authorization === undefined ? {} : { authorization },
+      })
+      expect(res.statusCode).toBe(401)
+    },
+  )
 })

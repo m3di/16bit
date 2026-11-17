@@ -16,6 +16,7 @@ const {
   selectedId = null,
   itemLink,
   isCreating = () => false,
+  readOnly,
 } = defineProps<{
   folderName: string
   list: Load<ItemList>
@@ -26,6 +27,8 @@ const {
   /** Where a row's ID links: the same page with the item panel open. */
   itemLink: (item: Item) => RouteLocationRaw
   isCreating?: (id: string) => boolean
+  /** The server refused a write in this hub: no "New item" action. */
+  readOnly?: boolean
 }>()
 
 const emit = defineEmits<{ open: [item: Item]; retry: []; more: []; create: [] }>()
@@ -74,9 +77,13 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
     v-else-if="rows.length === 0"
     state="empty"
     title="No items in this folder yet"
-    message="Items you add here show up in this table."
+    :message="
+      readOnly
+        ? 'You can view the items in this hub but not add them.'
+        : 'Items you add here show up in this table.'
+    "
   >
-    <template #action>
+    <template v-if="!readOnly" #action>
       <BaseButton size="sm" @click="emit('create')">New item</BaseButton>
     </template>
   </StateBlock>

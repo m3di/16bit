@@ -1,11 +1,9 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
 import type { Subject, WorkspaceRole } from '@16bit/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import type { Database } from '../db/database.ts'
-import { withScope } from '../db/scope.ts'
 import { HttpError, notFound } from '../http.ts'
-import { AGENT_SECRET_PREFIX, resolveAgentKey, type AgentIdentity } from './agent-key.ts'
+import { resolveAgentKey, type AgentIdentity } from './agent-key.ts'
 import {
   readCookie,
   resolveSession,
@@ -16,16 +14,13 @@ import {
 
 // Who is calling. Resolved once per request by `registerAuthHook`, before any handler:
 //   1. a session cookie (people, D42),
-//   2. a bearer token: the M0 development key until #51, or an agent key (D47),
-//   3. no credentials: the dev owner if DEV_ANONYMOUS_AS_OWNER is on (D41), else nobody.
-// A session cookie together with an agent key is refused with 400, not resolved.
+//   2. a bearer token: an agent key (D47),
+//   3. nothing else: 401, except on routes marked `auth: 'optional'`.
+// A session cookie together with any Authorization header is refused with 400 (D49).
 // Inside `/v1/workspaces/:workspaceId`, `resolvePrincipal` then turns the identity into the
 // principal for that workspace: the `Subject` that `can()` from packages/core takes.
 
-export type Identity =
-  | { kind: 'person'; accountId: string; sessionIdHash: string }
-  | { kind: 'dev'; principalId: string }
-  | AgentIdentity
+export type Identity = { kind: 'person'; accountId: string; sessionIdHash: string } | AgentIdentity
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -42,14 +37,10 @@ declare module 'fastify' {
 
 export interface AuthOptions {
   db: Kysely<Database>
-  devApiKey: string
-  devPrincipalId: string
-  anonymousAsDevPrincipal: boolean
   session: SessionPolicy
   secureCookies: boolean
 }
 
-const digest = (value: string) => createHash('sha256').update(value).digest()
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /**
@@ -70,8 +61,6 @@ export function isSameOrigin(request: FastifyRequest): boolean {
 }
 
 export function registerAuthHook(v1: FastifyInstance, options: AuthOptions): void {
-  const expectedKey = digest(options.devApiKey)
-
   v1.decorateRequest('identity', null)
   v1.decorateRequest('principal', null as unknown as Subject)
 
@@ -85,15 +74,12 @@ export function registerAuthHook(v1: FastifyInstance, options: AuthOptions): voi
       throw new HttpError('forbidden', 'Cross-site request refused')
     }
 
-    // The scheme is case-insensitive (RFC 7235), the token is not.
     const header = request.headers.authorization
-    const bearer = header === undefined ? undefined : /^Bearer (.+)$/i.exec(header)?.[1]
 
     // A cookie is ambient, a bearer token is chosen: with both, the caller may think it acts
     // as a hub-scoped agent while the cookie carries a person's full rights. Refuse instead of
-    // picking one. Only agent keys for now, because the M0 dev proxy adds the dev key to every
-    // browser request; once #51 removes it, this becomes any cookie plus any Authorization.
-    if (token !== undefined && bearer?.startsWith(AGENT_SECRET_PREFIX)) {
+    // picking one, whatever the header holds and whether or not the session is live (D49).
+    if (token !== undefined && header !== undefined) {
       throw new HttpError(
         'invalid_request',
         'Send either a session cookie or a bearer token, not both',
@@ -113,23 +99,15 @@ export function registerAuthHook(v1: FastifyInstance, options: AuthOptions): voi
     }
 
     if (header !== undefined) {
-      if (bearer && timingSafeEqual(digest(bearer), expectedKey)) {
-        request.identity = { kind: 'dev', principalId: options.devPrincipalId }
-        return
-      }
+      // The scheme is case-insensitive (RFC 7235), the token is not.
+      const bearer = /^Bearer (.+)$/i.exec(header)?.[1]
       const agent = bearer ? await resolveAgentKey(options.db, bearer) : null
       if (agent) {
         request.identity = agent
         return
       }
-      if (optional) return
-      throw new HttpError('unauthorized', 'A valid session or bearer token is required')
     }
 
-    if (options.anonymousAsDevPrincipal) {
-      request.identity = { kind: 'dev', principalId: options.devPrincipalId }
-      return
-    }
     if (!optional) {
       throw new HttpError('unauthorized', 'A valid session or bearer token is required')
     }
@@ -175,24 +153,9 @@ export async function resolvePrincipal(
     if (!row) throw notFound('Workspace')
     return { id: row.principal_id, kind: 'user', workspaceRole: row.workspace_role }
   }
-  if (identity.kind === 'agent') {
-    // An agent exists only in its key's workspace, always as a member (D47).
-    if (identity.workspaceId !== workspaceId) throw notFound('Workspace')
-    return { id: identity.principalId, kind: 'agent', workspaceRole: 'member' }
-  }
-  // The dev key (until #51): read its principal under row-level security, scoped to itself.
-  // If it is not an active member of the workspace, the scope sees nothing.
-  const row = await withScope(db, { workspaceId, principalId: identity.principalId }, (trx) =>
-    trx
-      .selectFrom('principal')
-      .select(['id', 'kind', 'workspace_role'])
-      .where('workspace_id', '=', workspaceId)
-      .where('id', '=', identity.principalId)
-      .where('removed_at', 'is', null)
-      .executeTakeFirst(),
-  )
-  if (!row) throw notFound('Workspace')
-  return { id: row.id, kind: row.kind, workspaceRole: row.workspace_role }
+  // An agent exists only in its key's workspace, always as a member (D47).
+  if (identity.workspaceId !== workspaceId) throw notFound('Workspace')
+  return { id: identity.principalId, kind: 'agent', workspaceRole: 'member' }
 }
 
 export function setSessionCookie(reply: FastifyReply, token: string, options: AuthOptions): void {

@@ -7,6 +7,7 @@ import AuthLayout from './AuthLayout.vue'
 import CheckboxField from './CheckboxField.vue'
 import ChipList from './ChipList.vue'
 import RelationChip from './RelationChip.vue'
+import { editorLinkAttributes } from './rich-text-classes.ts'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
 import SignInForm from './SignInForm.vue'
@@ -280,6 +281,44 @@ describe('RichTextEditor', () => {
     expect(html).not.toContain('role="toolbar"')
     expect(html).toContain('Hello')
     expect(html).toContain('You can view this but not change it.')
+  })
+
+  it('tells screen readers that links open in a new tab, editable and read-only (#50)', async () => {
+    const id = 'x-new-tab'
+    expect(editorLinkAttributes(id)).toMatchObject({
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      'aria-describedby': id,
+    })
+    const editable = await render(RichTextEditor, { label: 'Description' })
+    const describer = /<span id="([^"]+-new-tab)" hidden[^>]*>\(opens in a new tab\)<\/span>/.exec(
+      editable,
+    )
+    expect(describer).not.toBeNull()
+
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              text: 'spec',
+              marks: [{ type: 'link', attrs: { href: 'https://x.io' } }],
+            },
+          ],
+        },
+      ],
+    }
+    const readOnly = await render(RichTextEditor, {
+      label: 'Description',
+      state: 'no-permission',
+      modelValue: doc,
+    })
+    expect(readOnly).toMatch(
+      /<a [^>]*target="_blank"[^>]*>spec<span class="sr-only"> \(opens in a new tab\)<\/span><\/a>/,
+    )
   })
 
   it('shows errors under the editor', async () => {

@@ -37,7 +37,6 @@ export function formatValue(attribute: Attribute, value: Value): string {
     }
     case 'select':
       return typeof value === 'string' ? attributeTypes.select.render(value, attribute.config) : ''
-    // Plain text until the M1 cells land (M1-12).
     case 'url':
       return typeof value === 'string' ? value : ''
     case 'auto_id':
@@ -69,7 +68,7 @@ export function toInput(attribute: Attribute, value: Value): string {
     if (Number.isNaN(d.getTime())) return ''
     return `${String(d.getFullYear())}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
-  // Lists and rich text get their own editors in M1-12.
+  // Lists and rich text have their own editors (FieldEditor); they never use this.
   return typeof value === 'object' ? '' : String(value)
 }
 
@@ -102,6 +101,7 @@ export function fromInput(attribute: Attribute, text: string): Parsed {
     case 'auto_id':
     case 'rich_text':
     case 'relation':
-      return { ok: false, message: 'This field cannot be edited here yet' }
+      // These have their own editors and never come through a text input.
+      return { ok: false, message: 'This field has its own editor' }
   }
 }

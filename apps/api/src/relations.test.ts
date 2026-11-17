@@ -9,9 +9,10 @@ import type { FastifyInstance } from 'fastify'
 import type { Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { allReadableHubs, loadSubject, readableHubs } from './access.ts'
-import { buildApp } from './app.ts'
+import { buildApp, type AppOptions } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { sessionCookie } from './db/test-session.ts'
 
 // Relations, the link table, auto IDs, expand and backlinks (#47, D7, D11) on a real Postgres.
 //
@@ -23,7 +24,6 @@ import { createTestDatabase } from './db/test-database.ts'
 // Principals: `owner` (workspace owner) holds hub_admin on h1 and h2 and nothing on h3, so h3 is
 // hidden from them (D45). `insider` (member) holds editor on h1, h2 and h3.
 
-const KEY = 'test-key'
 const WS = 'w1'
 
 let db: Kysely<Database>
@@ -32,6 +32,16 @@ let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let owner: FastifyInstance
 let insider: FastifyInstance
+/** The session each app sends: `owner` and the capped apps as owner, `insider` as insider. */
+const sessions = new WeakMap<FastifyInstance, { cookie: string }>()
+let ownerSession: { cookie: string }
+
+/** An app that signs its requests in as the owner. */
+function asOwner(options: Partial<AppOptions> = {}): FastifyInstance {
+  const app = buildApp({ db: appDb, ...options })
+  sessions.set(app, ownerSession)
+  return app
+}
 
 beforeEach(async () => {
   const test = await createTestDatabase()
@@ -40,8 +50,10 @@ beforeEach(async () => {
   appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
-  owner = buildApp({ db: appDb, devDb: db, devApiKey: KEY, devPrincipalId: 'owner' })
-  insider = buildApp({ db: appDb, devDb: db, devApiKey: KEY, devPrincipalId: 'insider' })
+  ownerSession = await sessionCookie(db, 'owner')
+  owner = asOwner()
+  insider = buildApp({ db: appDb })
+  sessions.set(insider, await sessionCookie(db, 'insider'))
 })
 
 afterEach(async () => {
@@ -136,7 +148,7 @@ async function seed(): Promise<void> {
     .execute()
 }
 
-const auth = { authorization: `Bearer ${KEY}` }
+const auth = (app: FastifyInstance) => sessions.get(app)
 
 async function create(
   app: FastifyInstance,
@@ -147,7 +159,7 @@ async function create(
   const res = await app.inject({
     method: 'POST',
     url: `/v1/workspaces/${WS}/items`,
-    headers: auth,
+    headers: auth(app),
     payload: { id, folderId, values },
   })
   expect(res.statusCode, res.body).toBe(201)
@@ -158,7 +170,7 @@ function createRaw(app: FastifyInstance, id: string, folderId: string, values: o
   return app.inject({
     method: 'POST',
     url: `/v1/workspaces/${WS}/items`,
-    headers: auth,
+    headers: auth(app),
     payload: { id, folderId, values },
   })
 }
@@ -167,7 +179,7 @@ function patch(app: FastifyInstance, id: string, version: number, values: object
   return app.inject({
     method: 'PATCH',
     url: `/v1/workspaces/${WS}/items/${id}`,
-    headers: auth,
+    headers: auth(app),
     payload: { version, values },
   })
 }
@@ -176,7 +188,7 @@ function remove(app: FastifyInstance, id: string, version: number) {
   return app.inject({
     method: 'DELETE',
     url: `/v1/workspaces/${WS}/items/${id}?version=${String(version)}`,
-    headers: auth,
+    headers: auth(app),
   })
 }
 
@@ -184,7 +196,7 @@ function query(app: FastifyInstance, body: object) {
   return app.inject({
     method: 'POST',
     url: `/v1/workspaces/${WS}/query`,
-    headers: auth,
+    headers: auth(app),
     payload: { from: 'h1', limit: 50, ...body },
   })
 }
@@ -193,7 +205,7 @@ function getBacklinks(app: FastifyInstance, id: string, qs = '') {
   return app.inject({
     method: 'GET',
     url: `/v1/workspaces/${WS}/items/${id}/backlinks${qs}`,
-    headers: auth,
+    headers: auth(app),
   })
 }
 
@@ -542,13 +554,7 @@ describe('expand', () => {
   })
 
   it('caps the linked items per response and says so', async () => {
-    const capped = buildApp({
-      db: appDb,
-      devDb: db,
-      devApiKey: KEY,
-      devPrincipalId: 'owner',
-      maxLinkedItems: 2,
-    })
+    const capped = asOwner({ maxLinkedItems: 2 })
     try {
       let body = itemQueryResultSchema.parse(
         (await query(capped, { expand: ['rel', 'cross', 'secret'] })).json(),
@@ -647,13 +653,7 @@ describe('backlinks', () => {
   it('caps the hidden count', async () => {
     await create(insider, 's2', 'h3', { back: ['a'] })
     expect(backlinkPageSchema.parse((await getBacklinks(owner, 'a')).json()).hidden).toBe(2)
-    const capped = buildApp({
-      db: appDb,
-      devDb: db,
-      devApiKey: KEY,
-      devPrincipalId: 'owner',
-      maxHiddenBacklinks: 1,
-    })
+    const capped = asOwner({ maxHiddenBacklinks: 1 })
     try {
       const body = backlinkPageSchema.parse((await getBacklinks(capped, 'a')).json())
       expect(body.hidden).toBe(1)

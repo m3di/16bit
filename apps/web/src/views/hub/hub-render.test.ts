@@ -44,6 +44,7 @@ const ready = (ids: string[], nextCursor: string | null = null): Load<ItemList> 
 const block = (
   list: Load<ItemList>,
   rows = [item('i1', 12, { title: 'Ship', stage: 'done', points: 3 })],
+  readOnly = false,
 ) =>
   render(ItemsBlock, {
     folderName: 'Build',
@@ -52,6 +53,7 @@ const block = (
     columns,
     idPrefix: 'BLD',
     itemLink: (i: { id: string }) => ({ query: { item: i.id } }),
+    readOnly,
   })
 
 describe('ItemsBlock', () => {
@@ -99,6 +101,12 @@ describe('ItemsBlock', () => {
 
   it('offers "New item" in the empty state', async () => {
     expect(await block(ready([]), [])).toContain('New item')
+  })
+
+  it('offers no "New item" once the hub is read-only, and says why', async () => {
+    const html = await block(ready([]), [], true)
+    expect(html).not.toContain('New item')
+    expect(html).toContain('You can view the items in this hub but not add them.')
   })
 })
 

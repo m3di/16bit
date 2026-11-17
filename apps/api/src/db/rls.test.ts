@@ -897,8 +897,8 @@ describe('the role matrix in the database', () => {
 describe('routes that run before a workspace is set', () => {
   let app: FastifyInstance
   beforeAll(() => {
-    // No devDb: the API's role alone, as in a deployment.
-    app = buildApp({ db: appDb, devApiKey: 'dev-key', devPrincipalId: 'own', secureCookies: false })
+    // The API's role alone, as in a deployment: the API has no owner connection.
+    app = buildApp({ db: appDb, secureCookies: false })
   })
   afterAll(async () => {
     await app.close()
@@ -947,25 +947,20 @@ describe('routes that run before a workspace is set', () => {
     expect(other.statusCode).toBe(404)
   })
 
-  it('the dev key sees no workspace list without the owner connection, until #51', async () => {
-    const res = await app.inject({
-      url: '/v1/workspaces',
-      headers: { authorization: 'Bearer dev-key' },
-    })
-    expect(res.json()).toEqual({ items: [], nextCursor: null })
-    // Its workspace routes still resolve under RLS.
-    const hubs = await app.inject({
-      url: '/v1/workspaces/w1/hubs',
-      headers: { authorization: 'Bearer dev-key' },
-    })
-    expect(hubs.statusCode).toBe(200)
+  it('has no fallback identity: no credentials or an unknown key get 401', async () => {
+    for (const headers of [{}, { authorization: 'Bearer dev-only-key' }]) {
+      const list = await app.inject({ url: '/v1/workspaces', headers })
+      expect(list.statusCode).toBe(401)
+      const hubs = await app.inject({ url: '/v1/workspaces/w1/hubs', headers })
+      expect(hubs.statusCode).toBe(401)
+    }
   })
 })
 
 describe('locks that hold access steady during a write', () => {
   let app: FastifyInstance
   beforeAll(() => {
-    app = buildApp({ db: appDb, devApiKey: 'dev-key', devPrincipalId: 'mem' })
+    app = buildApp({ db: appDb })
   })
   afterAll(async () => {
     await app.close()
@@ -1003,7 +998,7 @@ describe('locks that hold access steady during a write', () => {
       const request = app.inject({
         method: 'PATCH',
         url: '/v1/workspaces/w1/items/i1',
-        headers: { authorization: 'Bearer dev-key' },
+        headers: { cookie: `sid=${SESSION}` }, // mem's session
         payload: { version: before.version, values: { a1: 'after revoke' } },
       })
       // The write's FOR SHARE on the grant waits for the revoke instead of reading the old row.
@@ -1037,7 +1032,7 @@ describe('locks that hold access steady during a write', () => {
           app.inject({
             method: 'PATCH',
             url: '/v1/workspaces/w1/members/out',
-            headers: { authorization: 'Bearer dev-key' },
+            headers: { cookie: `sid=${SESSION}` }, // mem's session
             payload: { workspaceRole: 'viewer' },
           }),
           new Promise<never>((_, reject) =>

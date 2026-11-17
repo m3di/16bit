@@ -37,7 +37,7 @@ describe('formatValue', () => {
     expect(formatValue(number, 'x')).toBe('')
   })
 
-  it('shows the M1 types as plain text until their cells land (M1-12)', () => {
+  it('gives text for URL, list and rich text values (cells draw them with components)', () => {
     expect(formatValue(link, 'https://16bit.info')).toBe('https://16bit.info')
     expect(formatValue(owners, ['p1', 'p2'])).toBe('p1, p2')
     expect(formatValue(owners, 'p1')).toBe('')
@@ -71,10 +71,10 @@ describe('input conversion', () => {
     expect(parsed).toEqual({ ok: true, value: iso })
   })
 
-  it('edits a URL as text and refuses lists and rich text for now (M1-12)', () => {
+  it('edits a URL as text; lists and rich text have their own editors', () => {
     expect(fromInput(link, 'https://16bit.info')).toEqual({ ok: true, value: 'https://16bit.info' })
     expect(toInput(link, 'https://16bit.info')).toBe('https://16bit.info')
-    const refused = { ok: false, message: 'This field cannot be edited here yet' }
+    const refused = { ok: false, message: 'This field has its own editor' }
     expect(fromInput(owners, 'p1')).toEqual(refused)
     expect(fromInput(notes, 'hello')).toEqual(refused)
     expect(toInput(owners, ['p1'])).toBe('')

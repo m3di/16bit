@@ -8,14 +8,19 @@ import {
   ISSUE_LIMIT,
 } from './build-hub.ts'
 import { createDb, migrateToLatest } from './db/database.ts'
+import { DEV_OWNER } from './dev-accounts.ts'
+
+if (process.env['NODE_ENV'] === 'production' && !process.argv.includes('--force')) {
+  console.error(
+    'seed:build-hub: refusing to run with NODE_ENV=production. Pass --force to override.',
+  )
+  process.exit(1)
+}
 
 // Runs as the owner of the tables, like migrations (#44).
 const databaseUrl = process.env['MIGRATION_DATABASE_URL']
-const ownerId = process.env['DEV_PRINCIPAL_ID']
-if (!databaseUrl || !ownerId) {
-  console.error(
-    'seed:build-hub: MIGRATION_DATABASE_URL and DEV_PRINCIPAL_ID must be set. See .env.example.',
-  )
+if (!databaseUrl) {
+  console.error('seed:build-hub: MIGRATION_DATABASE_URL is not set. See .env.example.')
   process.exit(1)
 }
 
@@ -26,7 +31,7 @@ try {
     console.warn(`seed:build-hub: read the first ${String(ISSUE_LIMIT)} issues only`)
   }
   await migrateToLatest(db)
-  await ensureBuildHub(db, ownerId)
+  await ensureBuildHub(db)
   const { created, updated, unchanged, skipped, failed } = await importIssues(db, issues)
   console.log(
     `seed:build-hub: ${String(issues.length)} issues, ${String(created)} created, ` +
@@ -36,6 +41,7 @@ try {
   if (skipped.length > 0) {
     console.log(`seed:build-hub: deleted locally, not re-imported: #${skipped.join(', #')}`)
   }
+  console.log(`seed:build-hub: sign in as ${DEV_OWNER.email} to see the hub`)
   if (failed.length > 0) {
     console.error(`seed:build-hub: ${String(failed.length)} issues not imported:`)
     for (const f of failed) console.error(`  #${String(f.issue)} ${f.code}: ${f.message}`)

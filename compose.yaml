@@ -33,6 +33,7 @@ services:
     command: ['node', 'src/migrate.ts']
     environment:
       # Migrations run as the owner, then create the API's login role from DATABASE_URL (#44).
+      # Seeds run here too, as the owner (see the app service).
       MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
       DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@db:5432/sixteenbit
     depends_on:
@@ -43,20 +44,14 @@ services:
     image: 16bit:local
     build: .
     environment:
-      # The API's role, under row-level security (#44).
+      # The API's role, under row-level security (#44). Never the owner: the app gets no
+      # MIGRATION_DATABASE_URL. Seed with the migrate service, which has it:
+      #   docker compose run --rm migrate node src/seed.ts --force
       DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@db:5432/sixteenbit
-      # The owner, for `docker compose run --rm app node src/seed.ts --force`, and for the
-      # dev key's workspace list until DEV_API_KEY goes (#51).
-      MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
-      DEV_API_KEY: ${DEV_API_KEY:-dev-only-key}
-      DEV_PRINCIPAL_ID: ${DEV_PRINCIPAL_ID:-dev-owner}
-      # Local only (D41): the browser has no key in M0, so requests without one act as the
-      # dev owner, as through the Vite dev proxy. Never set this outside a local machine.
-      DEV_ANONYMOUS_AS_OWNER: 'true'
-      # The container binds 0.0.0.0, which the API refuses with the flag above unless told the
-      # port is reachable from loopback only. That holds because of the 127.0.0.1 binding below:
-      # keep the two together.
-      DEV_ANONYMOUS_ALLOW_NONLOCAL: '1'
+      # The image runs with NODE_ENV=production, where the API refuses the seeds' published
+      # password. This local stack opts back in, which is safe only because the port below is
+      # bound to 127.0.0.1. Never set this on a deployment.
+      ALLOW_DEV_PASSWORD: '1'
     ports:
       - '127.0.0.1:${APP_PORT:-8080}:3000'
     depends_on:

@@ -5,6 +5,7 @@ import type { Kysely } from 'kysely'
 import { z } from 'zod'
 import type { Database } from './db/database.ts'
 import { ensureHubAdmin } from './access-log.ts'
+import { DEV_OWNER, ensureDevAccounts, linkDevAccount } from './dev-accounts.ts'
 import { HttpError } from './http.ts'
 import { createItem, patchItem } from './items.ts'
 
@@ -128,11 +129,13 @@ export function toValues(issue: GhIssue): ItemValues {
 
 /**
  * Creates the workspace, principals, hub, and attributes if missing. Existing rows are kept,
- * except attribute names and configs, which the importer owns and brings up to date.
- * `ownerId` is the dev key's principal, so the hub shows up on the dashboard.
+ * except attribute names and configs, which the importer owns and brings up to date. The dev
+ * owner (dev-accounts.ts) owns the workspace and can sign in to see the hub.
  */
-export async function ensureBuildHub(db: Kysely<Database>, ownerId: string): Promise<void> {
+export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
   const ws = BUILD_WORKSPACE.id
+  const ownerId = DEV_OWNER.id
+  const accountId = (await ensureDevAccounts(db, [DEV_OWNER])).get(ownerId)
   await db.transaction().execute(async (trx) => {
     await trx
       .insertInto('workspace')
@@ -153,6 +156,7 @@ export async function ensureBuildHub(db: Kysely<Database>, ownerId: string): Pro
       ])
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .execute()
+    if (accountId !== undefined) await linkDevAccount(trx, ws, ownerId, accountId)
     await trx
       .insertInto('folder')
       .values({

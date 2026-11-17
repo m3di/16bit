@@ -13,23 +13,24 @@ import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
-import { createSession, DEFAULT_SESSION_POLICY, SESSION_COOKIE } from './auth/session.ts'
+import { SESSION_COOKIE } from './auth/session.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { sessionCookie } from './db/test-session.ts'
 import { encodeCursor } from './http.ts'
 import { createItem } from './items.ts'
 
 // Integration tests for agent keys (#42, D47, D48, docs/ROLES.md) against a real Postgres.
-// People are authenticated with the dev key, one app per principal: sessions are covered in
-// auth/auth.test.ts and resolve to the same `can()` subject.
-
-const DEV_KEY = 'test-key'
+// People are authenticated with test sessions (db/test-session.ts); sign-in itself is covered
+// in auth/auth.test.ts.
 
 let db: Kysely<Database>
 /** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
 let appDb: Kysely<Database>
 let drop: () => Promise<void>
-const apps = new Map<string, FastifyInstance>()
+let app: FastifyInstance
+/** One test session per person, made on first use. */
+const sessions = new Map<string, { cookie: string }>()
 
 beforeEach(async () => {
   const test = await createTestDatabase()
@@ -38,35 +39,36 @@ beforeEach(async () => {
   appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
+  app = buildApp({ db: appDb })
 })
 
 afterEach(async () => {
-  for (const app of apps.values()) await app.close()
-  apps.clear()
+  await app.close()
+  sessions.clear()
   await appDb.destroy()
   await db.destroy()
   await drop()
 })
 
-/** An app whose dev key acts as `principalId`. */
-function as(principalId: string): FastifyInstance {
-  let app = apps.get(principalId)
-  if (!app) {
-    app = buildApp({ db: appDb, devDb: db, devApiKey: DEV_KEY, devPrincipalId: principalId })
-    apps.set(principalId, app)
+/** A session for the person `principalId`, made on first use. */
+async function as(principalId: string): Promise<{ cookie: string }> {
+  let session = sessions.get(principalId)
+  if (!session) {
+    session = await sessionCookie(db, principalId)
+    sessions.set(principalId, session)
   }
-  return app
+  return session
 }
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 
-/** A request as a person (dev key acting as `who`). */
-const person = (who: string, method: Method, url: string, payload?: object) =>
-  as(who).inject({ method, url, headers: { authorization: `Bearer ${DEV_KEY}` }, payload })
+/** A request as a person, through a test session. */
+const person = async (who: string, method: Method, url: string, payload?: object) =>
+  app.inject({ method, url, headers: await as(who), payload })
 
 /** A request with an agent secret as the bearer token. */
 const agent = (secret: string, method: Method, url: string, payload?: object) =>
-  as('nobody').inject({ method, url, headers: { authorization: `Bearer ${secret}` }, payload })
+  app.inject({ method, url, headers: { authorization: `Bearer ${secret}` }, payload })
 
 /**
  * w1, hubs `build` (folder `bugs`, attribute `title`) and `docs`, with one item in each.
@@ -593,7 +595,7 @@ describe('authenticating with a key', () => {
   it('accepts the Bearer scheme in any case', async () => {
     const { secret } = await createKey('ha', 'viewer')
     for (const scheme of ['bearer', 'BEARER', 'BeArEr']) {
-      const res = await as('nobody').inject({
+      const res = await app.inject({
         method: 'GET',
         url: '/v1/workspaces/w1/hubs',
         headers: { authorization: `${scheme} ${secret}` },
@@ -637,7 +639,7 @@ describe('authenticating with a key', () => {
       `Basic ${secret}`,
       'Bearer ',
     ]) {
-      const res = await as('nobody').inject({
+      const res = await app.inject({
         method: 'GET',
         url: '/v1/workspaces/w1/hubs',
         headers: { authorization },
@@ -705,24 +707,9 @@ describe('GET /v1/me with a key', () => {
 })
 
 describe('a session cookie and a bearer token on one request', () => {
-  /** A live session for `own`'s person. */
+  /** The token of a live session for `own`'s person. */
   async function ownSession(): Promise<string> {
-    await db
-      .insertInto('account')
-      .values({
-        id: 'acc-own',
-        email: 'own@example.com',
-        password_hash: '$argon2id$unused',
-        name: 'own',
-      })
-      .execute()
-    await db
-      .updateTable('principal')
-      .set({ account_id: 'acc-own' })
-      .where('workspace_id', '=', 'w1')
-      .where('id', '=', 'own')
-      .execute()
-    return createSession(db, 'acc-own', DEFAULT_SESSION_POLICY)
+    return (await as('own')).cookie.slice(`${SESSION_COOKIE}=`.length)
   }
 
   it('refuses a cookie with an agent key, valid or not, and changes nothing', async () => {
@@ -742,7 +729,7 @@ describe('a session cookie and a bearer token on one request', () => {
         ['GET', '/v1/workspaces/w1/hubs', undefined],
         ['PATCH', '/v1/workspaces/w1/items/b1', { version: 1, values: { title: 'x' } }],
       ] as const) {
-        const res = await as('nobody').inject({
+        const res = await app.inject({
           method,
           url,
           headers: { cookie: `${SESSION_COOKIE}=${cookie}`, authorization: `bearer ${key}` },
@@ -764,7 +751,7 @@ describe('a session cookie and a bearer token on one request', () => {
 
     // Each credential alone still works.
     expect((await agent(secret, 'GET', '/v1/me')).json()).toMatchObject({ kind: 'agent' })
-    const alone = await as('nobody').inject({
+    const alone = await app.inject({
       method: 'GET',
       url: '/v1/me',
       headers: { cookie: `${SESSION_COOKIE}=${session}` },
@@ -772,14 +759,37 @@ describe('a session cookie and a bearer token on one request', () => {
     expect(alone.json()).toMatchObject({ kind: 'person' })
   })
 
-  it('still lets the session win over the M0 dev key until #51 removes it', async () => {
+  it('refuses a cookie with any Authorization header, live or not (D49)', async () => {
     const session = await ownSession()
-    const res = await as('nobody').inject({
-      method: 'GET',
-      url: '/v1/me',
-      headers: { cookie: `${SESSION_COOKIE}=${session}`, authorization: `Bearer ${DEV_KEY}` },
-    })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toMatchObject({ kind: 'person' })
+    const expired = await sessionCookie(db, 'ed')
+    await db
+      .updateTable('session')
+      .set({
+        created_at: sql`now() - interval '31 days'`,
+        expires_at: sql`now() - interval '1 second'`,
+      })
+      .where('account_id', '=', 'acct-ed')
+      .execute()
+    const cookies = [`${SESSION_COOKIE}=${session}`, expired.cookie]
+    // The old M0 dev key, another scheme, a bare token and an empty header are all refused.
+    const headers = ['Bearer dev-only-key', 'Basic b3duOnB3', 'whatever', '']
+    for (const cookie of cookies) {
+      for (const authorization of headers) {
+        for (const [method, url, payload] of [
+          ['GET', '/v1/me', undefined],
+          ['PATCH', '/v1/workspaces/w1/items/b1', { version: 1, values: { title: 'x' } }],
+        ] as const) {
+          const res = await app.inject({ method, url, headers: { cookie, authorization }, payload })
+          expect(res.statusCode, `${authorization} ${method} ${url}`).toBe(400)
+          expect(res.json()).toMatchObject({ error: 'invalid_request' })
+        }
+      }
+    }
+    const item = await db
+      .selectFrom('item')
+      .select('version')
+      .where('id', '=', 'b1')
+      .executeTakeFirstOrThrow()
+    expect(item.version).toBe(1)
   })
 })
