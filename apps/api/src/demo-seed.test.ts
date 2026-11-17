@@ -4,6 +4,8 @@ import { promisify } from 'node:util'
 import {
   attributeTypes,
   hubPageSchema,
+  indexEntries,
+  itemQueryResultSchema,
   meSchema,
   validateItemValues,
   workspacePageSchema,
@@ -103,6 +105,7 @@ async function tableCounts(): Promise<Record<string, number>> {
     'attribute',
     'folder_attribute',
     'item',
+    'item_index',
     'revision',
     'hub_grant',
     'access_log',
@@ -499,4 +502,141 @@ describe('demo seed', () => {
     const events = (await hubs('acme')).find((h) => h.id === 'events')
     expect(events?.itemCount).toBe(3)
   }, 60_000)
+
+  it('indexes Stage, Points, Due and every sortable Launch attribute, and fills the index', async () => {
+    const indexed = await db
+      .selectFrom('attribute')
+      .select(['id', 'type'])
+      .where('workspace_id', '=', 'demo')
+      .where('indexed', '=', true)
+      .where('hub_id', 'in', ['product', 'launch'])
+      .orderBy('id')
+      .execute()
+    expect(indexed.map((a) => a.id)).toEqual([
+      'launch-due',
+      'launch-effort',
+      'launch-key',
+      'launch-link',
+      'launch-shipped',
+      'launch-stage',
+      'launch-tags',
+      'launch-title',
+      'product-due',
+      'product-points',
+      'product-stage',
+    ])
+    // Every sortable type in the Launch hub is indexed, and nothing unsortable is.
+    const launch = await db
+      .selectFrom('attribute')
+      .select(['type', 'indexed'])
+      .where('workspace_id', '=', 'demo')
+      .where('hub_id', '=', 'launch')
+      .execute()
+    for (const { type, indexed: on } of launch) {
+      expect(on, type).toBe(attributeTypes[type].sortable)
+    }
+    expect(await indexMatchesValues('demo', 'launch')).toBe(true)
+    expect(await indexMatchesValues('demo', 'product')).toBe(true)
+
+    for (const [from, attribute] of [
+      ['launch', 'launch-tags'],
+      ['launch', 'launch-link'],
+      ['launch', 'launch-key'],
+      ['launch', 'launch-shipped'],
+      ['product', 'product-points'],
+      ['product', 'product-due'],
+    ] as const) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/workspaces/demo/query',
+        headers: auth,
+        payload: { from, limit: 5, sort: [{ attribute, direction: 'asc' }] },
+      })
+      expect(res.statusCode, `${attribute}: ${res.body}`).toBe(200)
+      expect(itemQueryResultSchema.parse(res.json()).items.length, attribute).toBe(5)
+    }
+  }, 60_000)
+
+  it('switches on and fills the index of attributes seeded unindexed before #73', async () => {
+    const before = await indexRows('demo', ['launch-tags', 'product-points'])
+    expect(before.length).toBeGreaterThan(0)
+    await db
+      .updateTable('attribute')
+      .set({ indexed: false })
+      .where('workspace_id', '=', 'demo')
+      .where('id', 'in', ['launch-tags', 'product-points'])
+      .execute()
+    await db
+      .deleteFrom('item_index')
+      .where('workspace_id', '=', 'demo')
+      .where('attribute_id', 'in', ['launch-tags', 'product-points'])
+      .execute()
+
+    await applySeed(db)
+    const flags = await db
+      .selectFrom('attribute')
+      .select('indexed')
+      .where('workspace_id', '=', 'demo')
+      .where('id', 'in', ['launch-tags', 'product-points'])
+      .execute()
+    expect(flags.map((f) => f.indexed)).toEqual([true, true])
+    expect(await indexRows('demo', ['launch-tags', 'product-points'])).toEqual(before)
+    // Another run finds nothing to switch on and writes nothing.
+    const counts = await tableCounts()
+    await applySeed(db)
+    expect(await tableCounts()).toEqual(counts)
+  }, 60_000)
 })
+
+async function indexRows(workspaceId: string, attributeIds: string[]) {
+  return db
+    .selectFrom('item_index')
+    .select(['attribute_id', 'item_id', 'ord', 'num', 'txt', 'ts'])
+    .where('workspace_id', '=', workspaceId)
+    .where('attribute_id', 'in', attributeIds)
+    .orderBy('attribute_id')
+    .orderBy('item_id')
+    .orderBy('ord')
+    .execute()
+}
+
+/** True if a hub's item_index rows are exactly what its items' values project to. */
+async function indexMatchesValues(workspaceId: string, hubId: string): Promise<boolean> {
+  const definitions = await folderDefinitions(db, workspaceId, hubId)
+  const attributes = definitions.map((d) => d.attribute).filter((a) => a.indexed)
+  const items = await db
+    .selectFrom('item')
+    .select(['id', 'values'])
+    .where('workspace_id', '=', workspaceId)
+    .where('hub_id', '=', hubId)
+    .execute()
+  const key = (a: string, i: string, ord: number, v: unknown) =>
+    `${a}|${i}|${String(ord)}|${String(v)}`
+  const expected = items.flatMap((item) =>
+    attributes.flatMap((a) =>
+      indexEntries(a, item.values[a.id] ?? null).map((e) =>
+        key(
+          a.id,
+          item.id,
+          e.ord,
+          e.column === 'ts' ? new Date(e.value as string).toISOString() : e.value,
+        ),
+      ),
+    ),
+  )
+  const rows = await indexRows(
+    workspaceId,
+    attributes.map((a) => a.id),
+  )
+  const actual = rows
+    .filter((r) => items.some((i) => i.id === r.item_id))
+    .map((r) =>
+      key(
+        r.attribute_id,
+        r.item_id,
+        r.ord,
+        r.num ?? r.txt ?? (r.ts ? new Date(r.ts).toISOString() : null),
+      ),
+    )
+  return expected.length > 0 && JSON.stringify(expected.sort()) === JSON.stringify(actual.sort())
+}

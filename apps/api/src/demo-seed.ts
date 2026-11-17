@@ -1,5 +1,6 @@
 import {
   attributeSchema,
+  indexEntries,
   type AgentHubRole,
   type Attribute,
   type FolderAttributeDefinition,
@@ -25,11 +26,17 @@ import { createItem } from './items.ts'
 // so counters, `seq_id`, and `revision` stay consistent; an item whose ID already appears in
 // `revision` is skipped, which also means an item deleted through the API is not brought back.
 // Changing a definition here does not update rows that already exist. Exceptions: the dev
-// owner is set back to `owner` if its row exists with a lower role, and a seeded person's
-// principal without an account (from before #51) is linked to the person's account. Grants
+// owner is set back to `owner` if its row exists with a lower role, a seeded person's
+// principal without an account (from before #51) is linked to the person's account, and a
+// seeded attribute marked `indexed` here but not in the database (from before #73) is switched
+// on and its item_index rows are filled from the stored values. Grants
 // are only added where the principal has none; the agent key only on the first run.
 
-type AttributeSeed = Pick<Attribute, 'id' | 'name' | 'type' | 'config'> & { required?: boolean }
+/** `indexed`: filled into item_index, so the attribute can be filtered and sorted (D6, D20). */
+type AttributeSeed = Pick<Attribute, 'id' | 'name' | 'type' | 'config'> & {
+  required?: boolean
+  indexed?: boolean
+}
 
 interface FolderSeed {
   id: string
@@ -75,7 +82,10 @@ function slug(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-')
 }
 
-/** Title, a select, a number, a date, and a boolean: the five M0 types in every hub. */
+/**
+ * Title, a select, a number, a date, and a boolean: the five M0 types in every hub. Stage,
+ * Points and Due are indexed, so the hub table can sort by them.
+ */
 function workAttributes(prefix: string): AttributeSeed[] {
   return [
     {
@@ -85,24 +95,37 @@ function workAttributes(prefix: string): AttributeSeed[] {
       config: { maxLength: 200 },
       required: true,
     },
-    stage(`${prefix}-stage`, [
-      ['Backlog', 'grey'],
-      ['In progress', 'blue'],
-      ['In review', 'violet'],
-      ['Done', 'green'],
-    ]),
+    {
+      ...stage(`${prefix}-stage`, [
+        ['Backlog', 'grey'],
+        ['In progress', 'blue'],
+        ['In review', 'violet'],
+        ['Done', 'green'],
+      ]),
+      indexed: true,
+    },
     {
       id: `${prefix}-points`,
       name: 'Points',
       type: 'number',
       config: { format: 'plain', min: 0, max: 13 },
+      indexed: true,
     },
-    { id: `${prefix}-due`, name: 'Due', type: 'date', config: { includeTime: false } },
+    {
+      id: `${prefix}-due`,
+      name: 'Due',
+      type: 'date',
+      config: { includeTime: false },
+      indexed: true,
+    },
     { id: `${prefix}-blocked`, name: 'Blocked', type: 'boolean', config: {} },
   ]
 }
 
-/** Every M1 attribute type (D44), so each cell and editor has data to show. */
+/**
+ * Every M1 attribute type (D44), so each cell and editor has data to show. Every attribute of a
+ * sortable type is indexed; actor, rich text and relation cannot be sorted and are not.
+ */
 function launchAttributes(): AttributeSeed[] {
   const option = (label: string, color: PaletteColor) => ({ id: slug(label), label, color })
   return [
@@ -112,14 +135,18 @@ function launchAttributes(): AttributeSeed[] {
       type: 'text',
       config: { maxLength: 200 },
       required: true,
+      indexed: true,
     },
-    { id: 'launch-key', name: 'Key', type: 'auto_id', config: { prefix: 'LCH' } },
-    stage('launch-stage', [
-      ['Idea', 'grey'],
-      ['Planned', 'blue'],
-      ['Building', 'amber'],
-      ['Shipped', 'green'],
-    ]),
+    { id: 'launch-key', name: 'Key', type: 'auto_id', config: { prefix: 'LCH' }, indexed: true },
+    {
+      ...stage('launch-stage', [
+        ['Idea', 'grey'],
+        ['Planned', 'blue'],
+        ['Building', 'amber'],
+        ['Shipped', 'green'],
+      ]),
+      indexed: true,
+    },
     {
       id: 'launch-tags',
       name: 'Tags',
@@ -133,16 +160,24 @@ function launchAttributes(): AttributeSeed[] {
           option('Ops', 'slate'),
         ],
       },
+      indexed: true,
     },
     {
       id: 'launch-effort',
       name: 'Effort',
       type: 'number',
       config: { format: 'plain', decimals: 1, min: 0, max: 20 },
+      indexed: true,
     },
-    { id: 'launch-due', name: 'Due', type: 'date', config: { includeTime: false } },
-    { id: 'launch-shipped', name: 'Shipped', type: 'boolean', config: {} },
-    { id: 'launch-link', name: 'Link', type: 'url', config: {} },
+    {
+      id: 'launch-due',
+      name: 'Due',
+      type: 'date',
+      config: { includeTime: false },
+      indexed: true,
+    },
+    { id: 'launch-shipped', name: 'Shipped', type: 'boolean', config: {}, indexed: true },
+    { id: 'launch-link', name: 'Link', type: 'url', config: {}, indexed: true },
     { id: 'launch-owner', name: 'Owner', type: 'actor', config: { multiple: false } },
     { id: 'launch-notes', name: 'Notes', type: 'rich_text', config: {} },
     {
@@ -496,8 +531,8 @@ export interface SeedResult {
 
 /** The seed's attributes parsed with the core contract, with the seed-only `required` flag. */
 function hubDefinitions(ws: WorkspaceSeed, hub: HubSeed): FolderAttributeDefinition[] {
-  return hub.attributes.map(({ required = false, ...a }) => ({
-    attribute: attributeSchema.parse({ ...a, workspaceId: ws.id, hubId: hub.id, indexed: false }),
+  return hub.attributes.map(({ required = false, indexed = false, ...a }) => ({
+    attribute: attributeSchema.parse({ ...a, workspaceId: ws.id, hubId: hub.id, indexed }),
     required,
   }))
 }
@@ -580,10 +615,12 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
               name: attribute.name,
               type: attribute.type,
               config: JSON.stringify(attribute.config),
+              indexed: attribute.indexed,
             })),
           )
           .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
           .execute()
+        await indexSeededAttributes(trx, ws.id, hub.id, definitionsOf(hub))
         // Every folder in a hub, the hub included, shows all of the hub's attributes.
         await trx
           .insertInto('folder_attribute')
@@ -621,6 +658,87 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
     itemsCreated,
     accounts: [...people.values()].map((p) => p.email).sort(),
     agentKey,
+  }
+}
+
+/** Rows read per batch when an attribute's item_index rows are filled in. */
+const INDEX_BATCH = 500
+
+/**
+ * Turns on `indexed` for the seed's indexed attributes of `hub` that exist unindexed (seeded
+ * before #73), and fills their item_index rows from every item's stored values, as an item
+ * write would (D6). Items are locked FOR SHARE batch by batch so a concurrent write waits.
+ * Attributes indexed already, or not seeded, are left alone.
+ */
+async function indexSeededAttributes(
+  trx: Transaction<Database>,
+  workspaceId: string,
+  hubId: string,
+  definitions: FolderAttributeDefinition[],
+): Promise<void> {
+  const wanted = definitions.filter((d) => d.attribute.indexed).map((d) => d.attribute)
+  if (wanted.length === 0) return
+  const switched = new Set(
+    (
+      await trx
+        .updateTable('attribute')
+        .set({ indexed: true })
+        .where('workspace_id', '=', workspaceId)
+        .where('hub_id', '=', hubId)
+        .where(
+          'id',
+          'in',
+          wanted.map((a) => a.id),
+        )
+        .where('indexed', '=', false)
+        .returning('id')
+        .execute()
+    ).map((r) => r.id),
+  )
+  const attributes = wanted.filter((a) => switched.has(a.id))
+  if (attributes.length === 0) return
+  // Rows left from before the flag was switched off by hand would be stale: start clean.
+  await trx
+    .deleteFrom('item_index')
+    .where('workspace_id', '=', workspaceId)
+    .where(
+      'attribute_id',
+      'in',
+      attributes.map((a) => a.id),
+    )
+    .execute()
+
+  let after = ''
+  for (;;) {
+    const items = await trx
+      .selectFrom('item')
+      .select(['id', 'values'])
+      .where('workspace_id', '=', workspaceId)
+      .where('hub_id', '=', hubId)
+      .where('id', '>', after)
+      .orderBy('id')
+      .limit(INDEX_BATCH)
+      .forShare()
+      .execute()
+    const rows = items.flatMap((item) =>
+      attributes.flatMap((attribute) =>
+        indexEntries(attribute, item.values[attribute.id] ?? null).map((entry) => ({
+          workspace_id: workspaceId,
+          attribute_id: attribute.id,
+          item_id: item.id,
+          ord: entry.ord,
+          num: entry.column === 'num' ? (entry.value as number) : null,
+          txt: entry.column === 'txt' ? (entry.value as string) : null,
+          ts: entry.column === 'ts' ? (entry.value as string) : null,
+        })),
+      ),
+    )
+    if (rows.length > 0) {
+      await trx.insertInto('item_index').values(rows).execute()
+    }
+    const last = items.at(-1)
+    if (!last || items.length < INDEX_BATCH) break
+    after = last.id
   }
 }
 

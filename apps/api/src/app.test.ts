@@ -236,6 +236,7 @@ describe('workspaces and hubs', () => {
     expect(res.statusCode).toBe(200)
     const hub = hubDescriptionSchema.parse(res.json())
     expect(hub.hub.id).toBe('build')
+    expect(hub.hubRole).toBe('hub_admin')
     expect(hub.folders.map((f) => f.id)).toEqual(['bugs'])
     expect(hub.attributes.map((a) => a.id).sort()).toEqual(['points', 'stage', 'title'])
     expect(hub.folderAttributes.filter((fa) => fa.folderId === 'build')).toHaveLength(3)
