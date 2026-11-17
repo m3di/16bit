@@ -1,8 +1,10 @@
 import {
+  attributeTypes,
   conflictErrorSchema,
   DEFAULT_PAGE_LIMIT,
   itemQueryResultSchema,
   itemSchema,
+  type Attribute,
   type Item,
   type ItemQueryResult,
   type ItemValues,
@@ -16,12 +18,37 @@ import { listValue, type LinkedState } from './relations.ts'
 /** Direct reads of linked items running at once, until #73 lets one request cover them. */
 export const LINKED_READ_LIMIT = 6
 
+/** One sort key, as the table offers it. The query endpoint takes up to three. */
+export interface SortKey {
+  attribute: string
+  direction: 'asc' | 'desc'
+}
+
 export interface ItemList {
   ids: string[]
   nextCursor: string | null
   /** A "load more" request is running. */
   more: boolean
   moreError: ApiRequestError | null
+  /** The order `ids` are in, which `nextCursor` belongs to. `null` is newest update first. */
+  sort: SortKey | null
+  /** A request for another order is running; the rows shown are still in `sort` order. */
+  sorting: boolean
+}
+
+/**
+ * The query endpoint sorts only indexed attributes shown on the folder, of a type that can be
+ * sorted (docs/ARCHITECTURE.md, "Query shape").
+ */
+export function canSort(attribute: Attribute): boolean {
+  const type = attributeTypes[attribute.type]
+  return attribute.indexed && type.sortable && type.indexProjection !== 'none'
+}
+
+/** A header click: ascending first, then descending, then back to the default order. */
+export function nextSort(current: SortKey | null, attribute: string): SortKey | null {
+  if (current?.attribute !== attribute) return { attribute, direction: 'asc' }
+  return current.direction === 'asc' ? { attribute, direction: 'desc' } : null
 }
 
 /** An edit applied locally and not yet confirmed by the server. */
@@ -31,6 +58,10 @@ interface PendingEdit {
 }
 
 export type CreateResult = { ok: true; item: Item } | { ok: false; error: ApiRequestError }
+
+/** Ends a server message with a full stop, so another sentence can follow it. */
+const sentence = (message: string) =>
+  /[.!?]$/.test(message.trim()) ? message.trim() : `${message.trim()}.`
 
 /** The `errors` of an `invalid_values` response, keyed by attribute ID. */
 export function valueErrors(error: ApiRequestError): Record<string, string> {
@@ -85,6 +116,8 @@ export function useItems(
   const readOnly = ref(false)
   /** Relation attributes the open folder's query expands. */
   let expand: string[] = []
+  /** The order asked for. While a new order loads, the rows are still in `list.data.sort`. */
+  const sort = ref<SortKey | null>(null)
 
   let generation = 0
   let editKey = 0
@@ -131,12 +164,18 @@ export function useItems(
     }
   }
 
-  async function fetchPage(folder: string, cursor: string | null) {
+  async function fetchPage(folder: string, cursor: string | null, order: SortKey | null) {
     const attributes = expand
     const page = await sendJson(
       'POST',
       `${base}/query`,
-      { from: folder, limit: DEFAULT_PAGE_LIMIT, cursor, expand: attributes },
+      {
+        from: folder,
+        limit: DEFAULT_PAGE_LIMIT,
+        cursor,
+        expand: attributes,
+        sort: order ? [order] : [],
+      },
       itemQueryResultSchema,
       fetchFn,
     )
@@ -203,29 +242,77 @@ export function useItems(
     pumpLinked()
   }
 
-  /**
-   * Shows a folder's first page, newest update first. `expandIds` are relation attributes whose
-   * linked items come back with each page.
-   */
-  async function openFolder(id: string, expandIds: readonly string[] = []) {
+  const firstPage = (page: ItemQueryResult, order: SortKey | null): Load<ItemList> => ({
+    state: 'ready',
+    data: {
+      ids: page.items.map((i) => i.id),
+      nextCursor: page.nextCursor,
+      more: false,
+      moreError: null,
+      sort: order,
+      sorting: false,
+    },
+  })
+
+  /** Reads the open folder's first page in the order asked for, from the loading state. */
+  async function reload() {
     const gen = ++generation
-    folderId.value = id
-    expand = [...expandIds]
+    const folder = folderId.value
+    const order = sort.value
+    if (!folder) return
     list.value = { state: 'loading' }
     try {
-      const page = await fetchPage(id, null)
-      if (gen !== generation) return
-      list.value = {
-        state: 'ready',
-        data: {
-          ids: page.items.map((i) => i.id),
-          nextCursor: page.nextCursor,
-          more: false,
-          moreError: null,
-        },
-      }
+      const page = await fetchPage(folder, null, order)
+      if (gen === generation) list.value = firstPage(page, order)
     } catch (error) {
       if (gen === generation) list.value = { state: 'error', error: asRequestError(error) }
+    }
+  }
+
+  /**
+   * Shows a folder's first page, newest update first. `expandIds` are relation attributes whose
+   * linked items come back with each page. Another folder starts in the default order.
+   */
+  async function openFolder(id: string, expandIds: readonly string[] = []) {
+    if (id !== folderId.value) sort.value = null
+    folderId.value = id
+    expand = [...expandIds]
+    await reload()
+  }
+
+  /**
+   * Shows the folder in another order. The header shows the new order at once and the rows
+   * stay until the sorted page arrives. If the server refuses, the order the rows are in comes
+   * back and the notice says why.
+   */
+  async function setSort(next: SortKey | null) {
+    sort.value = next
+    const current = list.value
+    const folder = folderId.value
+    if (current.state !== 'ready' || !folder) {
+      await reload()
+      return
+    }
+    const gen = ++generation
+    const data = current.data
+    // A page still loading for the old order is dropped with the old generation.
+    data.more = false
+    data.moreError = null
+    data.sorting = true
+    try {
+      const page = await fetchPage(folder, null, next)
+      if (gen === generation) list.value = firstPage(page, next)
+    } catch (thrown) {
+      if (gen !== generation) return
+      const error = asRequestError(thrown)
+      data.sorting = false
+      sort.value = data.sort
+      // A 400 means the column is not sortable any more, for example no longer indexed.
+      const reason =
+        error.status === 400
+          ? 'This column can no longer be sorted; reload the page to see the current columns.'
+          : `The items could not be shown in that order. ${sentence(error.message)}`
+      notice.value = `${reason} The items are shown in the previous order.`
     }
   }
 
@@ -233,13 +320,20 @@ export function useItems(
     const gen = generation
     const current = list.value
     const folder = folderId.value
-    if (current.state !== 'ready' || !current.data.nextCursor || current.data.more || !folder)
+    if (
+      current.state !== 'ready' ||
+      !current.data.nextCursor ||
+      current.data.more ||
+      current.data.sorting ||
+      !folder
+    )
       return
     const data = current.data
     data.more = true
     data.moreError = null
     try {
-      const page = await fetchPage(folder, data.nextCursor)
+      // The cursor only fits the order its page came in.
+      const page = await fetchPage(folder, data.nextCursor, data.sort)
       if (gen !== generation) return
       const known = new Set(data.ids)
       data.ids.push(...page.items.map((i) => i.id).filter((id) => !known.has(id)))
@@ -398,6 +492,9 @@ export function useItems(
     list,
     rows,
     folderId,
+    sort,
+    setSort,
+    reload,
     notice,
     view,
     isSaving,
