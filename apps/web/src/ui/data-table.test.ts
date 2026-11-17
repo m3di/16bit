@@ -41,6 +41,7 @@ describe('DataTable sortable headers', () => {
   it('shows a single up chevron when ascending, and marks the header', async () => {
     const th = header(await render([{ key: 'stage', label: 'Stage', sort: 'ascending' }]), 'Stage')
     expect(th).toContain('aria-sort="ascending"')
+    expect(th).toMatch(/<svg[^>]*aria-hidden="true"/)
     expect(chevrons(th)).toEqual(['up'])
     expect(th).toContain('font-medium text-ink')
   })
@@ -48,7 +49,21 @@ describe('DataTable sortable headers', () => {
   it('shows a single down chevron when descending', async () => {
     const th = header(await render([{ key: 'stage', label: 'Stage', sort: 'descending' }]), 'Stage')
     expect(th).toContain('aria-sort="descending"')
+    expect(th).toMatch(/<svg[^>]*aria-hidden="true"/)
     expect(chevrons(th)).toEqual(['down'])
+  })
+
+  it('puts the icon after the label, or before it in a right-aligned column', async () => {
+    const html = await render([
+      { key: 'stage', label: 'Stage', sort: 'none' },
+      { key: 'points', label: 'Points', sort: 'ascending', align: 'end' },
+    ])
+    const stage = header(html, 'Stage')
+    const points = header(html, 'Points')
+    expect(stage.indexOf('Stage')).toBeLessThan(stage.indexOf('<svg'))
+    expect(points.indexOf('<svg')).toBeLessThan(points.indexOf('Points'))
+    expect(points.match(/<svg/g)).toHaveLength(1)
+    expect(stage.match(/<svg/g)).toHaveLength(1)
   })
 
   it('gives a column that cannot be sorted no button, no icon, and no caption note', async () => {

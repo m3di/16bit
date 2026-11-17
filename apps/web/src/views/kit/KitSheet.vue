@@ -245,8 +245,9 @@ function onSort(key: string) {
         </template>
       </DataTable>
       <p class="m-0 text-caption text-ink3">
-        Stage and Points can be sorted: two chevrons at rest, one in ink when sorted. ID and Title
-        cannot. The second row is selected.
+        Stage and Points can be sorted: two chevrons at rest, one in ink when sorted. Points is
+        right-aligned, so its chevrons lead the label. ID and Title cannot. The second row is
+        selected.
       </p>
     </section>
 

@@ -87,7 +87,7 @@ describe('ItemsBlock', () => {
   it('makes headers of indexed, sortable attributes sort buttons', async () => {
     const html = await block(ready(['i1']))
     // Stage is indexed; Title and Points are not, and the ID column has no attribute.
-    expect(header(html, 'Stage')).toMatch(/<button type="button"[^>]*>\s*Stage/)
+    expect(header(html, 'Stage')).toMatch(/<button type="button"[^>]*>(\s|<!---->)*Stage/)
     expect(header(html, 'Stage')).toContain('data-sort="none"')
     expect(header(html, 'Stage')).not.toContain('aria-sort')
     for (const label of ['ID', 'Title', 'Points']) {
