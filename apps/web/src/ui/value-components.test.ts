@@ -334,8 +334,10 @@ describe('SignInForm', () => {
   it('explains a refused account', async () => {
     const html = await render(SignInForm, { state: 'no-permission', message: 'Account disabled.' })
     expect(html).toContain('Account disabled.')
-    expect(html).toContain('data-tone="info"')
-    expect(html).toContain('role="status"')
+    expect(html).toContain('data-state="no-permission"')
+    expect(html).toContain('data-tone="error"')
+    expect(html).toContain('role="alert"')
+    expect(html).not.toContain('role="status"')
   })
 })
 

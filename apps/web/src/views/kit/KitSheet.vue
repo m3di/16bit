@@ -214,7 +214,7 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
         <div class="rounded-card border border-line">
           <StateBlock state="not-found" title="This hub is not available">
             <template #action>
-              <a href="/kit" class="border-b border-line2 text-ink no-underline hover:border-line3"
+              <a href="/" class="border-b border-line2 text-ink no-underline hover:border-line3"
                 >Back to workspaces</a
               >
             </template>
@@ -239,9 +239,7 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
         </div>
         <div class="flex flex-col gap-2">
           <span class="text-caption text-ink3">Info</span>
-          <FormNotice tone="info"
-            >This account cannot sign in here. Ask an owner or admin for an invite.</FormNotice
-          >
+          <FormNotice tone="info">Changes are saved as you type.</FormNotice>
         </div>
       </div>
     </section>

@@ -50,7 +50,7 @@ function submit() {
     :data-state="state"
     @submit.prevent="submit"
   >
-    <FormNotice v-if="notice" :tone="state === 'error' ? 'error' : 'info'">{{ notice }}</FormNotice>
+    <FormNotice v-if="notice">{{ notice }}</FormNotice>
     <BaseInput
       v-model="email"
       label="Email"
