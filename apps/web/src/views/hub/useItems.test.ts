@@ -450,6 +450,38 @@ describe('useItems: a sort that went stale (#81)', () => {
       expect(s.notice.value).toMatch(/could not be shown in that order\. Down\./)
     })
 
+    it('clears the notice when the default order is read on a second try', async () => {
+      let down = true
+      const { s } = await sortedWithMore((body) => {
+        if (body.sort.length) return refused()
+        return down
+          ? json({ error: 'internal', message: 'Down' }, 500)
+          : page([item('i2', 2)], 'd1')
+      })
+      await s.loadMore()
+      await s.setSort(null)
+      expect(s.notice.value).toMatch(/shown in the previous order/)
+      down = false
+      await s.setSort(null)
+      expect(s.rows.value.map((r) => r.id)).toEqual(['i2'])
+      expect(s.list.value).toMatchObject({
+        state: 'ready',
+        data: { sort: null, moreRefused: false },
+      })
+      expect(s.notice.value).toBeNull()
+    })
+
+    it('keeps an edit failure notice when a sort succeeds', async () => {
+      const { s } = await opened(
+        () => json({ error: 'invalid_values', message: 'Some values are not valid' }, 422),
+        [item('i1', 1, { title: 'Old' })],
+      )
+      await s.save('i1', { title: '' })
+      await s.setSort(stage)
+      expect(s.list.value).toMatchObject({ state: 'ready', data: { sort: stage } })
+      expect(s.notice.value).toBe('Your change to BLD-1 was not saved. Some values are not valid')
+    })
+
     it('treats a 400 that does not name the sort as a failed page, which can be retried', async () => {
       const { s } = await sortedWithMore(() =>
         json({ error: 'invalid_request', message: 'Invalid cursor' }, 400),

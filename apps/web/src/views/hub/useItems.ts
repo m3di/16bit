@@ -124,6 +124,15 @@ export function useItems(
   /** The last write that failed, shown until dismissed or replaced. */
   const notice = ref<string | null>(null)
   /**
+   * Whether the notice explains the order the rows are in. The notice is shared with edit and
+   * create failures, so a successful sort clears it only when a sort put it there.
+   */
+  let sortNotice = false
+  const say = (text: string | null, fromSort = false) => {
+    notice.value = text
+    sortNotice = fromSort
+  }
+  /**
    * Linked items by ID, from `expand` on the folder query and from direct reads. Kept for the
    * life of the hub page on purpose: it is not cleared when another folder opens, so a chip
    * does not flicker back to loading. A reload of the page reads everything again.
@@ -293,7 +302,7 @@ export function useItems(
       const page = await fetchPage(folder, null, order)
       if (gen !== generation) return
       list.value = firstPage(page, order)
-      if (dropped) notice.value = staleSortNotice
+      if (dropped) say(staleSortNotice)
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
@@ -351,8 +360,8 @@ export function useItems(
       const page = await fetchPage(folder, null, next)
       if (gen !== generation) return
       list.value = firstPage(page, next)
-      // The rows are no longer in the refused order, so "no more items" no longer applies.
-      if (notice.value === moreRefusedNotice) notice.value = null
+      // The rows are in the order asked for, so a notice about the previous order no longer applies.
+      if (sortNotice) say(null)
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
@@ -361,7 +370,7 @@ export function useItems(
       const reason = refusedSort(error)
         ? 'This column can no longer be sorted; reload the page to see the current columns.'
         : `The items could not be shown in that order. ${sentence(error.message)}`
-      notice.value = `${reason} The items are shown in the previous order.`
+      say(`${reason} The items are shown in the previous order.`, true)
     }
   }
 
@@ -398,7 +407,7 @@ export function useItems(
       const error = asRequestError(thrown)
       if (data.sort && refusedSort(error)) {
         data.moreRefused = true
-        notice.value = moreRefusedNotice
+        say(moreRefusedNotice, true)
       } else data.moreError = error
     } finally {
       if (gen === generation) data.more = false
@@ -442,7 +451,7 @@ export function useItems(
   function save(id: string, values: ItemValues): Promise<boolean> {
     // The server does not have the item yet, so there is nothing to PATCH.
     if (creating.value[id]) {
-      notice.value = 'The new item is still being saved. Edit it once it has been created.'
+      say('The new item is still being saved. Edit it once it has been created.')
       return Promise.resolve(false)
     }
     const edit: PendingEdit = { key: ++editKey, values }
@@ -475,14 +484,18 @@ export function useItems(
         if (error.status === 403) {
           drop()
           readOnly.value = true
-          notice.value = `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`
+          say(
+            `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`,
+          )
         } else if (error.code === 'conflict' && conflict.success) {
           server.value[id] = conflict.data.current
           pending.value[id] = []
-          notice.value = `${label(before)} was changed by someone else before your edit was saved. Your edit was not applied; the latest values are shown.`
+          say(
+            `${label(before)} was changed by someone else before your edit was saved. Your edit was not applied; the latest values are shown.`,
+          )
         } else {
           drop()
-          notice.value = `Your change to ${label(before)} was not saved. ${error.message}`
+          say(`Your change to ${label(before)} was not saved. ${error.message}`)
         }
         return false
       }
@@ -533,10 +546,9 @@ export function useItems(
       }
       if (error.status === 403) {
         readOnly.value = true
-        notice.value =
-          'The item was not created. You can view the items in this hub but not add them.'
+        say('The item was not created. You can view the items in this hub but not add them.')
       } else {
-        notice.value = `The item was not created. ${error.message}`
+        say(`The item was not created. ${error.message}`)
       }
       return { ok: false, error }
     } finally {
@@ -545,7 +557,7 @@ export function useItems(
   }
 
   const dismissNotice = () => {
-    notice.value = null
+    say(null)
   }
 
   return {
