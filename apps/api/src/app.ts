@@ -140,13 +140,21 @@ export function buildApp(options: AppOptions): FastifyInstance {
           }))
           return page(workspaces, limit, (w) => [w.name, w.id])
         }
+        if (identity.kind === 'agent') {
+          // An agent has exactly one workspace, its key's, taken from the key lookup (RLS-safe
+          // like the branch above). One row never yields a next cursor, so any cursor is past it.
+          const workspace: Workspace = {
+            id: identity.workspaceId,
+            name: identity.workspaceName,
+            createdAt: identity.workspaceCreatedAt.toISOString(),
+          }
+          return page(after ? [] : [workspace], limit, (w) => [w.name, w.id])
+        }
         let q = db
           .selectFrom('workspace as w')
           .innerJoin('principal as p', 'p.workspace_id', 'w.id')
           .selectAll('w')
           .where('p.id', '=', identity.principalId)
-        // An agent's principal exists only in its key's workspace; this keeps it explicit.
-        if (identity.kind === 'agent') q = q.where('w.id', '=', identity.workspaceId)
         if (after) q = q.where(sql<boolean>`(w.name, w.id) > (${after[0]}, ${after[1]})`)
         const rows = await q
           .orderBy('w.name')

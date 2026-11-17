@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import type { Database } from '../db/database.ts'
 import { HttpError, notFound } from '../http.ts'
-import { resolveAgentKey, type AgentIdentity } from './agent-key.ts'
+import { AGENT_SECRET_PREFIX, resolveAgentKey, type AgentIdentity } from './agent-key.ts'
 import {
   readCookie,
   resolveSession,
@@ -17,6 +17,7 @@ import {
 //   1. a session cookie (people, D42),
 //   2. a bearer token: the M0 development key until #51, or an agent key (D47),
 //   3. no credentials: the dev owner if DEV_ANONYMOUS_AS_OWNER is on (D41), else nobody.
+// A session cookie together with an agent key is refused with 400, not resolved.
 // Inside `/v1/workspaces/:workspaceId`, `resolvePrincipal` then turns the identity into the
 // principal for that workspace: the `Subject` that `can()` from packages/core takes.
 
@@ -83,6 +84,21 @@ export function registerAuthHook(v1: FastifyInstance, options: AuthOptions): voi
       throw new HttpError('forbidden', 'Cross-site request refused')
     }
 
+    // The scheme is case-insensitive (RFC 7235), the token is not.
+    const header = request.headers.authorization
+    const bearer = header === undefined ? undefined : /^Bearer (.+)$/i.exec(header)?.[1]
+
+    // A cookie is ambient, a bearer token is chosen: with both, the caller may think it acts
+    // as a hub-scoped agent while the cookie carries a person's full rights. Refuse instead of
+    // picking one. Only agent keys for now, because the M0 dev proxy adds the dev key to every
+    // browser request; once #51 removes it, this becomes any cookie plus any Authorization.
+    if (token !== undefined && bearer?.startsWith(AGENT_SECRET_PREFIX)) {
+      throw new HttpError(
+        'invalid_request',
+        'Send either a session cookie or a bearer token, not both',
+      )
+    }
+
     if (token) {
       const session = await resolveSession(options.db, token, options.session)
       if (session) {
@@ -95,14 +111,12 @@ export function registerAuthHook(v1: FastifyInstance, options: AuthOptions): voi
       }
     }
 
-    const header = request.headers.authorization
     if (header !== undefined) {
-      const match = /^Bearer (.+)$/.exec(header)
-      if (match?.[1] && timingSafeEqual(digest(match[1]), expectedKey)) {
+      if (bearer && timingSafeEqual(digest(bearer), expectedKey)) {
         request.identity = { kind: 'dev', principalId: options.devPrincipalId }
         return
       }
-      const agent = match?.[1] ? await resolveAgentKey(options.db, match[1]) : null
+      const agent = bearer ? await resolveAgentKey(options.db, bearer) : null
       if (agent) {
         request.identity = agent
         return

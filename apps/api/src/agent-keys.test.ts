@@ -13,8 +13,10 @@ import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
+import { createSession, DEFAULT_SESSION_POLICY, SESSION_COOKIE } from './auth/session.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { encodeCursor } from './http.ts'
 
 // Integration tests for agent keys (#42, D47, D48, docs/ROLES.md) against a real Postgres.
 // People are authenticated with the dev key, one app per principal: sessions are covered in
@@ -532,17 +534,19 @@ describe('authenticating with a key', () => {
   })
 
   it('holds a key to its role', async () => {
-    const { secret } = await createKey('ha', 'viewer')
-    expect((await agent(secret, 'GET', '/v1/workspaces/w1/items/b1')).statusCode).toBe(200)
     const writes: [Method, string, object?][] = [
       ['POST', '/v1/workspaces/w1/items', { folderId: 'build' }],
       ['PATCH', '/v1/workspaces/w1/items/b1', { version: 1, values: { title: 'x' } }],
       ['DELETE', '/v1/workspaces/w1/items/b1?version=1'],
     ]
-    for (const [method, url, body] of writes) {
-      const res = await agent(secret, method, url, body)
-      expect(res.statusCode, `${method} ${url}`).toBe(403)
-      expect(res.json()).toMatchObject({ error: 'forbidden' })
+    for (const role of ['viewer', 'commenter'] as const) {
+      const { secret } = await createKey('ha', role)
+      expect((await agent(secret, 'GET', '/v1/workspaces/w1/items/b1')).statusCode).toBe(200)
+      for (const [method, url, body] of writes) {
+        const res = await agent(secret, method, url, body)
+        expect(res.statusCode, `${role} ${method} ${url}`).toBe(403)
+        expect(res.json()).toMatchObject({ error: 'forbidden' })
+      }
     }
     // Agents never manage keys (D28), even an editor key on its own hub.
     const editor = await createKey('ha', 'editor')
@@ -559,6 +563,12 @@ describe('authenticating with a key', () => {
       (await agent(editor.secret, 'POST', `/v1/workspaces/w1/agent-keys/${key.id}/revoke`))
         .statusCode,
     ).toBe(403)
+    // Nor members (D28).
+    const invite = await agent(editor.secret, 'POST', '/v1/workspaces/w1/invites', {
+      workspaceRole: 'viewer',
+    })
+    expect(invite.statusCode).toBe(403)
+    expect(await db.selectFrom('invite').select('id').execute()).toEqual([])
   })
 
   it('accepts a key until it expires, then answers 401', async () => {
@@ -573,6 +583,44 @@ describe('authenticating with a key', () => {
       .where('principal_id', '=', key.id)
       .execute()
     expect((await agent(secret, 'GET', '/v1/workspaces/w1/hubs')).statusCode).toBe(401)
+  })
+
+  it('accepts the Bearer scheme in any case', async () => {
+    const { secret } = await createKey('ha', 'viewer')
+    for (const scheme of ['bearer', 'BEARER', 'BeArEr']) {
+      const res = await as('nobody').inject({
+        method: 'GET',
+        url: '/v1/workspaces/w1/hubs',
+        headers: { authorization: `${scheme} ${secret}` },
+      })
+      expect(res.statusCode, scheme).toBe(200)
+    }
+  })
+
+  it('pages its one workspace from the key lookup alone', async () => {
+    const { secret } = await createKey('ha', 'viewer')
+    const first = workspacePageSchema.parse(
+      (await agent(secret, 'GET', '/v1/workspaces?limit=1')).json(),
+    )
+    const created = await db
+      .selectFrom('workspace')
+      .select('created_at')
+      .where('id', '=', 'w1')
+      .executeTakeFirstOrThrow()
+    expect(first).toEqual({
+      items: [{ id: 'w1', name: 'Alpha', createdAt: created.created_at.toISOString() }],
+      nextCursor: null,
+    })
+    // One row never yields a next cursor, so any well-formed cursor is past it.
+    for (const key of [
+      ['Alpha', 'w1'],
+      ['A', 'a'],
+    ]) {
+      const after = await agent(secret, 'GET', `/v1/workspaces?cursor=${encodeCursor(key)}`)
+      expect(after.statusCode).toBe(200)
+      expect(workspacePageSchema.parse(after.json()).items).toEqual([])
+    }
+    expect((await agent(secret, 'GET', '/v1/workspaces?cursor=nope')).statusCode).toBe(400)
   })
 
   it('answers 401 to unknown and malformed tokens', async () => {
@@ -648,5 +696,85 @@ describe('GET /v1/me with a key', () => {
       expect(res.statusCode).toBe(401)
       expect(res.json()).toMatchObject({ error: 'unauthorized' })
     }
+  })
+})
+
+describe('a session cookie and a bearer token on one request', () => {
+  /** A live session for `own`'s person. */
+  async function ownSession(): Promise<string> {
+    await db
+      .insertInto('account')
+      .values({
+        id: 'acc-own',
+        email: 'own@example.com',
+        password_hash: '$argon2id$unused',
+        name: 'own',
+      })
+      .execute()
+    await db
+      .updateTable('principal')
+      .set({ account_id: 'acc-own' })
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'own')
+      .execute()
+    return createSession(db, 'acc-own', DEFAULT_SESSION_POLICY)
+  }
+
+  it('refuses a cookie with an agent key, valid or not, and changes nothing', async () => {
+    const session = await ownSession()
+    const { secret } = await createKey('ha', 'viewer')
+    const revoked = await createKey('ha', 'viewer')
+    await person('own', 'POST', `/v1/workspaces/w1/agent-keys/${revoked.key.id}/revoke`)
+    const cases: [string, string][] = [
+      [session, secret],
+      [session, revoked.secret],
+      [session, `16b_${'A'.repeat(43)}`],
+      ['not-a-session', secret],
+    ]
+    for (const [cookie, key] of cases) {
+      for (const [method, url, payload] of [
+        ['GET', '/v1/me', undefined],
+        ['GET', '/v1/workspaces/w1/hubs', undefined],
+        ['PATCH', '/v1/workspaces/w1/items/b1', { version: 1, values: { title: 'x' } }],
+      ] as const) {
+        const res = await as('nobody').inject({
+          method,
+          url,
+          headers: { cookie: `${SESSION_COOKIE}=${cookie}`, authorization: `bearer ${key}` },
+          payload,
+        })
+        expect(res.statusCode, `${method} ${url}`).toBe(400)
+        expect(res.json()).toMatchObject({
+          error: 'invalid_request',
+          message: 'Send either a session cookie or a bearer token, not both',
+        })
+      }
+    }
+    const item = await db
+      .selectFrom('item')
+      .select('version')
+      .where('id', '=', 'b1')
+      .executeTakeFirstOrThrow()
+    expect(item.version).toBe(1)
+
+    // Each credential alone still works.
+    expect((await agent(secret, 'GET', '/v1/me')).json()).toMatchObject({ kind: 'agent' })
+    const alone = await as('nobody').inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { cookie: `${SESSION_COOKIE}=${session}` },
+    })
+    expect(alone.json()).toMatchObject({ kind: 'person' })
+  })
+
+  it('still lets the session win over the M0 dev key until #51 removes it', async () => {
+    const session = await ownSession()
+    const res = await as('nobody').inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { cookie: `${SESSION_COOKIE}=${session}`, authorization: `Bearer ${DEV_KEY}` },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ kind: 'person' })
   })
 })

@@ -13,6 +13,7 @@ export interface AgentIdentity {
   principalId: string
   workspaceId: string
   workspaceName: string
+  workspaceCreatedAt: Date
   hubId: string
   hubName: string
   hubRole: AgentHubRole
@@ -39,6 +40,7 @@ export async function resolveAgentKey(
   const { rows } = await sql<{
     workspace_id: string
     workspace_name: string
+    workspace_created_at: Date
     principal_id: string
     hub_id: string
     hub_name: string
@@ -51,6 +53,7 @@ export async function resolveAgentKey(
     principalId: row.principal_id,
     workspaceId: row.workspace_id,
     workspaceName: row.workspace_name,
+    workspaceCreatedAt: row.workspace_created_at,
     hubId: row.hub_id,
     hubName: row.hub_name,
     hubRole: agentHubRoleSchema.parse(row.hub_role),
