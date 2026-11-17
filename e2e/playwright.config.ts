@@ -18,8 +18,8 @@ const webUrl = `http://localhost:${webPort}`
 
 // Specs live in tests/*.spec.ts. Each one sets up its own items through the API, so specs can run
 // in any order, in parallel, and across shards. The database must be migrated and seeded first
-// (`pnpm seed`); the seeded workspaces and hubs are read but never changed. Specs run signed in
-// as the seeded owner (tests/auth.setup.ts).
+// (`pnpm seed`); the seeded people keep their roles and grants. Specs run signed in as the
+// seeded owner; tests/auth.setup.ts signs in every seeded person for the role-matrix specs.
 export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.spec.ts',
@@ -33,7 +33,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    // Signs in once as the seeded owner; every spec starts from that session (#51).
+    // Signs in once as each seeded person; specs start from the owner's session (#51, #53).
     { name: 'setup', testMatch: /auth\.setup\.ts$/ },
     {
       name: 'chromium',
