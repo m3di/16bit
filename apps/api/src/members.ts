@@ -22,8 +22,29 @@ import { toFolder } from './mappers.ts'
 // Members, hub grants and hub creation (#43, docs/ROLES.md). Every change is an access change,
 // written to access_log in the same transaction (D48), never to `revision`.
 //
-// Lock order, to keep concurrent access changes from deadlocking: principal rows first (owners
-// in ID order, then the target), then hub_grant rows.
+// Lock order for every access change (#92): members, grants and hubs here, agent keys, invites,
+// and redeem_invite (migration 0004). Each takes, in this order:
+//
+//   1. principal rows: the owners in ID order (member changes), then the target. FOR NO KEY
+//      UPDATE or FOR SHARE, never FOR UPDATE: every foreign key to principal (access_log.actor,
+//      revision.actor, item.updated_by, hub_grant, invite, agent_key) takes FOR KEY SHARE, which
+//      only FOR UPDATE blocks. A writer that already holds the workspace row and then inserts
+//      its log or revision row must never wait on a principal lock held by someone who is
+//      waiting for that workspace row.
+//   2. hub_grant, invite and agent_key rows.
+//   3. removeMember only: the target's row again, now FOR UPDATE, because clearing account_id
+//      changes a unique key. This comes after the target's grants are deleted, so the target's
+//      own item writes, which hold their grant FOR SHARE, have finished or wait before any lock.
+//   4. appendAccessLog: the actor's principal row FOR KEY SHARE, then the workspace row
+//      (next_access_seq), then the access_log row. The actor is locked before the workspace
+//      row so a member being removed (step 3 elsewhere) blocks its own access change before
+//      it holds the workspace row, not after.
+//
+// Item writes take the workspace row (next_revision_seq) before their revision references the
+// actor. That is safe with the order above: no access change holds a principal FOR UPDATE
+// while waiting for anything an item write holds, except removeMember after step 2, by which
+// point the target's item writes are done. RLS triggers (principal_guard, workspace_guard) and
+// policy helpers only read; they take no row locks.
 
 type Db = Kysely<Database>
 type Trx = Transaction<Database>
@@ -84,7 +105,8 @@ export async function listMembers(
 /**
  * Locks every current owner, then the target, and returns the owner count and the target.
  * With the owners locked, two owners demoting or removing each other run one after the other
- * and the second sees the first's change, so the last owner always stays.
+ * and the second sees the first's change, so the last owner always stays. NO KEY UPDATE, not
+ * UPDATE, so an owner's own writes (which reference their row) are never blocked (#92).
  */
 async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: string) {
   const owners = await trx
@@ -95,7 +117,7 @@ async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: stri
     .where('workspace_role', '=', 'owner')
     .where('removed_at', 'is', null)
     .orderBy('id')
-    .forUpdate()
+    .forNoKeyUpdate()
     .execute()
   const target = await trx
     .selectFrom('principal')
@@ -103,7 +125,7 @@ async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: stri
     .where('workspace_id', '=', workspaceId)
     .where('id', '=', targetId)
     .where('removed_at', 'is', null)
-    .forUpdate()
+    .forNoKeyUpdate()
     .executeTakeFirst()
   return { ownerCount: owners.length, target }
 }

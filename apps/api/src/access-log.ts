@@ -4,6 +4,12 @@ import type { Database, HubGrantTable } from './db/database.ts'
 /**
  * Appends to `access_log` (D48), taking `seq` from `workspace.next_access_seq`. Call it in the
  * same transaction as the access change; the row lock on the workspace orders concurrent ones.
+ *
+ * The actor's principal row is locked FOR KEY SHARE before the workspace row (#92, lock order
+ * in members.ts). The access_log row's foreign key takes that lock anyway; taken after the
+ * workspace row, a concurrent removal of the actor could hold the principal and wait for the
+ * workspace row we hold. Under RLS only owners, admins and hub admins pass the principal
+ * UPDATE policy this lock needs, and they are the only callers allowed to append here.
  */
 export async function appendAccessLog(
   trx: Transaction<Database>,
@@ -15,6 +21,13 @@ export async function appendAccessLog(
     detail?: Record<string, unknown>
   },
 ): Promise<number> {
+  await trx
+    .selectFrom('principal')
+    .select('id')
+    .where('workspace_id', '=', entry.workspaceId)
+    .where('id', '=', entry.actor)
+    .forKeyShare()
+    .execute()
   const { seq } = await trx
     .updateTable('workspace')
     .set({ next_access_seq: sql`next_access_seq + 1` })
