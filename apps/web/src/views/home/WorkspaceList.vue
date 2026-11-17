@@ -17,8 +17,7 @@ defineEmits<{ retry: []; retryHubs: [workspaceId: string] }>()
   <StateBlock
     v-else-if="workspaces.state === 'error' && workspaces.error.isNoPermission"
     state="no-permission"
-    title="The API did not accept this session"
-    message="Sign-in arrives in M1. For now, check DEV_API_KEY in your .env."
+    title="You do not have access to these workspaces"
   />
   <StateBlock
     v-else-if="workspaces.state === 'error'"

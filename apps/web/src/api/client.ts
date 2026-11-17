@@ -31,18 +31,57 @@ export class ApiRequestError extends Error {
     this.body = body
   }
 
-  /** The caller may not see this: the key was refused, or the resource is not theirs. */
+  /**
+   * The caller may not do this: `forbidden` (403). A 401 counts too, so a view shows a quiet
+   * state for the moment before the unauthorized handler moves the reader to sign-in.
+   */
   get isNoPermission(): boolean {
     return this.status === 401 || this.status === 403
   }
+
+  /** No session, or it ended. The unauthorized handler sends the reader to sign-in. */
+  get isUnauthorized(): boolean {
+    return this.status === 401
+  }
+
+  /** `not_found` (404). Also what the API answers for things the caller holds no grant on. */
+  get isNotFound(): boolean {
+    return this.status === 404
+  }
 }
+
+export interface RequestOptions {
+  /**
+   * Handle a 401 here instead of calling the unauthorized handler. For sign-in, `/v1/me`, and
+   * invite acceptance, where a 401 is an answer, not an ended session.
+   */
+  quiet401?: boolean
+}
+
+let unauthorizedHandler: (() => void) | null = null
+
+/** Called on every 401 not marked `quiet401`. Returns a function that removes the handler. */
+export function setUnauthorizedHandler(handler: () => void): () => void {
+  unauthorizedHandler = handler
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null
+  }
+}
+
+/** For responses without a body, such as a 204. */
+export const noContent: Schema<undefined> = { parse: () => undefined }
 
 /** Stops a misbehaving cursor from looping forever: 50 pages of 200 is 10,000 entries. */
 export const MAX_PAGES = 50
 
 /** GETs `path` (same origin, `/v1/...`) and checks the body against `schema`. */
-export function getJson<T>(path: string, schema: Schema<T>, fetchFn: Fetch = fetch) {
-  return requestJson('GET', path, undefined, schema, fetchFn)
+export function getJson<T>(
+  path: string,
+  schema: Schema<T>,
+  fetchFn: Fetch = fetch,
+  options: RequestOptions = {},
+) {
+  return requestJson('GET', path, undefined, schema, fetchFn, options)
 }
 
 /** POSTs or PATCHes `body` as JSON to `path` and checks the response against `schema`. */
@@ -52,8 +91,9 @@ export function sendJson<T>(
   body: unknown,
   schema: Schema<T>,
   fetchFn: Fetch = fetch,
+  options: RequestOptions = {},
 ) {
-  return requestJson(method, path, body, schema, fetchFn)
+  return requestJson(method, path, body, schema, fetchFn, options)
 }
 
 async function requestJson<T>(
@@ -62,6 +102,7 @@ async function requestJson<T>(
   payload: unknown,
   schema: Schema<T>,
   fetchFn: Fetch,
+  options: RequestOptions,
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
   const init: RequestInit = { method, headers }
@@ -80,6 +121,7 @@ async function requestJson<T>(
   const body: unknown = await response.json().catch(() => undefined)
 
   if (!response.ok) {
+    if (response.status === 401 && !options.quiet401) unauthorizedHandler?.()
     const error = apiErrorSchema.safeParse(body)
     if (error.success)
       throw new ApiRequestError(error.data.error, error.data.message, response.status, error.data)

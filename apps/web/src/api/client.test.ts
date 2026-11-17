@@ -1,6 +1,15 @@
 import { itemSchema, workspacePageSchema } from '@16bit/core'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiRequestError, getAllPages, getJson, MAX_PAGES, sendJson, type Fetch } from './client.ts'
+import {
+  ApiRequestError,
+  getAllPages,
+  getJson,
+  MAX_PAGES,
+  noContent,
+  sendJson,
+  setUnauthorizedHandler,
+  type Fetch,
+} from './client.ts'
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -136,5 +145,73 @@ describe('sendJson', () => {
     const error = await sendJson('PATCH', '/v1/i', {}, itemSchema, fetchFn).catch((e: unknown) => e)
     expect(error).toMatchObject({ code: 'conflict', status: 409 })
     expect((error as ApiRequestError).body).toMatchObject({ current: item })
+  })
+})
+
+describe('status helpers', () => {
+  it('tells 401, 403 and 404 apart', () => {
+    const at = (status: number) => new ApiRequestError('internal', 'x', status)
+    expect(at(401)).toMatchObject({ isUnauthorized: true, isNoPermission: true, isNotFound: false })
+    expect(at(403)).toMatchObject({
+      isUnauthorized: false,
+      isNoPermission: true,
+      isNotFound: false,
+    })
+    expect(at(404)).toMatchObject({
+      isUnauthorized: false,
+      isNoPermission: false,
+      isNotFound: true,
+    })
+  })
+})
+
+describe('unauthorized handler', () => {
+  const unauthorized: Fetch = () =>
+    Promise.resolve(json({ error: 'unauthorized', message: 'Sign in' }, 401))
+
+  it('is called on a 401, and the request still fails', async () => {
+    const handler = vi.fn()
+    const remove = setUnauthorizedHandler(handler)
+    try {
+      await expect(
+        getJson('/v1/workspaces', workspacePageSchema, unauthorized),
+      ).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(sendJson('PATCH', '/v1/i', {}, itemSchema, unauthorized)).rejects.toThrow()
+      expect(handler).toHaveBeenCalledTimes(2)
+    } finally {
+      remove()
+    }
+  })
+
+  it('is not called for quiet requests or other statuses', async () => {
+    const handler = vi.fn()
+    const remove = setUnauthorizedHandler(handler)
+    try {
+      await getJson('/v1/me', workspacePageSchema, unauthorized, { quiet401: true }).catch(
+        () => null,
+      )
+      const forbidden: Fetch = () =>
+        Promise.resolve(json({ error: 'forbidden', message: 'No' }, 403))
+      await getJson('/v1/x', workspacePageSchema, forbidden).catch(() => null)
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      remove()
+    }
+  })
+
+  it('is removed by the function it returns', async () => {
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)()
+    await getJson('/v1/x', workspacePageSchema, unauthorized).catch(() => null)
+    expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+describe('noContent', () => {
+  it('accepts a 204 without a body', async () => {
+    const fetchFn: Fetch = () => Promise.resolve(new Response(null, { status: 204 }))
+    await expect(
+      sendJson('POST', '/v1/auth/logout', {}, noContent, fetchFn),
+    ).resolves.toBeUndefined()
   })
 })

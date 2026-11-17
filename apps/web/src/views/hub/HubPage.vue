@@ -3,6 +3,7 @@ import type { Item, ItemValues } from '@16bit/core'
 import { ApiRequestError } from '../../api/client.ts'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import ShellUser from '../../session/ShellUser.vue'
 import { AppShell, BaseButton, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
@@ -134,6 +135,7 @@ async function submitCreate(values: ItemValues) {
 
 <template>
   <AppShell>
+    <template #actions><ShellUser /></template>
     <template #sidebar>
       <FolderSidebar
         :workspace-id="workspaceId"

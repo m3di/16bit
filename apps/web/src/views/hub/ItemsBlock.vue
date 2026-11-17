@@ -55,6 +55,12 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
     title="You do not have access to this folder's items"
   />
   <StateBlock
+    v-else-if="list.state === 'error' && list.error.isNotFound"
+    state="empty"
+    title="This folder is not available"
+    message="It may have been deleted, or it may not be shared with you."
+  />
+  <StateBlock
     v-else-if="list.state === 'error'"
     state="error"
     title="The items could not be loaded"

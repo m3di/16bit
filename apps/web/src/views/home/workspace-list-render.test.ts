@@ -53,7 +53,8 @@ describe('WorkspaceList', () => {
       error: new ApiRequestError('unauthorized', 'No', 401),
     })
     expect(html).toContain('data-state="no-permission"')
-    expect(html).toContain('The API did not accept this session')
+    expect(html).toContain('You do not have access to these workspaces')
+    expect(html).not.toContain('DEV_API_KEY')
     expect(html).not.toContain('Try again')
   })
 

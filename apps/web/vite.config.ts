@@ -6,8 +6,10 @@ import { defineConfig, loadEnv } from 'vite'
 const envDir = '../..'
 const env = loadEnv('development', envDir, '')
 const api = `http://${env['HOST'] ?? '127.0.0.1'}:${env['PORT'] ?? '3000'}`
-// M0 auth is one development key (docs/ARCHITECTURE.md). The dev server adds it to proxied
-// requests, so it never reaches the browser bundle. Real sign-in replaces this in M1.
+// The development key (docs/ARCHITECTURE.md) stays until #51 seeds people who can sign in. The
+// dev server adds it to proxied requests, so it never reaches the browser bundle. A session
+// cookie wins over it in the API, so signing in still works; `/v1/me` answers 401 to the key
+// alone, and the shell then offers "Sign in".
 // WARNING: do not run the dev server with `--host` (or `server.host`) while DEV_API_KEY is set.
 // The proxy would then hand an authenticated API to everyone on the network.
 const devKey = env['DEV_API_KEY']

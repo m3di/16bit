@@ -4,11 +4,13 @@ import { renderToString } from 'vue/server-renderer'
 import { describe, expect, it } from 'vitest'
 import App from './App.vue'
 import { makeRouter } from './router.ts'
+import { createSession, sessionKey } from './session/session.ts'
 
 describe('web', () => {
   it('renders the home route', async () => {
     const router = makeRouter(createMemoryHistory())
-    const app = createSSRApp(App).use(router)
+    const session = createSession(() => Promise.reject(new Error('no network in render tests')))
+    const app = createSSRApp(App).provide(sessionKey, session).use(router)
     await router.push('/')
     await router.isReady()
     const html = await renderToString(app)
