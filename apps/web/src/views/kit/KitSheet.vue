@@ -4,6 +4,7 @@ import {
   BaseButton,
   BaseInput,
   BaseSelect,
+  DataTable,
   FormNotice,
   HubCard,
   PALETTE_COLORS,
@@ -13,6 +14,7 @@ import {
   StateBlock,
   StatusDot,
   paletteVar,
+  type TableColumn,
 } from '../../ui/index.ts'
 import KitValues from './KitValues.vue'
 
@@ -49,6 +51,27 @@ const roles = [
 ]
 const avatarIds = ['sara', 'tomas', 'qa-agent', 'dana', 'kofi', 'backend-agent', 'u_01', 'u_02']
 const counts = [0, 1, 7, 38, 412, 1280, 2345]
+
+// Table: Stage starts ascending and Points is sortable at rest; ID and Title cannot be sorted.
+// Clicking a header cycles ascending, descending, unsorted, as the hub table does.
+type Sort = 'ascending' | 'descending' | 'none'
+const tableSort = ref<{ key: string; dir: Sort }>({ key: 'stage', dir: 'ascending' })
+const tableRows = [
+  { id: 'r1', ref: 'PT-412', title: 'Ship the sync worker', stage: 'Done', points: '5' },
+  { id: 'r2', ref: 'PT-413', title: 'Hub settings page', stage: 'In review', points: '3' },
+  { id: 'r3', ref: 'PT-414', title: 'Agent keys', stage: 'Backlog', points: '8' },
+]
+const sortOf = (key: string): Sort => (tableSort.value.key === key ? tableSort.value.dir : 'none')
+const tableColumns = (): TableColumn[] => [
+  { key: 'ref', label: 'ID' },
+  { key: 'title', label: 'Title' },
+  { key: 'stage', label: 'Stage', sort: sortOf('stage') },
+  { key: 'points', label: 'Points', align: 'end', sort: sortOf('points') },
+]
+const next: Record<Sort, Sort> = { none: 'ascending', ascending: 'descending', descending: 'none' }
+function onSort(key: string) {
+  tableSort.value = { key, dir: next[sortOf(key)] }
+}
 </script>
 
 <template>
@@ -203,6 +226,28 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
           <HubCard name="Finance" color="amber" no-access class="flex-1" />
         </li>
       </ul>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">Table</h3>
+      <DataTable
+        caption="Kit items"
+        :columns="tableColumns()"
+        :rows="tableRows"
+        selected-id="r2"
+        @sort="onSort"
+      >
+        <template #cell="{ row, column }">
+          <span v-if="column.key === 'ref'" class="font-mono text-secondary text-ink2">{{
+            row.ref
+          }}</span>
+          <template v-else>{{ row[column.key as 'title' | 'stage' | 'points'] }}</template>
+        </template>
+      </DataTable>
+      <p class="m-0 text-caption text-ink3">
+        Stage and Points can be sorted: two chevrons at rest, one in ink when sorted. ID and Title
+        cannot. The second row is selected.
+      </p>
     </section>
 
     <section class="flex flex-col gap-3">

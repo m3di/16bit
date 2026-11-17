@@ -23,7 +23,10 @@ const { selectedId = null, busy } = defineProps<{
 
 const emit = defineEmits<{ select: [row: Row]; sort: [key: string] }>()
 
-const arrows = { ascending: '↑', descending: '↓' } as const
+// Sortable headers carry a cue at rest: two chevrons in the header's --ink3 mark a sortable
+// column, and a sorted one shows a single centred chevron for its direction, in --ink. The icon
+// keeps one width in every state, so the label never moves. aria-sort carries the state for
+// screen readers.
 
 defineSlots<{ cell(props: { row: Row; column: TableColumn }): unknown }>()
 
@@ -66,10 +69,29 @@ function onRowClick(event: MouseEvent, row: Row) {
               :class="column.sort !== 'none' && 'font-medium text-ink'"
               @click="emit('sort', column.key)"
             >
-              {{ column.label
-              }}<span v-if="column.sort !== 'none'" aria-hidden="true">{{
-                arrows[column.sort]
-              }}</span>
+              {{ column.label }}
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 10 14"
+                width="10"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="shrink-0"
+                :data-sort-icon="column.sort"
+              >
+                <path v-if="column.sort === 'none'" d="M2 5.5 5 2.5l3 3" data-chevron="up" />
+                <path v-if="column.sort === 'none'" d="M2 8.5 5 11.5l3-3" data-chevron="down" />
+                <path v-if="column.sort === 'ascending'" d="M2 8.5 5 5.5l3 3" data-chevron="up" />
+                <path
+                  v-if="column.sort === 'descending'"
+                  d="M2 5.5 5 8.5l3-3"
+                  data-chevron="down"
+                />
+              </svg>
             </button>
             <template v-else>{{ column.label }}</template>
           </th>

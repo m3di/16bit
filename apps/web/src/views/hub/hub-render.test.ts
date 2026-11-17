@@ -102,13 +102,13 @@ describe('ItemsBlock', () => {
       direction: 'asc',
     })
     expect(header(asc, 'Stage')).toContain('aria-sort="ascending"')
-    expect(header(asc, 'Stage')).toMatch(/<span aria-hidden="true">↑<\/span>/)
+    expect(header(asc, 'Stage')).toContain('data-sort-icon="ascending"')
     const desc = await block(ready(['i1']), undefined, false, {
       attribute: 'stage',
       direction: 'desc',
     })
     expect(header(desc, 'Stage')).toContain('aria-sort="descending"')
-    expect(header(desc, 'Stage')).toContain('↓')
+    expect(header(desc, 'Stage')).toContain('data-sort-icon="descending"')
   })
 
   it('keeps the rows while a new order loads, and holds "Load more" back', async () => {
