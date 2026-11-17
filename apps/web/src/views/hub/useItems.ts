@@ -13,6 +13,9 @@ import { ApiRequestError, asRequestError, getJson, sendJson, type Fetch } from '
 import type { Load } from '../home/useDashboard.ts'
 import { listValue, type LinkedState } from './relations.ts'
 
+/** Direct reads of linked items running at once, until #73 lets one request cover them. */
+export const LINKED_READ_LIMIT = 6
+
 export interface ItemList {
   ids: string[]
   nextCursor: string | null
@@ -72,7 +75,11 @@ export function useItems(
   const folderId = ref<string | null>(null)
   /** The last write that failed, shown until dismissed or replaced. */
   const notice = ref<string | null>(null)
-  /** Linked items by ID, from `expand` on the folder query and from direct reads. */
+  /**
+   * Linked items by ID, from `expand` on the folder query and from direct reads. Kept for the
+   * life of the hub page on purpose: it is not cleared when another folder opens, so a chip
+   * does not flicker back to loading. A reload of the page reads everything again.
+   */
   const linked = ref<Record<string, LinkedState>>({})
   /** The server refused an edit with 403: the reader can see this hub's items but not change them. */
   const readOnly = ref(false)
@@ -146,21 +153,21 @@ export function useItems(
     linked.value[item.id] = { access: 'read', item }
   }
 
-  /**
-   * Reads linked items the folder query did not cover, one by one. A 404 is shown as "no
-   * access": the server answers the same for hidden and deleted items, and "no access" never
-   * shows anything of the item (#50 asks for a read with `expand` instead).
-   */
-  function resolveLinked(ids: Iterable<string>) {
-    for (const id of ids) {
-      if (linkState(id).access !== 'unknown' || opening.has(`link:${id}`)) continue
+  /** Linked IDs waiting for a direct read, and how many reads are running. */
+  const linkWaiting: string[] = []
+  let linkReads = 0
+
+  /** Starts waiting direct reads, at most `LINKED_READ_LIMIT` at a time. */
+  function pumpLinked() {
+    while (linkReads < LINKED_READ_LIMIT && linkWaiting.length > 0) {
+      const id = linkWaiting.shift() as string
+      if (linkState(id).access !== 'unknown') continue
       // What the expanded folder query says wins over a direct read: only it can tell "no
-      // access" from "deleted". So nothing is read while the list is loading, and a read that
-      // ends after the list answered is dropped.
-      if (list.value.state === 'loading') continue
+      // access" from "deleted". So a read that ends after the list answered is dropped.
       const settle = (state: LinkedState) => {
         if (linkState(id).access === 'unknown') linked.value[id] = state
       }
+      linkReads++
       const run = getJson(itemPath(id), itemSchema, fetchFn)
         .then((item): Load<Item> => {
           settle({ access: 'read', item })
@@ -171,9 +178,29 @@ export function useItems(
           settle(error.isNotFound ? { access: 'none' } : { access: 'error' })
           return { state: 'error', error }
         })
-        .finally(() => opening.delete(`link:${id}`))
+        .finally(() => {
+          opening.delete(`link:${id}`)
+          linkReads--
+          pumpLinked()
+        })
       opening.set(`link:${id}`, run)
     }
+  }
+
+  /**
+   * Reads linked items the folder query did not cover, one by one, a few at a time. A 404 is
+   * shown as "no access": the server answers the same for hidden and deleted items, and "no
+   * access" never shows anything of the item (#73 asks for a read with `expand` instead).
+   */
+  function resolveLinked(ids: Iterable<string>) {
+    // Nothing is read while the list is loading: its answer may cover these IDs.
+    if (list.value.state === 'loading') return
+    for (const id of ids) {
+      if (linkState(id).access !== 'unknown' || opening.has(`link:${id}`)) continue
+      if (linkWaiting.includes(id)) continue
+      linkWaiting.push(id)
+    }
+    pumpLinked()
   }
 
   /**
@@ -350,8 +377,13 @@ export function useItems(
       if (gen === generation && list.value.state === 'ready') {
         list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
       }
-      if (error.status === 403) readOnly.value = true
-      notice.value = `The item was not created. ${error.message}`
+      if (error.status === 403) {
+        readOnly.value = true
+        notice.value =
+          'The item was not created. You can view the items in this hub but not add them.'
+      } else {
+        notice.value = `The item was not created. ${error.message}`
+      }
       return { ok: false, error }
     } finally {
       Reflect.deleteProperty(creating.value, id)

@@ -93,3 +93,18 @@ export function toggled(
   const next = on ? (multiple ? [...without, id] : [id]) : without
   return next.length > 0 ? next : null
 }
+
+/**
+ * A multi-select value after ticking or unticking `id`. IDs of deleted options are dropped
+ * from every commit: core refuses unknown IDs, so keeping one would block every edit.
+ */
+export function multiSelectToggled(
+  value: readonly string[],
+  options: readonly { id: string }[],
+  id: string,
+  on: boolean,
+): string[] | null {
+  const live = new Set(options.map((o) => o.id))
+  const next = (toggled(value, id, on) ?? []).filter((v) => live.has(v))
+  return next.length > 0 ? next : null
+}

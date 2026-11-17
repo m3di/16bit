@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Item, RelationConfig } from '@16bit/core'
-import { computed, ref, useId, watch } from 'vue'
+import { computed, ref, useId, useTemplateRef, watch } from 'vue'
 import { BaseButton, BaseInput, BaseSelect, StateBlock } from '../../ui/index.ts'
 import { useValueContext } from './context.ts'
 import { displayId, itemTitle, toggled } from './relations.ts'
@@ -41,8 +41,23 @@ const search = useRelationSearch(ctx.workspaceId, () => targetHub.value, ctx.fet
 
 const full = computed(() => !config.multiple && value.length > 0)
 
+// Opening the picker moves focus to its search box, once the box exists: it waits for the
+// target hub's description.
+const searchBox = useTemplateRef<HTMLElement>('searchBox')
+let focusSearch = false
+watch(
+  searchBox,
+  (box) => {
+    if (!box || !focusSearch) return
+    focusSearch = false
+    box.querySelector('input')?.focus()
+  },
+  { flush: 'post' },
+)
+
 function toggle() {
   open.value = !open.value
+  focusSearch = open.value
   if (!open.value) return
   ctx.ensureHubs([config.targetHubId])
   if (targetHub.value && !search.results.value) void search.search()
@@ -155,7 +170,7 @@ function remove(item: string) {
           <div v-if="folders.length > 1" class="min-w-0 flex-[1_1_140px]">
             <BaseSelect v-model="folderModel" label="Folder" :options="folders" />
           </div>
-          <div class="min-w-0 flex-[2_1_180px]">
+          <div ref="searchBox" class="min-w-0 flex-[2_1_180px]">
             <BaseInput
               v-model="search.text.value"
               type="search"
@@ -202,6 +217,17 @@ function remove(item: string) {
             state="empty"
             :title="search.searched.value ? 'No items match' : 'No items to link here'"
           />
+          <p
+            v-else-if="offered.length === 0"
+            class="m-0 text-secondary text-ink3"
+            data-no-loaded-match
+          >
+            {{
+              search.searched.value
+                ? 'No matches among the items loaded so far.'
+                : 'No items to link among the items loaded so far.'
+            }}
+          </p>
           <ul
             v-else
             class="m-0 flex max-h-80 list-none flex-col overflow-y-auto p-0"

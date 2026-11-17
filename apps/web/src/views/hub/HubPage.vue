@@ -176,6 +176,7 @@ const closePanel = () => {
 }
 
 function startCreate() {
+  if (items.readOnly.value) return
   createErrors.value = {}
   creating.value = true
   if (itemId) void router.push({ query: {} })
@@ -187,6 +188,9 @@ async function submitCreate(values: ItemValues) {
   if (result.ok) {
     creating.value = false
     void router.push(itemLink(result.item))
+  } else if (items.readOnly.value) {
+    // The hub refused the write: the form cannot succeed, the notice says why.
+    creating.value = false
   } else {
     createErrors.value = valueErrors(result.error)
   }
@@ -225,7 +229,11 @@ async function submitCreate(values: ItemValues) {
                   truncated
                 }}</span>
               </div>
+              <span v-if="items.readOnly.value" class="text-secondary text-ink3" data-read-only
+                >You can view the items in this hub but not add or change them.</span
+              >
               <BaseButton
+                v-else
                 variant="primary"
                 :disabled="list.state !== 'ready'"
                 data-new-item-button
@@ -252,6 +260,7 @@ async function submitCreate(values: ItemValues) {
               :selected-id="itemId"
               :item-link="itemLink"
               :is-creating="items.isCreating"
+              :read-only="items.readOnly.value"
               @open="openItem"
               @retry="openFolder(openFolderId)"
               @more="items.loadMore()"

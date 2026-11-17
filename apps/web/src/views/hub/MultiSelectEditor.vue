@@ -2,7 +2,7 @@
 import type { MultiSelectConfig } from '@16bit/core'
 import { computed, useId } from 'vue'
 import { CheckboxField, ChipList } from '../../ui/index.ts'
-import { toggled } from './relations.ts'
+import { multiSelectToggled } from './relations.ts'
 
 const {
   config,
@@ -25,7 +25,8 @@ const emit = defineEmits<{ commit: [value: string[] | null] }>()
 
 const errorId = `${useId()}-error`
 
-// A value whose option was deleted stays listed and ticked, so it can be removed.
+// A value whose option was deleted stays listed and ticked, so the reader sees it. Any change
+// drops it, since the server refuses IDs of deleted options.
 const entries = computed(() => {
   const ids = new Set(config.options.map((o) => o.id))
   return [
@@ -34,8 +35,10 @@ const entries = computed(() => {
   ]
 })
 
+const hasDeleted = computed(() => entries.value.length > config.options.length)
+
 function set(id: string, on: boolean) {
-  emit('commit', toggled(value, id, on))
+  emit('commit', multiSelectToggled(value, config.options, id, on))
 }
 </script>
 
@@ -64,6 +67,9 @@ function set(id: string, on: boolean) {
         @update:model-value="set(entry.id, $event)"
       />
     </div>
+    <span v-if="hasDeleted" class="text-secondary text-ink3" data-deleted-hint
+      >Deleted options are removed with your next change.</span
+    >
     <span v-if="error" :id="errorId" class="text-secondary text-danger">{{ error }}</span>
   </fieldset>
 </template>

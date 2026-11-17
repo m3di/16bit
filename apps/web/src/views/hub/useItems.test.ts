@@ -1,7 +1,7 @@
 import type { Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
-import { inHub, useItems, valueErrors } from './useItems.ts'
+import { inHub, LINKED_READ_LIMIT, useItems, valueErrors } from './useItems.ts'
 
 const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
 
@@ -259,6 +259,26 @@ describe('useItems: linked items (#50)', () => {
     expect(s.linkState('t3')).toEqual({ access: 'error' })
   })
 
+  it('reads at most a few linked items at once', async () => {
+    const held = gate<undefined>()
+    const api = fakeApi(async (call) => {
+      if (call.path.endsWith('/query')) return json({ items: [], nextCursor: null })
+      await held.promise
+      return json(item(call.path.split('/').at(-1) ?? '', 5))
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    const ids = Array.from({ length: 10 }, (_, n) => `t${String(n)}`)
+    s.resolveLinked(ids)
+    s.resolveLinked(ids)
+    const reads = () => api.calls.filter((c) => c.method === 'GET')
+    expect(reads()).toHaveLength(LINKED_READ_LIMIT)
+    held.release(undefined)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(reads()).toHaveLength(10)
+    expect(ids.every((id) => s.linkState(id).access === 'read')).toBe(true)
+  })
+
   it('waits for the folder query, whose answer wins over a direct read', async () => {
     const list = gate<Response>()
     const api = fakeApi((call) =>
@@ -300,5 +320,19 @@ describe('useItems: no permission to edit (#50)', () => {
     expect(s.view('i1')?.values['title']).toBe('Old')
     expect(s.readOnly.value).toBe(true)
     expect(s.notice.value).toContain('You can view the items in this hub but not change them')
+  })
+
+  it('removes the row of a refused create and turns the hub read-only', async () => {
+    const { s } = await opened(
+      () => json({ error: 'forbidden', message: 'Forbidden' }, 403),
+      [item('i1', 1)],
+    )
+    const result = await s.create({ title: 'Fresh' })
+    expect(result.ok).toBe(false)
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(s.readOnly.value).toBe(true)
+    expect(s.notice.value).toBe(
+      'The item was not created. You can view the items in this hub but not add them.',
+    )
   })
 })

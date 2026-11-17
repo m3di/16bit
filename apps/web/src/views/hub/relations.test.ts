@@ -1,6 +1,14 @@
+import { validateItemValues, type FolderAttributeDefinition } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { description, item } from './fixtures.test-utils.ts'
-import { chipView, itemTitle, listValue, readableTarget, toggled } from './relations.ts'
+import {
+  chipView,
+  itemTitle,
+  listValue,
+  multiSelectToggled,
+  readableTarget,
+  toggled,
+} from './relations.ts'
 import { folderColumns } from './useHub.ts'
 
 const hubOf = () => description
@@ -68,5 +76,41 @@ describe('list values', () => {
     expect(toggled(['a', 'b'], 'a', false)).toEqual(['b'])
     expect(toggled(['a'], 'a', false)).toBeNull()
     expect(toggled(['a'], 'b', true, false)).toEqual(['b'])
+  })
+})
+
+describe('multi-select commits (#50)', () => {
+  const options = [
+    { id: 'ui', label: 'UI' },
+    { id: 'api', label: 'API' },
+  ]
+  const columns: FolderAttributeDefinition[] = [
+    {
+      attribute: {
+        workspaceId: 'w',
+        id: 'tags',
+        hubId: 'bld',
+        name: 'Tags',
+        indexed: false,
+        type: 'multi_select',
+        config: { options },
+      },
+      required: false,
+    },
+  ]
+  const accepted = (value: string[] | null) =>
+    validateItemValues(columns, { tags: value }, { partial: true }).ok
+
+  it('drops deleted options when a live one is ticked, so core accepts the value', () => {
+    expect(accepted(['api', 'gone'])).toBe(false)
+    const next = multiSelectToggled(['api', 'gone', 'gone2'], options, 'ui', true)
+    expect(next).toEqual(['api', 'ui'])
+    expect(accepted(next)).toBe(true)
+  })
+
+  it('drops every deleted option when one of them is unticked', () => {
+    const next = multiSelectToggled(['gone', 'gone2'], options, 'gone', false)
+    expect(next).toBeNull()
+    expect(accepted(next)).toBe(true)
   })
 })
