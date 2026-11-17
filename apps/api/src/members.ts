@@ -377,7 +377,6 @@ export async function createHub(
       .forShare()
       .executeTakeFirst()
     if (!creator) throw new HttpError('forbidden', 'Your role does not allow this action')
-    void creator.workspace_role
     const row = await trx
       .insertInto('folder')
       .values({
