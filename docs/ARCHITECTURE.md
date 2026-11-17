@@ -54,7 +54,7 @@ item             (workspace_id, id, hub_id, folder_id, seq_id,
 item_index       (workspace_id, attribute_id, item_id, ord, num, txt, ts)   -- derived; several rows per item for multi-valued types
 link             (workspace_id, from_item, attribute_id, to_item)
 view             (workspace_id, id, hub_id, folder_id, tree jsonb, version)
-revision         (workspace_id, seq bigint, item_id, version, patch jsonb, actor, cause, at)
+revision         (workspace_id, seq bigint, item_id, hub_id, version, patch jsonb, actor, cause, at)
 comment          (workspace_id, id, item_id, parent_id, author, body jsonb, at)
 document         (workspace_id, item_id, attribute_id, content jsonb, version)
 hub_grant        (workspace_id, hub_id, principal_id, hub_role)
@@ -67,6 +67,7 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `agent_key` and `hub_grant` also carry `principal_kind`, a copy of `principal.kind` held in step by a `(workspace_id, principal_id, principal_kind)` foreign key. It lets the database refuse a key on a person, a second grant for an agent, and `hub_admin` for an agent (D28, D47). `account.email` is stored trimmed and lowercased, and `password_hash` must be an argon2id string.
 - The only indexes on workspace-scoped tables that do not lead with `workspace_id` are the three lookups that run before a principal is known: `agent_key.secret_hash`, `invite.token_hash` (both unique), and `principal.account_id`.
 - `access_log.seq` is taken from `workspace.next_access_seq` in the same transaction as the access change.
+- `revision.hub_id` is the item's hub, kept after the item is deleted, so row-level security can check history against hub grants (#44).
 - `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.
 - `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
@@ -165,7 +166,7 @@ Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE
 - Request auth resolves, in order: a live session cookie, a bearer token (the dev key until #51; agent keys from #42), then the anonymous dev owner if D41's flag is on. Inside `/v1/workspaces/:workspaceId` the identity becomes the `can()` subject (`{ id, kind, workspaceRole }`) for that workspace, or 404. A session's principal is read through `account_memberships`.
 - `POST /v1/workspaces/:workspaceId/invites` takes `{ workspaceRole, expiresInDays }` (1 to 30, default 7), checks `member.invite`, and returns the invite and its token once; only the token's SHA-256 is stored. It writes `invite.create` to `access_log`.
 - `POST /v1/auth/invites/:token` takes either `{ name, email, password }` (creates the account and signs it in) or `{}` with a session (adds that account). It calls `redeem_invite`, which writes `member.join` to `access_log`. Unknown, used or expired is 404; an account already in the workspace is 409 `already_member`. An email that has an account is 409 `email_taken`, but only after the invite is found valid, so the endpoint can't be used to probe emails without one.
-- `account_memberships(account_id)` and `redeem_invite(token_hash, account_id)` are `SECURITY DEFINER` functions (migration `0004_auth_functions`) with `search_path` pinned and `EXECUTE` revoked from `PUBLIC`; #44 grants `EXECUTE` to the app role.
+- `account_memberships(account_id)` and `redeem_invite(token_hash, account_id)` are `SECURITY DEFINER` functions (migration `0004_auth_functions`) with `search_path` pinned and `EXECUTE` revoked from `PUBLIC`; migration `0008` grants `EXECUTE` to the app role.
 - In the dashboard (#49): `/sign-in?next=<path>` signs in and returns to `next` (same-origin paths only), and `/invite/<token>` accepts an invite, either as a new account with a password or, signed in, as the current account. Invite links are `<origin>/invite/<token>`. Any 401 from a data route sends the reader to sign-in with the current page as `next`; a 403 shows the no-permission state and a 404 the not-found state. Until #51 the Vite proxy still adds the development key, so the dashboard loads without signing in and `/v1/me` answers 401 to the key alone.
 
 **Agent keys (#42).** `POST /v1/workspaces/:workspaceId/hubs/:hubId/agent-keys` takes `{ name, hubRole, expiresAt? }` and returns 201 `{ key: AgentKey, secret }`; the secret (`16b_` + 32 random bytes, base64url) is shown once and stored as its hex SHA-256. One transaction inserts the agent principal, its one `hub_grant`, the `agent_key` row and the `access_log` entry. `GET .../hubs/:hubId/agent-keys` pages a hub's keys newest first, revoked ones included. `POST /v1/workspaces/:workspaceId/agent-keys/:keyId/revoke` sets `revoked_at` (idempotent; the principal and grant stay). A bearer token starting with `16b_` resolves in the auth hook through `auth_agent_key(secret_hash)` (migration `0005_agent_key_lookup`, `SECURITY DEFINER` like the two in `0004`), which returns the workspace, principal, hub and role, plus the workspace and hub names, and nothing for revoked or expired keys (401). `GET /v1/me` with a key returns `{ kind: 'agent', principalId, workspace: { id, name }, hub: { id, name }, hubRole }` from that lookup alone. Shapes are in `packages/core/src/api.ts`; permissions are `key.create`, `key.list` and `key.revoke` in `can()`.
@@ -179,6 +180,16 @@ Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE
 - Removing a member deactivates the principal rather than deleting it (migration `0007_principal_removed`), so history keeps its actor. One transaction deletes their hub grants, expires their unused invites, clears `principal.account_id` (so `account_memberships` stops returning the workspace and the account's sessions no longer reach it), and sets `removed_at`. A later invite adds the account again as a new principal. Agent keys they created stay until revoked.
 - Every access change (grant set or revoked, role change, member removal, the creator's grant on a new hub) is appended to `access_log` in the same transaction (D48), never to `revision`. A change to the same value writes nothing.
 - The seeds make the dev principal `hub_admin` of every hub they create, so the dev key still sees them until #51.
+
+## Row-level security (#44)
+
+Migration `0008_row_level_security` enables RLS on every workspace-scoped table; `account` and `session` stay outside (D46).
+
+- The API connects with `DATABASE_URL` as a login role in the group `sixteenbit_app`, which owns nothing and has no `BYPASSRLS`. Migrations, seeds and the password-reset command connect with `MIGRATION_DATABASE_URL` as the owner of the tables, which RLS does not apply to (no `FORCE`). The API exits at startup if its role is a superuser, bypasses RLS, owns the tables, or is outside the group. `pnpm db:migrate` creates the login role from `DATABASE_URL` when it is missing (local and CI); in a deployment, create it yourself and give the migration job `MIGRATION_DATABASE_URL` only.
+- Every request inside `/v1/workspaces/:workspaceId` runs in one transaction that first sets `app.workspace_id` and `app.principal_id` with `set_config(..., true)` (`SET LOCAL`); write paths join it (`apps/api/src/db/scope.ts`). Item writes check the caller's grant in that transaction and hold it `FOR SHARE`, so a concurrent revoke waits for the write. Without both settings, or with a principal that is not an active member of the workspace, every scoped table reads as empty and refuses writes.
+- Policies follow `docs/ROLES.md` coarsely, with `can()` still deciding every action: workspace tables are visible to members (`invite` and reading `access_log` to owners and admins); `folder`, `attribute`, `folder_attribute`, `item` and `revision` need a hub grant, with the same effective role as `effectiveHubRole()` (editor or hub admin to write items); owners and admins also see every hub row, for the hub list; `item_index` and `link` follow their item (a link its source item); `hub_grant` rows are visible to their holder, to readers of the hub and to owners and admins, and changed by owners, admins and hub admins. Writes must name the caller as `updated_by`, `actor` or `created_by`. Column grants limit updates to what the API changes; `revision` and `access_log` are insert-only.
+- Policy helpers that read `principal` and `hub_grant` are `SECURITY DEFINER` (`rls_workspace_role()`, `rls_hubs(min)`) and answer only about the caller in its own workspace. Two more serve relations: `lock_link_targets(ids)` returns the hub of each target and locks it `FOR KEY SHARE` (a writer may keep a stored link to an item it can't read), and `hidden_backlinks(item, cap)` counts links from items the caller can't read, without naming them.
+- Until #51 removes the dev key, `GET /v1/workspaces` for the dev key is the one query that runs as the owner (`devDb`, from `MIGRATION_DATABASE_URL`), since listing a principal's workspaces reads across workspaces. Without it the dev key lists none; its workspace routes run under RLS like any other.
 
 ## Client data layer (from M3)
 
@@ -195,7 +206,7 @@ A normalised store keyed by item ID sits between the server and every component.
 - `docker compose up --build` runs the whole stack from the container image: Postgres, a one-shot migration service, then the app serving the API and the built dashboard on one port. The browser has no key in M0, so this stack sets `DEV_ANONYMOUS_AS_OWNER=true` (requests without an `Authorization` header act as the dev owner, as through the Vite dev proxy) and publishes the port on 127.0.0.1 only. The API refuses to start with that flag on a non-loopback `HOST` unless `DEV_ANONYMOUS_ALLOW_NONLOCAL=1` is also set, which compose sets because the container binds 0.0.0.0 behind the loopback-only port (D41). It goes away with real auth in M1.
 - `.env.example` documents every variable.
 
-It must also run without Docker for anyone who has Postgres installed, by pointing `DATABASE_URL` at it.
+It must also run without Docker for anyone who has Postgres installed, by pointing `MIGRATION_DATABASE_URL` and `DATABASE_URL` at it.
 
 ## CI
 

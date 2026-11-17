@@ -34,7 +34,14 @@ afterEach(async () => {
 })
 
 function start(options: Partial<AppOptions> = {}): FastifyInstance {
-  app = buildApp({ db, devApiKey: KEY, devPrincipalId: 'dev-owner', webRoot: root, ...options })
+  app = buildApp({
+    db,
+    devDb: db,
+    devApiKey: KEY,
+    devPrincipalId: 'dev-owner',
+    webRoot: root,
+    ...options,
+  })
   return app
 }
 

@@ -6,10 +6,11 @@ import { text } from 'node:stream/consumers'
 import { createDb } from './db/database.ts'
 import { resetPassword } from './reset-password.ts'
 
-const databaseUrl = process.env['DATABASE_URL']
+// Runs as the owner of the tables, like migrations (#44).
+const databaseUrl = process.env['MIGRATION_DATABASE_URL']
 const email = process.argv.slice(2).find((arg) => arg !== '--')
 if (!databaseUrl || !email) {
-  console.error('usage: pnpm account:reset-password <email>   (DATABASE_URL must be set)')
+  console.error('usage: pnpm account:reset-password <email>   (MIGRATION_DATABASE_URL must be set)')
   console.error('  echo "new password" | pnpm account:reset-password <email>')
   process.exit(1)
 }

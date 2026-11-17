@@ -25,6 +25,8 @@ import { createItem } from './items.ts'
 const DEV_KEY = 'test-key'
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 const apps = new Map<string, FastifyInstance>()
 let editorKey: CreatedAgentKey
@@ -34,6 +36,7 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
   editorKey = await createKey('editor')
@@ -43,6 +46,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const app of apps.values()) await app.close()
   apps.clear()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })
@@ -50,7 +54,7 @@ afterEach(async () => {
 function as(principalId: string): FastifyInstance {
   let app = apps.get(principalId)
   if (!app) {
-    app = buildApp({ db, devApiKey: DEV_KEY, devPrincipalId: principalId })
+    app = buildApp({ db: appDb, devDb: db, devApiKey: DEV_KEY, devPrincipalId: principalId })
     apps.set(principalId, app)
   }
   return app

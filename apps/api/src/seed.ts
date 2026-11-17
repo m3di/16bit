@@ -9,9 +9,10 @@ if (process.env['NODE_ENV'] === 'production' && !process.argv.includes('--force'
   process.exit(1)
 }
 
-const databaseUrl = process.env['DATABASE_URL']
+// Runs as the owner of the tables, like migrations (#44).
+const databaseUrl = process.env['MIGRATION_DATABASE_URL']
 if (!databaseUrl) {
-  console.error('seed: DATABASE_URL is not set. See .env.example.')
+  console.error('seed: MIGRATION_DATABASE_URL is not set. See .env.example.')
   process.exit(1)
 }
 

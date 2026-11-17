@@ -23,6 +23,8 @@ const ACTOR = 'dev-owner'
 const auth = { authorization: `Bearer ${KEY}` }
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
 
@@ -30,13 +32,15 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
-  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
+  app = buildApp({ db: appDb, devDb: db, devApiKey: KEY, devPrincipalId: ACTOR })
 })
 
 afterEach(async () => {
   await app.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })
@@ -247,7 +251,13 @@ describe('workspaces and hubs', () => {
       return hubDescriptionSchema.parse(res.json())
     }
     await app.close()
-    app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR, maxHubEntries: 1 })
+    app = buildApp({
+      db: appDb,
+      devDb: db,
+      devApiKey: KEY,
+      devPrincipalId: ACTOR,
+      maxHubEntries: 1,
+    })
     // build has 1 subfolder, 3 attributes and 4 folder attributes: only attributes exceed 1.
     const atCap = await describeBuild()
     expect(atCap.folders).toHaveLength(1)

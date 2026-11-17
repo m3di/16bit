@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { hubExists, ownGrant } from './access.ts'
 import { appendAccessLog } from './access-log.ts'
 import type { Database } from './db/database.ts'
+import { inTransaction } from './db/scope.ts'
 import { decodeCursor, encodeCursor, enforce, HttpError, notFound } from './http.ts'
 import { toFolder } from './mappers.ts'
 
@@ -107,9 +108,14 @@ async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: stri
   return { ownerCount: owners.length, target }
 }
 
-/** Members are visible to every person in the workspace, so a missing one can be a plain 404. */
-function requirePeopleReader(actor: Subject): void {
-  enforce(can(actor, 'workspace.read'), 'Member')
+/**
+ * Only owners and admins change or remove members. Checked before any row is read or locked,
+ * so nobody else can make the owner rows wait (#71 review). Members are visible to every person
+ * in the workspace, so a missing target is a plain 404 once this passes.
+ */
+export function requireMemberManager(actor: Subject): void {
+  const anyMember: Subject = { id: '', kind: 'user', workspaceRole: 'member' }
+  enforce(can(actor, 'member.remove', { target: anyMember, ownerCount: 2 }), 'Member')
 }
 
 export async function changeMemberRole(
@@ -119,8 +125,8 @@ export async function changeMemberRole(
   targetId: string,
   role: WorkspaceRole,
 ): Promise<Principal> {
-  requirePeopleReader(actor)
-  return db.transaction().execute(async (trx) => {
+  requireMemberManager(actor)
+  return inTransaction(db, async (trx) => {
     const { ownerCount, target } = await lockForMemberChange(trx, workspaceId, targetId)
     if (!target) throw notFound('Member')
     const current = toPrincipal(target)
@@ -159,8 +165,8 @@ export async function removeMember(
   actor: Subject,
   targetId: string,
 ): Promise<void> {
-  requirePeopleReader(actor)
-  await db.transaction().execute(async (trx) => {
+  requireMemberManager(actor)
+  await inTransaction(db, async (trx) => {
     const { ownerCount, target } = await lockForMemberChange(trx, workspaceId, targetId)
     if (!target) throw notFound('Member')
     enforce(
@@ -249,7 +255,7 @@ export async function setHubGrant(
   targetId: string,
   role: HubRole,
 ): Promise<HubGrant> {
-  return db.transaction().execute(async (trx) => {
+  return inTransaction(db, async (trx) => {
     const { target, hubGrant } = await grantTarget(trx, workspaceId, actor, hubId, targetId)
     enforce(can(actor, 'grant.set', { hubGrant, target, role }), 'Hub')
     const grant: HubGrant = { workspaceId, hubId, principalId: targetId, hubRole: role }
@@ -282,7 +288,7 @@ export async function revokeHubGrant(
   hubId: string,
   targetId: string,
 ): Promise<void> {
-  await db.transaction().execute(async (trx) => {
+  await inTransaction(db, async (trx) => {
     const { target, hubGrant } = await grantTarget(trx, workspaceId, actor, hubId, targetId)
     enforce(can(actor, 'grant.revoke', { hubGrant, target }), 'Hub')
     const removed = await trx
@@ -312,7 +318,7 @@ export async function createHub(
 ): Promise<HubListEntry> {
   enforce(can(actor, 'hub.create'), 'Hub')
   const id = input.id ?? randomUUID()
-  return db.transaction().execute(async (trx) => {
+  return inTransaction(db, async (trx) => {
     const row = await trx
       .insertInto('folder')
       .values({

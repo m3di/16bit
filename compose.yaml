@@ -9,7 +9,7 @@ services:
   db:
     image: postgres:18.7-alpine3.24
     environment:
-      # Local-only credentials, matching DATABASE_URL in .env.example.
+      # Local-only credentials, matching MIGRATION_DATABASE_URL in .env.example.
       POSTGRES_USER: sixteenbit
       POSTGRES_PASSWORD: sixteenbit
       POSTGRES_DB: sixteenbit
@@ -32,7 +32,9 @@ services:
     pull_policy: never
     command: ['node', 'src/migrate.ts']
     environment:
-      DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
+      # Migrations run as the owner, then create the API's login role from DATABASE_URL (#44).
+      MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
+      DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@db:5432/sixteenbit
     depends_on:
       db:
         condition: service_healthy
@@ -41,7 +43,11 @@ services:
     image: 16bit:local
     build: .
     environment:
-      DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
+      # The API's role, under row-level security (#44).
+      DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@db:5432/sixteenbit
+      # The owner, for `docker compose run --rm app node src/seed.ts --force`, and for the
+      # dev key's workspace list until DEV_API_KEY goes (#51).
+      MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
       DEV_API_KEY: ${DEV_API_KEY:-dev-only-key}
       DEV_PRINCIPAL_ID: ${DEV_PRINCIPAL_ID:-dev-owner}
       # Local only (D41): the browser has no key in M0, so requests without one act as the

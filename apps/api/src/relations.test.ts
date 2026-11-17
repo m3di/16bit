@@ -27,6 +27,8 @@ const KEY = 'test-key'
 const WS = 'w1'
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let owner: FastifyInstance
 let insider: FastifyInstance
@@ -35,15 +37,17 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
-  owner = buildApp({ db, devApiKey: KEY, devPrincipalId: 'owner' })
-  insider = buildApp({ db, devApiKey: KEY, devPrincipalId: 'insider' })
+  owner = buildApp({ db: appDb, devDb: db, devApiKey: KEY, devPrincipalId: 'owner' })
+  insider = buildApp({ db: appDb, devDb: db, devApiKey: KEY, devPrincipalId: 'insider' })
 })
 
 afterEach(async () => {
   await owner.close()
   await insider.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })
@@ -538,7 +542,13 @@ describe('expand', () => {
   })
 
   it('caps the linked items per response and says so', async () => {
-    const capped = buildApp({ db, devApiKey: KEY, devPrincipalId: 'owner', maxLinkedItems: 2 })
+    const capped = buildApp({
+      db: appDb,
+      devDb: db,
+      devApiKey: KEY,
+      devPrincipalId: 'owner',
+      maxLinkedItems: 2,
+    })
     try {
       let body = itemQueryResultSchema.parse(
         (await query(capped, { expand: ['rel', 'cross', 'secret'] })).json(),
@@ -637,7 +647,13 @@ describe('backlinks', () => {
   it('caps the hidden count', async () => {
     await create(insider, 's2', 'h3', { back: ['a'] })
     expect(backlinkPageSchema.parse((await getBacklinks(owner, 'a')).json()).hidden).toBe(2)
-    const capped = buildApp({ db, devApiKey: KEY, devPrincipalId: 'owner', maxHiddenBacklinks: 1 })
+    const capped = buildApp({
+      db: appDb,
+      devDb: db,
+      devApiKey: KEY,
+      devPrincipalId: 'owner',
+      maxHiddenBacklinks: 1,
+    })
     try {
       const body = backlinkPageSchema.parse((await getBacklinks(capped, 'a')).json())
       expect(body.hidden).toBe(1)

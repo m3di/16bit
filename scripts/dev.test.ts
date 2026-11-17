@@ -62,7 +62,11 @@ describe('dev script', () => {
     await new Promise((resolve) => server.close(resolve))
 
     const child = spawn(process.execPath, [fileURLToPath(new URL('./dev.ts', import.meta.url))], {
-      env: { ...process.env, DATABASE_URL: `postgres://u:p@127.0.0.1:${String(port)}/db` },
+      env: {
+        ...process.env,
+        DATABASE_URL: `postgres://u:p@127.0.0.1:${String(port)}/db`,
+        MIGRATION_DATABASE_URL: `postgres://o:p@127.0.0.1:${String(port)}/db`,
+      },
       stdio: ['ignore', 'pipe', 'inherit'],
     })
     await new Promise<void>((resolve) => {

@@ -65,9 +65,11 @@ async function main(): Promise<void> {
   if (ensureEnvFile(root)) console.log('dev: created .env from .env.example')
   process.loadEnvFile(`${root}/.env`)
 
+  // DATABASE_URL is the API's role, under row-level security; migrations run as the owner of
+  // the tables (#44). A .env from before that has only DATABASE_URL: copy both from .env.example.
   const databaseUrl = process.env['DATABASE_URL']
-  if (!databaseUrl) {
-    console.error('dev: DATABASE_URL is not set. See .env.example.')
+  if (!databaseUrl || !process.env['MIGRATION_DATABASE_URL']) {
+    console.error('dev: DATABASE_URL and MIGRATION_DATABASE_URL must be set. See .env.example.')
     process.exit(1)
   }
 

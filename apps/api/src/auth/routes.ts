@@ -16,6 +16,7 @@ import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
 import { appendAccessLog } from '../access-log.ts'
 import type { Database } from '../db/database.ts'
+import { withScope } from '../db/scope.ts'
 import { HttpError, parse } from '../http.ts'
 import {
   accountMemberships,
@@ -221,7 +222,8 @@ export function registerInviteRoutes(ws: FastifyInstance, db: Kysely<Database>):
       throw new HttpError('forbidden', 'Your role cannot create this invite')
     }
     const token = newToken()
-    const invite = await db.transaction().execute(async (trx) => {
+    const scope = { workspaceId, principalId: request.principal.id }
+    const invite = await withScope(db, scope, async (trx) => {
       const row = await trx
         .insertInto('invite')
         .values({

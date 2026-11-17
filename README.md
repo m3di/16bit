@@ -31,11 +31,11 @@ pnpm dev                  # migrations, then the API on :3000 and the web app on
 
 On its first run `pnpm dev` copies `.env.example` to `.env`. Every variable is documented there.
 
-If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` from `.env.example`; the API will not start without the key.
+If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` from `.env.example`; the API will not start without the key. If it predates row-level security (#44), copy `MIGRATION_DATABASE_URL` and the new `DATABASE_URL` from `.env.example`: the API now connects as its own role and refuses to serve as the owner of the tables.
 
 **Only Docker.** `docker compose up --build` builds the image and starts the whole stack: Postgres, migrations, then the API and the built dashboard on http://localhost:8080 (`APP_PORT` changes the port). No Node.js needed. Load demo data with `docker compose run --rm app node src/seed.ts --force` (`--force` because the image runs with `NODE_ENV=production`; this database is your local one). This stack is for trying the app; for working on it, use `pnpm dev`. It runs with `DEV_ANONYMOUS_AS_OWNER=true`, so anyone who can reach the port acts as the dev owner, like the Vite dev server; the port is bound to 127.0.0.1 for that reason. The API refuses to start with that flag on any non-loopback `HOST` unless `DEV_ANONYMOUS_ALLOW_NONLOCAL=1` is also set; compose sets both, together with the loopback port binding (D41). If you change the binding in `compose.yaml`, remove both.
 
-**Without Docker.** Create a database in your own Postgres, set `DATABASE_URL` in `.env` (or export it in your shell, which takes precedence), and run `pnpm dev`.
+**Without Docker.** Create a database in your own Postgres, set `MIGRATION_DATABASE_URL` (a user that may create tables and roles) and `DATABASE_URL` (the API's login role) in `.env` (or export them in your shell, which takes precedence), and run `pnpm dev`. `pnpm db:migrate` creates the API's role from `DATABASE_URL` if it does not exist.
 
 | Command | What it does |
 |---|---|
@@ -43,7 +43,7 @@ If your `.env` predates the items API, add `DEV_API_KEY` and `DEV_PRINCIPAL_ID` 
 | `pnpm db:migrate` | Runs migrations only. |
 | `pnpm seed` | Runs migrations, then loads two demo workspaces whose hubs cover every size-meter step (0 to 1,200 items). Safe to run again: nothing is duplicated, and existing rows are left as they are, except that `DEV_PRINCIPAL_ID` is made owner again and hub admin of every seeded hub (owners see nothing inside a hub without a grant, D45). Refuses to run when `NODE_ENV=production` unless you pass `--force`. |
 | `pnpm seed:build-hub` | Imports this repository's GitHub issues into the "Build" hub of a local `team` workspace, one item per issue. Needs `gh` signed in. Re-running updates items in place; GitHub wins over local edits of imported values, and items you delete stay deleted. An issue the hub rejects (version conflict, invalid value) is listed at the end and the rest still import; the command then exits non-zero. |
-| `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `DATABASE_URL`; API integration tests create and drop a throwaway database there. |
+| `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` | The checks CI runs. `pnpm test` needs Postgres at `MIGRATION_DATABASE_URL`; API integration tests create and drop a throwaway database there, and run the API as the role in `DATABASE_URL`. |
 | `pnpm account:reset-password <email>` | The operator's password reset (D42); the API has none. In a terminal it generates a password and prints it once; with a password piped on stdin (`echo 'new password' \| pnpm account:reset-password <email>`) it sets that one. Ends every session of the account. |
 | `pnpm e2e` | Playwright end-to-end tests in `e2e`, also run in CI. Needs a migrated and seeded database (`pnpm seed`). Reuses a running `pnpm dev`, or starts the API and web app itself. One-time setup: `pnpm --filter @16bit/e2e exec playwright install chromium`. If port 5173 is taken, set `E2E_WEB_PORT`; set `E2E_BASE_URL` to test an app that is already running elsewhere. Each test creates its own items, in the seeded workspaces. |
 | `docker compose up --build` | Builds the image and runs the whole stack on :8080. |

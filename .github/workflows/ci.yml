@@ -35,8 +35,11 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 15
+    # The owner for migrations and test databases; the API's role, under row-level security,
+    # which the tests create on first use (#44).
     env:
-      DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
+      MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
+      DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@127.0.0.1:5432/sixteenbit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,7 +80,9 @@ jobs:
           --health-timeout 3s
           --health-retries 15
     env:
-      DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
+      # The owner for migrations and seeds; the API's role, which `pnpm db:migrate` creates (#44).
+      MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
+      DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@127.0.0.1:5432/sixteenbit
       # The development key from .env.example. Not a secret: it only opens this throwaway job's API.
       DEV_API_KEY: dev-only-key
       DEV_PRINCIPAL_ID: dev-owner

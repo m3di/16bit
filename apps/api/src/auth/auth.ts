@@ -3,6 +3,7 @@ import type { Subject, WorkspaceRole } from '@16bit/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import type { Database } from '../db/database.ts'
+import { withScope } from '../db/scope.ts'
 import { HttpError, notFound } from '../http.ts'
 import { AGENT_SECRET_PREFIX, resolveAgentKey, type AgentIdentity } from './agent-key.ts'
 import {
@@ -179,13 +180,17 @@ export async function resolvePrincipal(
     if (identity.workspaceId !== workspaceId) throw notFound('Workspace')
     return { id: identity.principalId, kind: 'agent', workspaceRole: 'member' }
   }
-  const row = await db
-    .selectFrom('principal')
-    .select(['id', 'kind', 'workspace_role'])
-    .where('workspace_id', '=', workspaceId)
-    .where('id', '=', identity.principalId)
-    .where('removed_at', 'is', null)
-    .executeTakeFirst()
+  // The dev key (until #51): read its principal under row-level security, scoped to itself.
+  // If it is not an active member of the workspace, the scope sees nothing.
+  const row = await withScope(db, { workspaceId, principalId: identity.principalId }, (trx) =>
+    trx
+      .selectFrom('principal')
+      .select(['id', 'kind', 'workspace_role'])
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', identity.principalId)
+      .where('removed_at', 'is', null)
+      .executeTakeFirst(),
+  )
   if (!row) throw notFound('Workspace')
   return { id: row.id, kind: row.kind, workspaceRole: row.workspace_role }
 }

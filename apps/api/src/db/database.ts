@@ -161,6 +161,8 @@ export interface RevisionTable {
   workspace_id: string
   seq: number
   item_id: string
+  /** The item's hub, kept after the item is deleted, for row-level security (#44). */
+  hub_id: string
   version: number
   patch: Json<Record<string, unknown>>
   actor: string

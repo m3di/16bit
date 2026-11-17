@@ -9,10 +9,13 @@ import {
 } from './build-hub.ts'
 import { createDb, migrateToLatest } from './db/database.ts'
 
-const databaseUrl = process.env['DATABASE_URL']
+// Runs as the owner of the tables, like migrations (#44).
+const databaseUrl = process.env['MIGRATION_DATABASE_URL']
 const ownerId = process.env['DEV_PRINCIPAL_ID']
 if (!databaseUrl || !ownerId) {
-  console.error('seed:build-hub: DATABASE_URL and DEV_PRINCIPAL_ID must be set. See .env.example.')
+  console.error(
+    'seed:build-hub: MIGRATION_DATABASE_URL and DEV_PRINCIPAL_ID must be set. See .env.example.',
+  )
   process.exit(1)
 }
 
