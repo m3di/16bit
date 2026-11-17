@@ -302,7 +302,7 @@ export function useItems(
       const page = await fetchPage(folder, null, order)
       if (gen !== generation) return
       list.value = firstPage(page, order)
-      if (dropped) say(staleSortNotice)
+      if (dropped) say(staleSortNotice, true)
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
