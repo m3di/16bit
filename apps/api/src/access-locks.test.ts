@@ -495,6 +495,28 @@ describe('concurrent access changes (#92)', () => {
     expect(await grantsOf('adm')).toEqual([])
   })
 
+  // #96 review, a demotion that commits first. changeMemberRole holds adm FOR NO KEY UPDATE, so
+  // the creation waits at its creator lock, then reads adm's new role on the locked row and
+  // refuses: 403, and no hub. Without the role check the lock passes (adm is not removed) and
+  // the folder insert fails RLS on its fresh snapshot, a 500.
+  it('an admin whose demotion commits first gets 403 for a hub creation in flight', async () => {
+    const [demotion, creation] = await interleaveResults(
+      'access_log',
+      () => run('own', (trx) => changeMemberRole(trx, 'w1', own, 'adm', 'member')),
+      () => run('adm', (trx) => createHub(trx, 'w1', adm, newHub)),
+    )
+    expect(demotion).toEqual({ ok: true })
+    expectForbidden(creation)
+    const hub = await db
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'h-96')
+      .executeTakeFirst()
+    expect(hub).toBeUndefined()
+    expect(await grantsOf('adm')).toEqual([{ hub_id: 'build', hub_role: 'viewer' }])
+  })
+
   // #96, an invite insert by adm whose removal commits first. The insert's RLS check passes on
   // its snapshot from before the removal, and its foreign key waits for the removal and then
   // passes, since the principal row stays. appendAccessLog stops it: RLS now hides adm from the

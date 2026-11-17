@@ -351,7 +351,9 @@ export async function revokeHubGrant(
  * The creator is locked FOR SHARE first, step 1 of the lock order (#96), against a concurrent
  * removeMember of the creator. If this lock comes first, the removal waits at its lock on the
  * target, and its grant DELETE then sees the new grant. If the removal's comes first, this lock
- * waits for it, finds the creator removed, and the creation gets 403. FOR KEY SHARE would not
+ * waits for it, finds the creator removed, and the creation gets 403. A demotion
+ * (changeMemberRole) locks the creator the same way, so the role is checked again on the locked
+ * row: a creator demoted below admin in the meantime gets 403 too. FOR KEY SHARE would not
  * do: it doesn't conflict with the removal's NO KEY UPDATE, so the removal's DELETE could run
  * before the new grant is visible and miss it.
  */
@@ -364,17 +366,18 @@ export async function createHub(
   enforce(can(actor, 'hub.create'), 'Hub')
   const id = input.id ?? randomUUID()
   return inTransaction(db, async (trx) => {
-    // `removed_at` is checked on the row version the lock returns; RLS alone would answer from
-    // the statement's snapshot, from before a removal this lock waited for.
+    // `removed_at` and the role are checked on the row version the lock returns; RLS and the
+    // session's role alone answer from before a removal or demotion this lock waited for.
     const creator = await trx
       .selectFrom('principal')
-      .select('id')
+      .select('workspace_role')
       .where('workspace_id', '=', workspaceId)
       .where('id', '=', actor.id)
       .where('removed_at', 'is', null)
       .forShare()
       .executeTakeFirst()
     if (!creator) throw new HttpError('forbidden', 'Your role does not allow this action')
+    enforce(can({ ...actor, workspaceRole: creator.workspace_role }, 'hub.create'), 'Hub')
     const row = await trx
       .insertInto('folder')
       .values({
