@@ -3,7 +3,7 @@ import type { Item, RelationConfig } from '@16bit/core'
 import { computed, ref, useId, useTemplateRef, watch } from 'vue'
 import { BaseButton, BaseInput, BaseSelect, StateBlock } from '../../ui/index.ts'
 import { useValueContext } from './context.ts'
-import { displayId, itemTitle, toggled } from './relations.ts'
+import { displayId, itemTitle, showsLoadedOnlyNote, toggled } from './relations.ts'
 import RelationValue from './RelationValue.vue'
 import { folderColumns, folderTree } from './useHub.ts'
 import { useRelationSearch } from './useRelationSearch.ts'
@@ -207,7 +207,7 @@ function remove(item: string) {
         </StateBlock>
         <template v-else>
           <p
-            v-if="search.local.value && search.searched.value"
+            v-if="showsLoadedOnlyNote(search.local.value, search.searched.value, offered.length)"
             class="m-0 text-secondary text-ink3"
           >
             Matches among the items loaded so far. Load more to search further.

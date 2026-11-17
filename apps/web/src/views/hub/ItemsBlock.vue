@@ -77,11 +77,7 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
     v-else-if="rows.length === 0"
     state="empty"
     title="No items in this folder yet"
-    :message="
-      readOnly
-        ? 'You can view the items in this hub but not add them.'
-        : 'Items you add here show up in this table.'
-    "
+    :message="readOnly ? '' : 'Items you add here show up in this table.'"
   >
     <template v-if="!readOnly" #action>
       <BaseButton size="sm" @click="emit('create')">New item</BaseButton>

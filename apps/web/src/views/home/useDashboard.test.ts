@@ -69,7 +69,7 @@ describe('useDashboard', () => {
     expect(d.totals.value).toEqual({ hubs: 2, workspaces: 2 })
   })
 
-  it('leaves out hubs the caller holds no grant on', async () => {
+  it('keeps hubs the caller holds no grant on, and counts them', async () => {
     const d = useDashboard(
       api({
         '/v1/workspaces': () => page([ws('a')]),
@@ -83,7 +83,14 @@ describe('useDashboard', () => {
     await d.load()
     const value = d.workspaces.value
     if (value.state !== 'ready') throw new Error(value.state)
-    expect(value.data[0]?.hubs).toEqual({ state: 'ready', data: [listed(hub('a', 'h1', 3))] })
+    expect(value.data[0]?.hubs).toEqual({
+      state: 'ready',
+      data: [
+        listed(hub('a', 'h1', 3)),
+        { access: 'none', workspaceId: 'a', id: 'h2', name: 'Hub h2', color: 'teal' },
+      ],
+    })
+    expect(d.totals.value).toEqual({ hubs: 2, workspaces: 1 })
   })
 
   it('keeps other workspaces when one fails, and retries it', async () => {

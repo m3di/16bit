@@ -1,4 +1,4 @@
-import { hubPageSchema, workspacePageSchema, type Folder, type Workspace } from '@16bit/core'
+import { hubPageSchema, workspacePageSchema, type HubListEntry, type Workspace } from '@16bit/core'
 import { computed, ref } from 'vue'
 import { asRequestError, getAllPages, type ApiRequestError, type Fetch } from '../../api/client.ts'
 
@@ -7,7 +7,8 @@ export type Load<T> =
 
 export interface WorkspaceEntry {
   workspace: Workspace
-  hubs: Load<Folder[]>
+  /** Hubs the caller can open, and for owners and admins also those they cannot (`access: 'none'`). */
+  hubs: Load<HubListEntry[]>
 }
 
 /**
@@ -25,10 +26,7 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
     entry.hubs = { state: 'loading' }
     const path = `/v1/workspaces/${encodeURIComponent(entry.workspace.id)}/hubs`
     try {
-      const entries = await getAllPages(path, hubPageSchema, fetchFn)
-      // "No access" hubs (owners and admins, #43) get their own card in #67. Until then only
-      // hubs the caller can open are shown.
-      const hubs: Folder[] = entries.filter((h) => h.access === 'granted')
+      const hubs = await getAllPages(path, hubPageSchema, fetchFn)
       if (gen === generation) entry.hubs = { state: 'ready', data: hubs }
     } catch (error) {
       if (gen === generation) entry.hubs = { state: 'error', error: asRequestError(error) }
