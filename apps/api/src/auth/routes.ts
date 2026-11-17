@@ -17,7 +17,7 @@ import { z } from 'zod'
 import { appendAccessLog } from '../access-log.ts'
 import type { Database } from '../db/database.ts'
 import { withScope } from '../db/scope.ts'
-import { DEV_PASSWORD } from '../dev-accounts.ts'
+import { DEV_PASSWORD, DEV_PASSWORD_REFUSED } from '../dev-accounts.ts'
 import { HttpError, parse } from '../http.ts'
 import {
   accountMemberships,
@@ -147,6 +147,11 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
 
     let accountId: string
     let redeemed: AcceptedInvite
+    // Before the invite is looked at, so a refused password leaves it unused.
+    if ('email' in body && options.refuseDevPassword && body.password === DEV_PASSWORD) {
+      throw new HttpError('invalid_request', DEV_PASSWORD_REFUSED)
+    }
+
     try {
       if ('email' in body) {
         const passwordHash = await hashPassword(body.password)
