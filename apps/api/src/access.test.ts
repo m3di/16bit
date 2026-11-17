@@ -317,6 +317,30 @@ describe('reading inside a hub', () => {
     }
   })
 
+  it("describes the hub with the caller's effective role, as the hub list does (#73)", async () => {
+    const expected: Record<string, string> = {
+      adm: 'viewer',
+      ha: 'hub_admin',
+      ed: 'editor',
+      cm: 'commenter',
+      // Capped by the workspace role (docs/ROLES.md).
+      vw: 'viewer',
+      fin: 'viewer',
+      agentEditor: 'editor',
+      agentViewer: 'viewer',
+    }
+    const who = everyone()
+    for (const [name, hubRole] of Object.entries(expected)) {
+      const principal = who[name] ?? name
+      const res = await call(principal, 'GET', '/v1/workspaces/w1/hubs/build')
+      expect(res.statusCode, name).toBe(200)
+      expect(hubDescriptionSchema.parse(res.json()).hubRole, name).toBe(hubRole)
+      const list = await call(principal, 'GET', '/v1/workspaces/w1/hubs')
+      const entry = list.json<{ items: { id: string; hubRole?: string }[] }>().items
+      expect(entry.find((h) => h.id === 'build')?.hubRole, name).toBe(hubRole)
+    }
+  })
+
   it('answers a hidden hub exactly like a missing one', async () => {
     const hidden = await call('own', 'GET', '/v1/workspaces/w1/hubs/docs')
     const missing = await call('own', 'GET', '/v1/workspaces/w1/hubs/nope')

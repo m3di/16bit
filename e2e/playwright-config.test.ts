@@ -12,7 +12,8 @@ describe('playwright config', () => {
     const servers = Array.isArray(config.webServer) ? config.webServer : []
     const api = servers.find((server) => server.name === 'api')
     expect(api).toBeDefined()
-    // Playwright gives the command process.env with this on top.
+    // Playwright gives the command process.env with this on top (checked in the 1.65.1 runner;
+    // recheck on upgrade, since this test builds the merged env itself).
     const env = { ...process.env, MIGRATION_DATABASE_URL: 'postgres://owner@x/db', ...api?.env }
     expect(env['MIGRATION_DATABASE_URL']).toBe('')
   })

@@ -221,6 +221,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     -- item's delete in the same hub: no item with that ID (the writer can read the hub, so it
     -- would see it), a create revision in that hub (items never move), and no delete revision
     -- yet. revision_insert checks every other revision against the item itself.
+    -- This trigger's reads are filtered by the caller's RLS. They are complete only because an
+    -- item has one create revision (version 1, unique per ID) and never moves between hubs, so
+    -- its whole history is in a hub the caller can read. Moving items, or creating at another
+    -- version, would silently break this guard: revisit it with either change.
     CREATE FUNCTION revision_guard() RETURNS trigger
     LANGUAGE plpgsql SET search_path = public, pg_temp
     AS $$

@@ -5,6 +5,7 @@ import {
   createHubSchema,
   createItemSchema,
   deleteItemQuerySchema,
+  getItemQuerySchema,
   idSchema,
   itemQuerySchema,
   pageQuerySchema,
@@ -13,6 +14,7 @@ import {
   effectiveHubRole,
   type HubDescription,
   type HubListEntry,
+  type ItemRead,
   type Page,
   type Workspace,
 } from '@16bit/core'
@@ -33,7 +35,15 @@ import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { withScope } from './db/scope.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
-import { backlinks, createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
+import {
+  backlinks,
+  createItem,
+  deleteItem,
+  expandItem,
+  getItem,
+  patchItem,
+  queryItems,
+} from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute } from './mappers.ts'
 import {
   changeMemberRole,
@@ -51,7 +61,7 @@ export interface AppOptions {
   db: Kysely<Database>
   /** Cap on folders and on attributes in a hub description. Folder attributes get 10 times it. */
   maxHubEntries?: number
-  /** Cap on linked items in one query response. Defaults to `MAX_LINKED_ITEMS`; lowered in tests. */
+  /** Cap on linked items in one query or item response. Defaults to `MAX_LINKED_ITEMS`; lowered in tests. */
   maxLinkedItems?: number
   /** Cap on the `hidden` count of backlinks. Defaults to `MAX_HIDDEN_BACKLINKS`; lowered in tests. */
   maxHiddenBacklinks?: number
@@ -290,7 +300,14 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.get('/hubs/:hubId', async (request): Promise<HubDescription> => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             return scoped(request, async (db) => {
-              await checkHub(db, workspaceId, request.principal, hubId, 'hub.read', 'Hub')
+              const hubRole = await checkHub(
+                db,
+                workspaceId,
+                request.principal,
+                hubId,
+                'hub.read',
+                'Hub',
+              )
               const folders = await db
                 .selectFrom('folder')
                 .selectAll()
@@ -327,6 +344,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
               const subfolders = folders.slice(1)
               return {
                 hub: toFolder(hub),
+                hubRole,
                 folders: subfolders.slice(0, maxHubEntries).map(toFolder),
                 attributes: attributes.slice(0, maxHubEntries).map(toAttribute),
                 folderAttributes: folderAttributes.slice(0, faCap).map(toFolderAttribute),
@@ -362,12 +380,16 @@ export function buildApp(options: AppOptions): FastifyInstance {
             return reply.status(201).send(item)
           })
 
-          ws.get('/items/:itemId', async (request) => {
+          ws.get('/items/:itemId', async (request): Promise<ItemRead> => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
+            const { expand } = parse(getItemQuerySchema, request.query)
             return scoped(request, async (trx) => {
               const item = await getItem(trx, workspaceId, itemId)
               await checkHub(trx, workspaceId, request.principal, item.hubId, 'hub.read', 'Item')
-              return item
+              if (expand.length === 0) return item
+              return expandItem(trx, workspaceId, request.principal, item, expand, {
+                maxLinkedItems,
+              })
             })
           })
 

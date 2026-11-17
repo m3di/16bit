@@ -1,6 +1,7 @@
 import {
   backlinkPageSchema,
   itemQueryResultSchema,
+  itemReadSchema,
   itemSchema,
   type HubRole,
   type Item,
@@ -198,6 +199,14 @@ function query(app: FastifyInstance, body: object) {
     url: `/v1/workspaces/${WS}/query`,
     headers: auth(app),
     payload: { from: 'h1', limit: 50, ...body },
+  })
+}
+
+function read(app: FastifyInstance, id: string, qs = '') {
+  return app.inject({
+    method: 'GET',
+    url: `/v1/workspaces/${WS}/items/${id}${qs}`,
+    headers: auth(app),
   })
 }
 
@@ -612,6 +621,85 @@ describe('expand', () => {
     }
     expect((await query(owner, { expand: ['rel', 'rel'] })).statusCode).toBe(400)
     expect((await query(owner, { expand: ['rel', 'cross', 'secret', 'one'] })).statusCode).toBe(400)
+  })
+})
+
+describe('expand on a single item (#73)', () => {
+  beforeEach(async () => {
+    await create(owner, 'a', 'h1', { title: 'A' })
+    await create(owner, 'x', 'h2', { title2: 'X' })
+    await create(insider, 's', 'h3', { title3: 'Secret' })
+    await create(insider, 'c', 'h1', { title: 'C', rel: ['a'], cross: ['x'], secret: ['s'] })
+  })
+
+  it('tells "no access" from "deleted" for a panel opened by direct link', async () => {
+    const x = await versionOf('x')
+    expect((await remove(owner, 'x', x)).statusCode).toBe(204)
+
+    const res = await read(owner, 'c', '?expand=rel,cross,secret')
+    expect(res.statusCode, res.body).toBe(200)
+    const body = itemReadSchema.parse(res.json())
+    expect(body).toMatchObject({ id: 'c', values: { cross: ['x'], secret: ['s'] } })
+    expect(body.linked?.['a']).toMatchObject({ access: 'read', item: { id: 'a' } })
+    // Exists, but in a hub the owner has no grant on: a marker and nothing else.
+    expect(body.linked?.['s']).toEqual({ access: 'none' })
+    // Deleted: the value keeps the ID, `linked` has no entry, and nothing was cut off.
+    expect(body.linked).not.toHaveProperty('x')
+    expect(body.linkedTruncated).toBe(false)
+  })
+
+  it('takes repeated keys too, and follows only the attributes asked for', async () => {
+    const body = itemReadSchema.parse(
+      (await read(insider, 'c', '?expand=secret&expand=cross')).json(),
+    )
+    expect(Object.keys(body.linked ?? {}).sort()).toEqual(['s', 'x'])
+    expect(body.linked?.['s']).toMatchObject({ access: 'read', item: { id: 's' } })
+  })
+
+  it('caps the linked items and says so', async () => {
+    const capped = asOwner({ maxLinkedItems: 1 })
+    try {
+      const body = itemReadSchema.parse((await read(capped, 'c', '?expand=rel,cross')).json())
+      expect(Object.keys(body.linked ?? {})).toEqual(['a'])
+      expect(body.linkedTruncated).toBe(true)
+    } finally {
+      await capped.close()
+    }
+  })
+
+  it('returns the plain item without expand, as before', async () => {
+    for (const qs of ['', '?expand=']) {
+      const res = await read(owner, 'c', qs)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(itemSchema.parse(res.json()).id).toBe('c')
+    }
+  })
+
+  it('refuses expands that break the query rules', async () => {
+    for (const [qs, fragment] of [
+      ['?expand=title', 'only relations can be expanded'],
+      ['?expand=title3', 'is not an attribute of this folder'],
+    ] as const) {
+      const res = await read(owner, 'c', qs)
+      expect(res.statusCode, res.body).toBe(400)
+      expect(res.json<{ error: string; message: string }>()).toMatchObject({
+        error: 'invalid_request',
+        message: expect.stringContaining(fragment) as string,
+      })
+    }
+    for (const qs of ['?expand=rel,rel', '?expand=rel,cross,secret,one', '?expand=r%20l', '?x=1']) {
+      expect((await read(owner, 'c', qs)).statusCode, qs).toBe(400)
+    }
+  })
+
+  it('answers 404 for a missing item and for one in a hidden hub, expand or not', async () => {
+    for (const id of ['nope', 's']) {
+      for (const qs of ['', '?expand=back']) {
+        const res = await read(owner, id, qs)
+        expect(res.statusCode, `${id}${qs}`).toBe(404)
+        expect(res.json<{ error: string }>().error).toBe('not_found')
+      }
+    }
   })
 })
 

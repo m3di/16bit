@@ -1,4 +1,4 @@
-import { can, type HubRole, type Subject } from '@16bit/core'
+import { can, effectiveHubRole, type HubRole, type Subject } from '@16bit/core'
 import type { Kysely, Transaction } from 'kysely'
 import type { Database } from './db/database.ts'
 import { enforce, notFound } from './http.ts'
@@ -92,7 +92,7 @@ export async function ownGrant(
 /**
  * Enforces an action inside a hub for the caller: 404 without a grant (D27, D45), 403 when the
  * grant's role is too low. `what` names the thing a 404 hides, so a hidden hub, folder or item
- * looks the same as a missing one.
+ * looks the same as a missing one. Returns the caller's effective hub role (docs/ROLES.md).
  */
 export async function checkHub(
   db: Db | Trx,
@@ -101,12 +101,16 @@ export async function checkHub(
   hubId: string,
   action: 'hub.read' | 'item.write',
   what: string,
-): Promise<void> {
+): Promise<HubRole> {
   // A write holds the grant (FOR SHARE) until its transaction ends: call it in the write's
   // transaction, so a revoke waits for the write instead of landing between check and write.
   const lock = action === 'item.write' ? 'share' : undefined
   const hubGrant = await ownGrant(db, workspaceId, hubId, principal.id, lock)
   enforce(can(principal, action, { hubGrant }), what)
+  const role = effectiveHubRole(principal, hubGrant)
+  // `can()` allows nothing inside a hub without a grant, so this never throws.
+  if (role === null) throw notFound(what)
+  return role
 }
 
 /** The hub of a folder, or 404. A folder's hub never changes, so a check before a write holds. */
