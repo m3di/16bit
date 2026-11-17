@@ -49,8 +49,18 @@ function canConnect(host: string, port: number): Promise<boolean> {
   })
 }
 
-function run(args: string[]): ChildProcess {
-  return spawn('pnpm', args, { cwd: root, stdio: 'inherit' })
+/**
+ * The environment for the API and web dev servers: everything but the owner's URL, which only
+ * migrations and seeds may hold (#44). Empty rather than deleted: the API's `dev` script loads
+ * .env with --env-file-if-exists, which never overrides a variable that is already set, so a
+ * deleted one would come straight back from .env.
+ */
+export function serverEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, MIGRATION_DATABASE_URL: '' }
+}
+
+function run(args: string[], env: NodeJS.ProcessEnv = process.env): ChildProcess {
+  return spawn('pnpm', args, { cwd: root, stdio: 'inherit', env })
 }
 
 function exitCode(child: ChildProcess): Promise<number> {
@@ -102,7 +112,10 @@ async function main(): Promise<void> {
   if (migrated !== 0) process.exit(migrated)
   if (state.stopping) process.exit(0)
 
-  child = run(['--parallel', '--filter', '@16bit/api', '--filter', '@16bit/web', 'dev'])
+  child = run(
+    ['--parallel', '--filter', '@16bit/api', '--filter', '@16bit/web', 'dev'],
+    serverEnv(process.env),
+  )
   process.exit(await exitCode(child))
 }
 

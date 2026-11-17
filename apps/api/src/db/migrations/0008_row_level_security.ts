@@ -17,7 +17,8 @@ import { sql, type Kysely } from 'kysely'
 // most), and the matrix's rules for members, grants (footnotes 1 and 3), keys and the access
 // log. The API still decides every action with `can()`; this is the floor underneath it. Rules
 // that compare a row before and after an update (owner changes, `account_id`, the sequence
-// counters) are BEFORE UPDATE triggers, which skip roles RLS does not apply to.
+// counters) are BEFORE UPDATE triggers, which skip roles RLS does not apply to. So is the rule
+// for delete revisions, which a policy can't express without reading `revision` itself.
 //
 // Helpers that read `principal` and `hub_grant` for a policy are SECURITY DEFINER, so a policy
 // on hub_grant can ask about hub_grant without recursing. They answer only about the caller in
@@ -214,10 +215,39 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     END
     $$;
 
+    -- A delete revision can't be checked against its item: the item is gone. The item's DELETE
+    -- has to run before the hub, folder and workspace rows, because it cascades to links that
+    -- other writers hold while they wait for those rows. So a delete revision must follow the
+    -- item's delete in the same hub: no item with that ID (the writer can read the hub, so it
+    -- would see it), a create revision in that hub (items never move), and no delete revision
+    -- yet. revision_insert checks every other revision against the item itself.
+    CREATE FUNCTION revision_guard() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = public, pg_temp
+    AS $$
+    BEGIN
+      IF NOT row_security_active('revision') THEN RETURN NEW; END IF;
+      IF NEW.patch->>'op' = 'delete' AND (
+           EXISTS (SELECT 1 FROM item i
+                   WHERE i.workspace_id = NEW.workspace_id AND i.id = NEW.item_id)
+           OR NOT EXISTS (SELECT 1 FROM revision r
+                          WHERE r.workspace_id = NEW.workspace_id AND r.item_id = NEW.item_id
+                            AND r.hub_id = NEW.hub_id AND r.patch->>'op' = 'create')
+           OR EXISTS (SELECT 1 FROM revision r
+                      WHERE r.workspace_id = NEW.workspace_id AND r.item_id = NEW.item_id
+                        AND r.patch->>'op' = 'delete')) THEN
+        RAISE EXCEPTION 'a delete revision follows the delete of its item, in its hub'
+          USING ERRCODE = '42501';
+      END IF;
+      RETURN NEW;
+    END
+    $$;
+
     CREATE TRIGGER principal_guard BEFORE UPDATE ON principal
       FOR EACH ROW EXECUTE FUNCTION principal_guard();
     CREATE TRIGGER workspace_guard BEFORE UPDATE ON workspace
       FOR EACH ROW EXECUTE FUNCTION workspace_guard();
+    CREATE TRIGGER revision_guard BEFORE INSERT ON revision
+      FOR EACH ROW EXECUTE FUNCTION revision_guard();
 
     -- Backlinks' hidden count (#47): links to a readable item from items the caller can't
     -- read, up to p_cap. A count only; their IDs stay hidden. Zero if the item isn't readable.
@@ -425,9 +455,14 @@ export async function up(db: Kysely<unknown>): Promise<void> {
 
     CREATE POLICY revision_read ON revision FOR SELECT
       USING (workspace_id = rls_workspace() AND hub_id = ANY ((SELECT rls_hubs(1))::text[]));
+    -- The item must be in the revision's hub, or one hub could write another's history, and
+    -- take the next version number from its writers. Delete revisions: revision_guard.
     CREATE POLICY revision_insert ON revision FOR INSERT
       WITH CHECK (workspace_id = rls_workspace() AND hub_id = ANY ((SELECT rls_hubs(3))::text[])
-                  AND actor = rls_principal());
+                  AND actor = rls_principal()
+                  AND (patch->>'op' = 'delete' OR EXISTS (
+                    SELECT 1 FROM item i WHERE i.workspace_id = revision.workspace_id
+                      AND i.id = revision.item_id AND i.hub_id = revision.hub_id)));
 
     -- A person sees their own grants, the grants on hubs they can read, and owners and admins
     -- see all; an agent sees only its own. Grants on people change as rls_can_change_grant
@@ -476,8 +511,10 @@ export async function down(db: Kysely<unknown>): Promise<void> {
     )
     .execute(db)
   await sql`
+    DROP TRIGGER revision_guard ON revision;
     DROP TRIGGER workspace_guard ON workspace;
     DROP TRIGGER principal_guard ON principal;
+    DROP FUNCTION revision_guard();
     DROP FUNCTION workspace_guard();
     DROP FUNCTION principal_guard();
     DROP FUNCTION hidden_backlinks(text, int);

@@ -7,4 +7,13 @@ describe('playwright config', () => {
     expect(config.fullyParallel).toBe(true)
     expect(config.retries).toBe(0)
   })
+
+  it('starts the API without the owner URL, which .env may set (#44)', () => {
+    const servers = Array.isArray(config.webServer) ? config.webServer : []
+    const api = servers.find((server) => server.name === 'api')
+    expect(api).toBeDefined()
+    // Playwright gives the command process.env with this on top.
+    const env = { ...process.env, MIGRATION_DATABASE_URL: 'postgres://owner@x/db', ...api?.env }
+    expect(env['MIGRATION_DATABASE_URL']).toBe('')
+  })
 })

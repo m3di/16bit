@@ -42,6 +42,9 @@ export type RevisionPatch =
 /** Postgres NOTIFY channel. The payload is `<workspaceId>:<seq>`, read by the M3 change feed. */
 export const REVISION_CHANNEL = 'revision'
 
+/** UNIQUE (workspace_id, item_id, version) on revision (0001): an item ID is never reused. */
+const REVISION_VERSION_KEY = 'revision_workspace_id_item_id_version_key'
+
 // Lock order inside write transactions, to rule out deadlocks: item rows, then hub row, then
 // folder row, then workspace row (for the revision seq). Patch and delete lock the existing item
 // row first. Create locks the hub row (next_seq), the hub and folder rows (counts), then inserts
@@ -400,7 +403,7 @@ export async function createItem(
     } catch (error) {
       // The ID belonged to an item since deleted in a hub the writer can't read, so the check
       // above could not see its history (row-level security). Still never reused.
-      if ((error as { code?: string }).code === '23505') {
+      if ((error as { constraint?: string }).constraint === REVISION_VERSION_KEY) {
         throw new HttpError('id_taken', 'This item ID is already used')
       }
       throw error
@@ -488,7 +491,10 @@ export async function deleteItem(
     if (!row) throw conflict(await getItem(trx, workspaceId, id))
 
     // item_index rows and links from and to the item go with it (ON DELETE CASCADE). Relation
-    // values in other items keep the ID; with no link left, readers treat it as gone.
+    // values in other items keep the ID; with no link left, readers treat it as gone. The
+    // DELETE comes first: other writers hold links to this item while they wait for the hub,
+    // folder or workspace row, so cascading after taking those could deadlock. The delete
+    // revision is checked against the deleted item by revision_guard (migration 0008).
     await bumpCounts(trx, workspaceId, row.hub_id, row.folder_id, -1)
     // The delete is the item's last version, so `(item_id, version)` stays unique in the log.
     await appendRevision(trx, workspaceId, row.hub_id, id, row.version + 1, { op: 'delete' }, actor)

@@ -443,6 +443,46 @@ describe('raw queries as the API role', () => {
 
 class Rollback extends Error {}
 
+describe('delete revisions (revision_guard)', () => {
+  const deleteRevision = (item: string, version: number) =>
+    sql`INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor)
+        VALUES ('w1', ${100 + version}, ${item}, 'h1', ${version}, '{"op":"delete"}', 'mem')`
+
+  /** As mem: deletes i1, then runs `then`, then rolls back. 'ok' or the SQLSTATE. */
+  const afterDeletingI1 = async (then: (trx: Transaction<Database>) => Promise<unknown>) => {
+    try {
+      await as({ workspaceId: 'w1', principalId: 'mem' }, async (trx) => {
+        await sql`DELETE FROM item WHERE workspace_id = 'w1' AND id = 'i1'`.execute(trx)
+        await then(trx)
+        throw new Rollback()
+      })
+    } catch (error) {
+      if (!(error instanceof Rollback)) return String((error as { code?: unknown }).code)
+    }
+    return 'ok'
+  }
+
+  it('follow the delete of the item, in its hub', async () => {
+    expect(await afterDeletingI1((trx) => deleteRevision('i1', 2).execute(trx))).toBe('ok')
+  })
+
+  it('refuse an item with no history in that hub, even if its own hub is unreadable', async () => {
+    // i2 is in h2, which mem can't read: no item in sight, but no create revision in h1.
+    expect(await afterDeletingI1((trx) => deleteRevision('i2', 2).execute(trx))).toBe(
+      INSUFFICIENT_PRIVILEGE,
+    )
+  })
+
+  it('come once: a second delete revision is refused', async () => {
+    expect(
+      await afterDeletingI1(async (trx) => {
+        await deleteRevision('i1', 2).execute(trx)
+        await deleteRevision('i1', 3).execute(trx)
+      }),
+    ).toBe(INSUFFICIENT_PRIVILEGE)
+  })
+})
+
 /**
  * Runs `query` as `principalId` in w1, then rolls back. Returns the rows it touched (or read),
  * or the SQLSTATE it failed with.
@@ -832,6 +872,18 @@ describe('the role matrix in the database', () => {
       DENIED,
     ],
     [
+      'editor writes a revision for an item in another hub',
+      'mem',
+      `INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES ('w1', 100, 'i2', 'h1', 2, '{}', 'mem')`,
+      DENIED,
+    ],
+    [
+      'editor writes a delete revision for an item that is still there',
+      'mem',
+      `INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES ('w1', 100, 'i1', 'h1', 2, '{"op":"delete"}', 'mem')`,
+      DENIED,
+    ],
+    [
       'editor links from their hub',
       'mem',
       `INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES ('w1', 'i1', 'rel', 'i1')`,
@@ -957,6 +1009,64 @@ describe('routes that run before a workspace is set', () => {
   })
 })
 
+describe('item IDs under row-level security', () => {
+  let app: FastifyInstance
+  beforeAll(async () => {
+    app = buildApp({ db: appDb })
+    // Past the fixtures' own sequence IDs in h1.
+    await sql`UPDATE folder SET next_seq = 100 WHERE workspace_id = 'w1' AND id = 'h1'`.execute(db)
+  })
+  afterAll(async () => {
+    await app.close()
+  })
+
+  const createAsMem = (id: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/v1/workspaces/w1/items',
+      headers: { cookie: `sid=${SESSION}` }, // mem's session
+      payload: { id, folderId: 'f1', values: {} },
+    })
+
+  it('refuses the ID of an item deleted in a hub the writer can’t read', async () => {
+    await sql`
+      INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES
+        ('w1', 80, 'gone-b', 'h2', 1, '{"op":"create"}', 'own'),
+        ('w1', 81, 'gone-b', 'h2', 2, '{"op":"delete"}', 'own');
+    `.execute(db)
+    const res = await createAsMem('gone-b')
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ error: 'id_taken' })
+  })
+
+  it('reports any other unique violation as an error, not as a taken ID', async () => {
+    // A revision already holds the next sequence number, so the write's own revision collides
+    // on (workspace_id, seq), which has nothing to do with the item ID.
+    const { next_revision_seq: seq } = await db
+      .selectFrom('workspace')
+      .select('next_revision_seq')
+      .where('id', '=', 'w1')
+      .executeTakeFirstOrThrow()
+    await sql`
+      INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor)
+        VALUES ('w1', ${seq}, 'i2', 'h2', 50, '{}', 'own')
+    `.execute(db)
+    try {
+      const res = await createAsMem('fresh-id')
+      expect(res.statusCode).toBe(500)
+      const stored = await db
+        .selectFrom('item')
+        .select('id')
+        .where('workspace_id', '=', 'w1')
+        .where('id', '=', 'fresh-id')
+        .execute()
+      expect(stored).toEqual([])
+    } finally {
+      await sql`DELETE FROM revision WHERE workspace_id = 'w1' AND seq = ${seq}`.execute(db)
+    }
+  })
+})
+
 describe('locks that hold access steady during a write', () => {
   let app: FastifyInstance
   beforeAll(() => {
@@ -1046,5 +1156,58 @@ describe('locks that hold access steady during a write', () => {
       }
     })
     expect(res.statusCode).toBe(403)
+  })
+
+  // A delete cascades to the links that point at the item, and other writers hold those rows
+  // while they wait for the workspace row (their revision). So the item's DELETE runs before
+  // the hub, folder and workspace rows, and its delete revision is checked after it (#44).
+  it('deletes an item without deadlocking on a link to it held by another write', async () => {
+    await sql`
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by) VALUES
+        ('w1', 'dx', 'h1', 'f1', 90, '{"rel":["dy"]}', 'own'),
+        ('w1', 'dy', 'h1', 'f1', 91, '{}', 'own');
+      INSERT INTO link (workspace_id, from_item, attribute_id, to_item)
+        VALUES ('w1', 'dx', 'rel', 'dy');
+      INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES
+        ('w1', 90, 'dx', 'h1', 1, '{"op":"create"}', 'own'),
+        ('w1', 91, 'dy', 'h1', 1, '{"op":"create"}', 'own');
+      UPDATE folder SET item_count = item_count + 2 WHERE workspace_id = 'w1' AND id IN ('h1', 'f1');
+    `.execute(db)
+    const other = await db.connection().execute(async (conn) => {
+      await sql`BEGIN`.execute(conn)
+      // Another delete, of dx: its cascade holds the dx → dy link row.
+      await sql`DELETE FROM item WHERE workspace_id = 'w1' AND id = 'dx'`.execute(conn)
+      const request = app.inject({
+        method: 'DELETE',
+        url: '/v1/workspaces/w1/items/dy?version=1',
+        headers: { cookie: `sid=${SESSION}` }, // mem's session
+      })
+      await someoneWaits()
+      // ...and then takes the workspace row for its revision, as every item write does.
+      const taken = await sql`UPDATE workspace SET next_revision_seq = next_revision_seq + 1
+                              WHERE id = 'w1'`
+        .execute(conn)
+        .then(() => 'ok')
+        .catch((error: unknown) => String((error as { code?: unknown }).code))
+      await sql`ROLLBACK`.execute(conn)
+      return { taken, response: await request }
+    })
+    expect(other.taken).toBe('ok')
+    expect(other.response.statusCode).toBe(204)
+    const history = await db
+      .selectFrom('revision')
+      .select(['version', 'patch', 'actor'])
+      .where('workspace_id', '=', 'w1')
+      .where('item_id', '=', 'dy')
+      .orderBy('version')
+      .execute()
+    expect(history.map((r) => [r.version, r.patch, r.actor])).toEqual([
+      [1, { op: 'create' }, 'own'],
+      [2, { op: 'delete' }, 'mem'],
+    ])
+    await sql`
+      DELETE FROM item WHERE workspace_id = 'w1' AND id = 'dx';
+      UPDATE folder SET item_count = item_count - 1 WHERE workspace_id = 'w1' AND id IN ('h1', 'f1');
+    `.execute(db)
   })
 })
