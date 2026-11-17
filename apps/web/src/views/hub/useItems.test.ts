@@ -27,7 +27,7 @@ describe('useItems: reading', () => {
     expect(calls[0]).toEqual({
       method: 'POST',
       path: '/v1/workspaces/w/query',
-      body: { from: 'bld', limit: 50, cursor: null },
+      body: { from: 'bld', limit: 50, cursor: null, expand: [] },
     })
     expect(s.rows.value.map((r) => r.id)).toEqual(['i2', 'i1'])
   })
@@ -206,5 +206,99 @@ describe('inHub', () => {
   it('reports an item of another hub as missing', () => {
     const other = { state: 'ready' as const, data: { ...item('i1', 1), hubId: 'ops' } }
     expect(inHub(other, 'bld')).toMatchObject({ state: 'error', error: { status: 404 } })
+  })
+})
+
+describe('useItems: linked items (#50)', () => {
+  const linking = (links: string[]) => item('i1', 1, { blocks: links })
+
+  it('expands relation columns and keeps what the server says about each linked item', async () => {
+    const target = item('t1', 5, { title: 'Target' })
+    const api = fakeApi(() =>
+      json({
+        items: [linking(['t1', 't2', 't3'])],
+        nextCursor: null,
+        linked: { t1: { access: 'read', item: target }, t2: { access: 'none' } },
+        linkedTruncated: false,
+      }),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld', ['blocks'])
+    expect(api.calls[0]?.body).toMatchObject({ expand: ['blocks'] })
+    expect(s.linkState('t1')).toEqual({ access: 'read', item: target })
+    expect(s.linkState('t2')).toEqual({ access: 'none' })
+    // Expanded, not truncated, and not in `linked`: deleted.
+    expect(s.linkState('t3')).toEqual({ access: 'gone' })
+    expect(s.linkState('t9')).toEqual({ access: 'unknown' })
+  })
+
+  it('does not call an item deleted when the server cut the linked list short', async () => {
+    const api = fakeApi(() =>
+      json({ items: [linking(['t3'])], nextCursor: null, linked: {}, linkedTruncated: true }),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld', ['blocks'])
+    expect(s.linkState('t3')).toEqual({ access: 'unknown' })
+  })
+
+  it('reads uncovered linked items one by one; a 404 shows as no access', async () => {
+    const api = fakeApi((call) => {
+      if (call.path.endsWith('/query')) return json({ items: [], nextCursor: null })
+      if (call.path.endsWith('/t1')) return json(item('t1', 5))
+      if (call.path.endsWith('/t2')) return json({ error: 'not_found', message: 'Not found' }, 404)
+      return json({ error: 'internal', message: 'Boom' }, 500)
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    s.resolveLinked(['t1', 't2', 't3'])
+    s.resolveLinked(['t1'])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.calls.filter((c) => c.path.endsWith('/t1'))).toHaveLength(1)
+    expect(s.linkState('t1')).toMatchObject({ access: 'read' })
+    expect(s.linkState('t2')).toEqual({ access: 'none' })
+    expect(s.linkState('t3')).toEqual({ access: 'error' })
+  })
+
+  it('waits for the folder query, whose answer wins over a direct read', async () => {
+    const list = gate<Response>()
+    const api = fakeApi((call) =>
+      call.path.endsWith('/query') ? list.promise : json(item('t1', 5)),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    const opening = s.openFolder('bld', ['blocks'])
+    s.resolveLinked(['t1'])
+    expect(api.calls.filter((c) => c.method === 'GET')).toHaveLength(0)
+    list.release(
+      json({
+        items: [item('i1', 1, { blocks: ['t1'] })],
+        nextCursor: null,
+        linked: { t1: { access: 'none' } },
+        linkedTruncated: false,
+      }),
+    )
+    await opening
+    s.resolveLinked(['t1'])
+    expect(s.linkState('t1')).toEqual({ access: 'none' })
+    expect(api.calls.filter((c) => c.method === 'GET')).toHaveLength(0)
+  })
+
+  it('remembers an item picked to link to', () => {
+    const s = useItems('w', () => 'BLD', fakeApi(() => json({})).fetchFn)
+    s.rememberLinked(item('t1', 5))
+    expect(s.linkState('t1')).toMatchObject({ access: 'read' })
+  })
+})
+
+describe('useItems: no permission to edit (#50)', () => {
+  it('rolls back a refused edit and turns the hub read-only', async () => {
+    const { s } = await opened(
+      () => json({ error: 'forbidden', message: 'Forbidden' }, 403),
+      [item('i1', 1, { title: 'Old' })],
+    )
+    expect(s.readOnly.value).toBe(false)
+    expect(await s.save('i1', { title: 'New' })).toBe(false)
+    expect(s.view('i1')?.values['title']).toBe('Old')
+    expect(s.readOnly.value).toBe(true)
+    expect(s.notice.value).toContain('You can view the items in this hub but not change them')
   })
 })

@@ -5,13 +5,15 @@ import { ref, useId } from 'vue'
 import FieldEditor from './FieldEditor.vue'
 import { formatTimestamp } from './values.ts'
 
-const { item, columns, saving, disabled } = defineProps<{
+const { item, columns, saving, disabled, readOnly } = defineProps<{
   item: Item
   columns: readonly FolderAttributeDefinition[]
   /** An edit is on its way to the server. */
   saving?: boolean
   /** The item is not confirmed by the server yet, so it cannot be edited. */
   disabled?: boolean
+  /** The server refused an edit in this hub with 403: values are shown, not editable. */
+  readOnly?: boolean
 }>()
 
 const emit = defineEmits<{ save: [values: ItemValues] }>()
@@ -21,7 +23,7 @@ const errors = ref<Record<string, string>>({})
 
 // Checked here first with the same rules as the server, so a value it would refuse is not sent.
 function commit(attributeId: string, value: ItemValues[string]) {
-  if (disabled) return
+  if (disabled || readOnly) return
   const result = validateItemValues(columns, { [attributeId]: value }, { partial: true })
   if (!result.ok) {
     errors.value = { ...errors.value, [attributeId]: result.errors[0]?.message ?? 'Invalid' }
@@ -45,6 +47,8 @@ function commit(attributeId: string, value: ItemValues[string]) {
         :required="required"
         :error="errors[attribute.id]"
         :disabled="disabled"
+        :read-only="readOnly"
+        :item-id="item.id"
         @commit="commit(attribute.id, $event)"
       />
       <p v-if="columns.length === 0" class="m-0 text-ink2">This folder has no fields yet.</p>

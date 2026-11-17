@@ -18,3 +18,15 @@ export const RICH_CLASSES = {
   code: 'rounded-chip bg-selected px-1 font-mono text-secondary text-ink',
   link: 'border-b border-line2 text-ink no-underline hover:border-line3',
 } as const
+
+/**
+ * Attributes of a link inside the editor. A link there cannot hold the hidden "(opens in a new
+ * tab)" text that RichTextView and UrlLink put inside theirs, so it is described by the
+ * element with ID `newTabId`, which holds that text.
+ */
+export const editorLinkAttributes = (newTabId: string) => ({
+  class: RICH_CLASSES.link,
+  rel: 'noopener noreferrer',
+  target: '_blank',
+  'aria-describedby': newTabId,
+})
