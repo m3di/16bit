@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { appendAccessLog } from './access-log.ts'
 import { hashAgentSecret, newAgentSecret } from './auth/agent-key.ts'
 import type { Database } from './db/database.ts'
+import { inTransaction } from './db/scope.ts'
 import { decodeCursor, encodeCursor, enforce, HttpError, notFound } from './http.ts'
 
 // Agent keys (D28, D47, docs/ROLES.md). A key is its own principal of kind `agent`, workspace
@@ -116,7 +117,7 @@ export async function createAgentKey(
   const principalId = randomUUID()
 
   // The principal, its one grant, the key and the log entry exist together or not at all (D47).
-  return db.transaction().execute(async (trx) => {
+  return inTransaction(db, async (trx) => {
     const hubGrant = await ownHubGrant(trx, workspaceId, hubId, actor.id, true)
     enforce(can(actor, 'key.create', { hubGrant, role: input.hubRole }), 'Hub')
 
@@ -225,7 +226,10 @@ export async function revokeAgentKey(
   actor: Subject,
   keyId: string,
 ): Promise<AgentKey> {
-  return db.transaction().execute(async (trx) => {
+  // Agents never revoke (D28): refused before any key is read, as they can't see other
+  // principals (row-level security, #44). Anyone who could revoke with a hub admin grant goes on.
+  enforce(can(actor, 'key.revoke', { hubGrant: 'hub_admin' }), 'Agent key')
+  return inTransaction(db, async (trx) => {
     const key = await selectKeys(trx, workspaceId)
       .where('k.principal_id', '=', keyId)
       .executeTakeFirst()

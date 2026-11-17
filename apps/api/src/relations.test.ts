@@ -28,6 +28,8 @@ import { sessionCookie } from './db/test-session.ts'
 const WS = 'w1'
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let owner: FastifyInstance
 let insider: FastifyInstance
@@ -37,7 +39,7 @@ let ownerSession: { cookie: string }
 
 /** An app that signs its requests in as the owner. */
 function asOwner(options: Partial<AppOptions> = {}): FastifyInstance {
-  const app = buildApp({ db, ...options })
+  const app = buildApp({ db: appDb, ...options })
   sessions.set(app, ownerSession)
   return app
 }
@@ -46,17 +48,19 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
   ownerSession = await sessionCookie(db, 'owner')
   owner = asOwner()
-  insider = buildApp({ db })
+  insider = buildApp({ db: appDb })
   sessions.set(insider, await sessionCookie(db, 'insider'))
 })
 
 afterEach(async () => {
   await owner.close()
   await insider.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })

@@ -25,6 +25,8 @@ import { createItem } from './items.ts'
 // in auth/auth.test.ts.
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
 /** One test session per person, made on first use. */
@@ -34,14 +36,16 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
-  app = buildApp({ db })
+  app = buildApp({ db: appDb })
 })
 
 afterEach(async () => {
   await app.close()
   sessions.clear()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })

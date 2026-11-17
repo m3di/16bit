@@ -95,14 +95,17 @@ export async function ownGrant(
  * looks the same as a missing one. Returns the caller's effective hub role (docs/ROLES.md).
  */
 export async function checkHub(
-  db: Db,
+  db: Db | Trx,
   workspaceId: string,
   principal: Subject,
   hubId: string,
   action: 'hub.read' | 'item.write',
   what: string,
 ): Promise<HubRole> {
-  const hubGrant = await ownGrant(db, workspaceId, hubId, principal.id)
+  // A write holds the grant (FOR SHARE) until its transaction ends: call it in the write's
+  // transaction, so a revoke waits for the write instead of landing between check and write.
+  const lock = action === 'item.write' ? 'share' : undefined
+  const hubGrant = await ownGrant(db, workspaceId, hubId, principal.id, lock)
   enforce(can(principal, action, { hubGrant }), what)
   const role = effectiveHubRole(principal, hubGrant)
   // `can()` allows nothing inside a hub without a grant, so this never throws.

@@ -14,6 +14,8 @@ import { itemQueryStatement, type ItemQuery } from './items.ts'
 const ACTOR = 'dev-owner'
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
 let auth: { cookie: string }
@@ -69,9 +71,10 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seedWorkspace('w1')
-  app = buildApp({ db })
+  app = buildApp({ db: appDb })
   for (const [id, values] of Object.entries(ITEMS)) await createIn('w1', id, values)
 })
 
@@ -149,6 +152,7 @@ async function createIn(ws: string, id: string, values: object): Promise<void> {
 
 afterEach(async () => {
   await app.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })

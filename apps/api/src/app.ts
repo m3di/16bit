@@ -18,8 +18,8 @@ import {
   type Page,
   type Workspace,
 } from '@16bit/core'
-import Fastify, { type FastifyInstance } from 'fastify'
-import { sql, type Kysely } from 'kysely'
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
+import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
 import { checkHub, folderHub, itemHub } from './access.ts'
@@ -33,6 +33,7 @@ import { RateLimiter, type RateLimitPolicy } from './auth/rate-limit.ts'
 import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
 import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
+import { withScope } from './db/scope.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import {
   backlinks,
@@ -49,12 +50,14 @@ import {
   createHub,
   listMembers,
   removeMember,
+  requireMemberManager,
   revokeHubGrant,
   setHubGrant,
 } from './members.ts'
 import { isAppRoute, registerWeb, sendAppShell } from './web.ts'
 
 export interface AppOptions {
+  /** Connects as the API's role, under row-level security (#44). */
   db: Kysely<Database>
   /** Cap on folders and on attributes in a hub description. Folder attributes get 10 times it. */
   maxHubEntries?: number
@@ -176,6 +179,20 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
       void v1.register(
         (ws, _o, wsDone) => {
+          /** Runs a handler's queries in the caller's RLS scope: one transaction per request. */
+          const scoped = <T>(
+            request: FastifyRequest,
+            fn: (trx: Transaction<Database>) => Promise<T>,
+          ): Promise<T> =>
+            withScope(
+              db,
+              {
+                workspaceId: parse(workspaceParams, request.params).workspaceId,
+                principalId: request.principal.id,
+              },
+              fn,
+            )
+
           // A workspace exists for the caller only if the caller is a principal in it.
           ws.addHook('preHandler', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
@@ -191,28 +208,30 @@ export function buildApp(options: AppOptions): FastifyInstance {
             // Owners and admins see every hub's name; everyone else, agents included, only
             // the hubs they hold a grant on (docs/ROLES.md).
             const listAll = can(me, 'hub.listAll') === 'allow'
-            let q = db
-              .selectFrom('folder as f')
-              .leftJoin('hub_grant as g', (j) =>
-                j
-                  .onRef('g.workspace_id', '=', 'f.workspace_id')
-                  .onRef('g.hub_id', '=', 'f.id')
-                  .on('g.principal_id', '=', me.id),
-              )
-              .selectAll('f')
-              .select('g.hub_role')
-              .where('f.workspace_id', '=', workspaceId)
-              .where('f.parent_id', 'is', null)
-            if (!listAll) q = q.where('g.principal_id', 'is not', null)
-            if (cursor) {
-              const [name, id] = decodeCursor(nameCursorSchema, cursor)
-              q = q.where(sql<boolean>`(f.name, f.id) > (${name}, ${id})`)
-            }
-            const rows = await q
-              .orderBy('f.name')
-              .orderBy('f.id')
-              .limit(limit + 1)
-              .execute()
+            const q = (trx: Transaction<Database>) =>
+              trx
+                .selectFrom('folder as f')
+                .leftJoin('hub_grant as g', (j) =>
+                  j
+                    .onRef('g.workspace_id', '=', 'f.workspace_id')
+                    .onRef('g.hub_id', '=', 'f.id')
+                    .on('g.principal_id', '=', me.id),
+                )
+                .selectAll('f')
+                .select('g.hub_role')
+                .where('f.workspace_id', '=', workspaceId)
+                .where('f.parent_id', 'is', null)
+            const after = cursor ? decodeCursor(nameCursorSchema, cursor) : null
+            const rows = await scoped(request, (trx) => {
+              let sel = q(trx)
+              if (!listAll) sel = sel.where('g.principal_id', 'is not', null)
+              if (after) sel = sel.where(sql<boolean>`(f.name, f.id) > (${after[0]}, ${after[1]})`)
+              return sel
+                .orderBy('f.name')
+                .orderBy('f.id')
+                .limit(limit + 1)
+                .execute()
+            })
             const hubs = rows.map(({ hub_role, ...row }): HubListEntry => {
               const hubRole = effectiveHubRole(me, hub_role)
               if (hubRole) return { ...toFolder(row), access: 'granted', hubRole }
@@ -231,163 +250,200 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/hubs', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createHubSchema, request.body)
-            const hub = await createHub(db, workspaceId, request.principal, body)
+            const hub = await scoped(request, (trx) =>
+              createHub(trx, workspaceId, request.principal, body),
+            )
             return reply.status(201).send(hub)
           })
 
           ws.put('/hubs/:hubId/grants/:principalId', async (request) => {
             const { workspaceId, hubId, principalId } = parse(grantParams, request.params)
             const { hubRole } = parse(setHubGrantSchema, request.body)
-            return setHubGrant(db, workspaceId, request.principal, hubId, principalId, hubRole)
+            return scoped(request, (trx) =>
+              setHubGrant(trx, workspaceId, request.principal, hubId, principalId, hubRole),
+            )
           })
 
           ws.delete('/hubs/:hubId/grants/:principalId', async (request, reply) => {
             const { workspaceId, hubId, principalId } = parse(grantParams, request.params)
-            await revokeHubGrant(db, workspaceId, request.principal, hubId, principalId)
+            await scoped(request, (trx) =>
+              revokeHubGrant(trx, workspaceId, request.principal, hubId, principalId),
+            )
             return reply.status(204).send()
           })
 
           ws.get('/members', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const query = parse(pageQuerySchema, request.query)
-            return listMembers(db, workspaceId, request.principal, query)
+            return scoped(request, (trx) => listMembers(trx, workspaceId, request.principal, query))
           })
 
           ws.patch('/members/:principalId', async (request) => {
             const { workspaceId, principalId } = parse(memberParams, request.params)
             const { workspaceRole } = parse(changeMemberRoleSchema, request.body)
-            return changeMemberRole(db, workspaceId, request.principal, principalId, workspaceRole)
+            // Non-managers are refused before the transaction (#71 review): no owner rows locked.
+            requireMemberManager(request.principal)
+            return scoped(request, (trx) =>
+              changeMemberRole(trx, workspaceId, request.principal, principalId, workspaceRole),
+            )
           })
 
           ws.delete('/members/:principalId', async (request, reply) => {
             const { workspaceId, principalId } = parse(memberParams, request.params)
-            await removeMember(db, workspaceId, request.principal, principalId)
+            requireMemberManager(request.principal)
+            await scoped(request, (trx) =>
+              removeMember(trx, workspaceId, request.principal, principalId),
+            )
             return reply.status(204).send()
           })
 
           ws.get('/hubs/:hubId', async (request): Promise<HubDescription> => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
-            const hubRole = await checkHub(
-              db,
-              workspaceId,
-              request.principal,
-              hubId,
-              'hub.read',
-              'Hub',
-            )
-            const folders = await db
-              .selectFrom('folder')
-              .selectAll()
-              .where('workspace_id', '=', workspaceId)
-              .where('hub_id', '=', hubId)
-              .orderBy(sql`parent_id IS NULL`, 'desc')
-              .orderBy('name')
-              .orderBy('id')
-              .limit(maxHubEntries + 2)
-              .execute()
-            const hub = folders[0]
-            if (hub?.id !== hubId) throw notFound('Hub')
-            const [attributes, folderAttributes] = await Promise.all([
-              db
-                .selectFrom('attribute')
+            return scoped(request, async (db) => {
+              const hubRole = await checkHub(
+                db,
+                workspaceId,
+                request.principal,
+                hubId,
+                'hub.read',
+                'Hub',
+              )
+              const folders = await db
+                .selectFrom('folder')
                 .selectAll()
                 .where('workspace_id', '=', workspaceId)
                 .where('hub_id', '=', hubId)
+                .orderBy(sql`parent_id IS NULL`, 'desc')
                 .orderBy('name')
                 .orderBy('id')
-                .limit(maxHubEntries + 1)
-                .execute(),
-              db
-                .selectFrom('folder_attribute')
-                .selectAll()
-                .where('workspace_id', '=', workspaceId)
-                .where('hub_id', '=', hubId)
-                .orderBy('folder_id')
-                .orderBy('position')
-                .limit(faCap + 1)
-                .execute(),
-            ])
-            // Each list is fetched with one extra row, which only says whether it was cut off.
-            const subfolders = folders.slice(1)
-            return {
-              hub: toFolder(hub),
-              hubRole,
-              folders: subfolders.slice(0, maxHubEntries).map(toFolder),
-              attributes: attributes.slice(0, maxHubEntries).map(toAttribute),
-              folderAttributes: folderAttributes.slice(0, faCap).map(toFolderAttribute),
-              truncated: {
-                folders: subfolders.length > maxHubEntries,
-                attributes: attributes.length > maxHubEntries,
-                folderAttributes: folderAttributes.length > faCap,
-              },
-            }
+                .limit(maxHubEntries + 2)
+                .execute()
+              const hub = folders[0]
+              if (hub?.id !== hubId) throw notFound('Hub')
+              const [attributes, folderAttributes] = await Promise.all([
+                db
+                  .selectFrom('attribute')
+                  .selectAll()
+                  .where('workspace_id', '=', workspaceId)
+                  .where('hub_id', '=', hubId)
+                  .orderBy('name')
+                  .orderBy('id')
+                  .limit(maxHubEntries + 1)
+                  .execute(),
+                db
+                  .selectFrom('folder_attribute')
+                  .selectAll()
+                  .where('workspace_id', '=', workspaceId)
+                  .where('hub_id', '=', hubId)
+                  .orderBy('folder_id')
+                  .orderBy('position')
+                  .limit(faCap + 1)
+                  .execute(),
+              ])
+              // Each list is fetched with one extra row, which only says whether it was cut off.
+              const subfolders = folders.slice(1)
+              return {
+                hub: toFolder(hub),
+                hubRole,
+                folders: subfolders.slice(0, maxHubEntries).map(toFolder),
+                attributes: attributes.slice(0, maxHubEntries).map(toAttribute),
+                folderAttributes: folderAttributes.slice(0, faCap).map(toFolderAttribute),
+                truncated: {
+                  folders: subfolders.length > maxHubEntries,
+                  attributes: attributes.length > maxHubEntries,
+                  folderAttributes: folderAttributes.length > faCap,
+                },
+              }
+            })
           })
 
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const query = parse(itemQuerySchema, request.body)
-            const hubId = await folderHub(db, workspaceId, query.from)
-            await checkHub(db, workspaceId, request.principal, hubId, 'hub.read', 'Folder')
-            return queryItems(db, workspaceId, request.principal, query, { maxLinkedItems })
+            return scoped(request, async (trx) => {
+              const hubId = await folderHub(trx, workspaceId, query.from)
+              await checkHub(trx, workspaceId, request.principal, hubId, 'hub.read', 'Folder')
+              return queryItems(trx, workspaceId, request.principal, query, { maxLinkedItems })
+            })
           })
 
+          // Item writes check the caller's grant in the write's own transaction and hold it
+          // (FOR SHARE) until commit, so a revoke can't land between the check and the write.
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createItemSchema, request.body)
-            const hubId = await folderHub(db, workspaceId, body.folderId)
-            await checkHub(db, workspaceId, request.principal, hubId, 'item.write', 'Folder')
-            const item = await createItem(db, workspaceId, request.principal.id, body)
+            const item = await scoped(request, async (trx) => {
+              const hubId = await folderHub(trx, workspaceId, body.folderId)
+              await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Folder')
+              return createItem(trx, workspaceId, request.principal.id, body)
+            })
             return reply.status(201).send(item)
           })
 
           ws.get('/items/:itemId', async (request): Promise<ItemRead> => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { expand } = parse(getItemQuerySchema, request.query)
-            const item = await getItem(db, workspaceId, itemId)
-            await checkHub(db, workspaceId, request.principal, item.hubId, 'hub.read', 'Item')
-            if (expand.length === 0) return item
-            return expandItem(db, workspaceId, request.principal, item, expand, { maxLinkedItems })
+            return scoped(request, async (trx) => {
+              const item = await getItem(trx, workspaceId, itemId)
+              await checkHub(trx, workspaceId, request.principal, item.hubId, 'hub.read', 'Item')
+              if (expand.length === 0) return item
+              return expandItem(trx, workspaceId, request.principal, item, expand, {
+                maxLinkedItems,
+              })
+            })
           })
 
           ws.get('/items/:itemId/backlinks', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const page = parse(pageQuerySchema, request.query)
-            return backlinks(db, workspaceId, request.principal, itemId, page, maxHiddenBacklinks)
+            return scoped(request, (trx) =>
+              backlinks(trx, workspaceId, request.principal, itemId, page, maxHiddenBacklinks),
+            )
           })
 
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            const hubId = await itemHub(db, workspaceId, itemId)
-            await checkHub(db, workspaceId, request.principal, hubId, 'item.write', 'Item')
-            return patchItem(db, workspaceId, request.principal.id, itemId, body)
+            return scoped(request, async (trx) => {
+              const hubId = await itemHub(trx, workspaceId, itemId)
+              await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
+              return patchItem(trx, workspaceId, request.principal.id, itemId, body)
+            })
           })
 
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { version } = parse(deleteItemQuerySchema, request.query)
-            const hubId = await itemHub(db, workspaceId, itemId)
-            await checkHub(db, workspaceId, request.principal, hubId, 'item.write', 'Item')
-            await deleteItem(db, workspaceId, request.principal.id, itemId, version)
+            await scoped(request, async (trx) => {
+              const hubId = await itemHub(trx, workspaceId, itemId)
+              await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
+              await deleteItem(trx, workspaceId, request.principal.id, itemId, version)
+            })
             return reply.status(204).send()
           })
 
           ws.post('/hubs/:hubId/agent-keys', async (request, reply) => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             const body = parse(createAgentKeySchema, request.body)
-            const created = await createAgentKey(db, workspaceId, request.principal, hubId, body)
+            const created = await scoped(request, (trx) =>
+              createAgentKey(trx, workspaceId, request.principal, hubId, body),
+            )
             return reply.status(201).header('cache-control', 'no-store').send(created)
           })
 
           ws.get('/hubs/:hubId/agent-keys', async (request) => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             const query = parse(pageQuerySchema, request.query)
-            return listAgentKeys(db, workspaceId, request.principal, hubId, query)
+            return scoped(request, (trx) =>
+              listAgentKeys(trx, workspaceId, request.principal, hubId, query),
+            )
           })
 
           ws.post('/agent-keys/:keyId/revoke', async (request) => {
             const { workspaceId, keyId } = parse(keyParams, request.params)
-            return revokeAgentKey(db, workspaceId, request.principal, keyId)
+            return scoped(request, (trx) =>
+              revokeAgentKey(trx, workspaceId, request.principal, keyId),
+            )
           })
 
           wsDone()

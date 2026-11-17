@@ -24,6 +24,7 @@ import { sql, type Kysely, type RawBuilder, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { allReadableHubs, loadSubject, readableHubs } from './access.ts'
 import type { Database } from './db/database.ts'
+import { inTransaction, isScoped } from './db/scope.ts'
 import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
 import { toAttribute, toItem } from './mappers.ts'
 
@@ -42,6 +43,9 @@ export type RevisionPatch =
 /** Postgres NOTIFY channel. The payload is `<workspaceId>:<seq>`, read by the M3 change feed. */
 export const REVISION_CHANNEL = 'revision'
 
+/** UNIQUE (workspace_id, item_id, version) on revision (0001): an item ID is never reused. */
+const REVISION_VERSION_KEY = 'revision_workspace_id_item_id_version_key'
+
 // Lock order inside write transactions, to rule out deadlocks: item rows, then hub row, then
 // folder row, then workspace row (for the revision seq). Patch and delete lock the existing item
 // row first. Create locks the hub row (next_seq), the hub and folder rows (counts), then inserts
@@ -57,6 +61,7 @@ export const REVISION_CHANNEL = 'revision'
 async function appendRevision(
   trx: Trx,
   workspaceId: string,
+  hubId: string,
   itemId: string,
   version: number,
   patch: RevisionPatch,
@@ -74,6 +79,7 @@ async function appendRevision(
       workspace_id: workspaceId,
       seq,
       item_id: itemId,
+      hub_id: hubId,
       version,
       patch: JSON.stringify(patch),
       actor,
@@ -181,20 +187,30 @@ async function checkTargets(
 ): Promise<ItemValues> {
   const ids = [...new Set(relations.flatMap((a) => linkedIds(values, a)))].sort()
   if (ids.length === 0) return values
-  const rows = await trx
-    .selectFrom('item')
-    .select(['id', 'hub_id'])
-    .where('workspace_id', '=', workspaceId)
-    .where('id', 'in', ids)
-    .orderBy('id')
-    .forKeyShare()
-    .execute()
+  // In a request, through lock_link_targets (migration 0008): row-level security hides items
+  // in hubs the writer can't read, but a stored link to one is kept, so its existence is
+  // needed. Its hub comes back null. Seeds and imports run as the owner, outside RLS, and read
+  // the table.
+  const rows: { id: string; hub_id: string | null }[] = isScoped(trx)
+    ? (
+        await sql<{ id: string; hub_id: string | null }>`
+          SELECT id, hub_id FROM lock_link_targets(${ids}::text[])
+        `.execute(trx)
+      ).rows
+    : await trx
+        .selectFrom('item')
+        .select(['id', 'hub_id'])
+        .where('workspace_id', '=', workspaceId)
+        .where('id', 'in', ids)
+        .orderBy('id')
+        .forKeyShare()
+        .execute()
   const hubOf = new Map(rows.map((r) => [r.id, r.hub_id]))
   const readable = await readableHubs(
     trx,
     workspaceId,
     await loadSubject(trx, workspaceId, actor),
-    rows.map((r) => r.hub_id),
+    rows.flatMap((r) => (r.hub_id === null ? [] : [r.hub_id])),
   )
 
   const errors: ValueError[] = []
@@ -208,8 +224,11 @@ async function checkTargets(
         errors.push({ attributeId: attribute.id, code: 'invalid_value', message })
       if (hub === undefined) {
         if (!before.has(id)) fail(`Item "${id}" not found`)
-      } else if (!before.has(id) && !readable.has(hub)) {
+      } else if (!before.has(id) && (hub === null || !readable.has(hub))) {
         fail(`Item "${id}" not found`)
+      } else if (hub === null) {
+        // Stored, but in a hub the writer can't read: it was checked when it was stored, and
+        // items never move between hubs.
       } else if (hub !== attribute.hubId && !attribute.config.crossHub) {
         fail(`Item "${id}" is in another hub, and this relation does not allow cross-hub links`)
       } else if (hub !== attribute.config.targetHubId) {
@@ -328,7 +347,7 @@ export async function createItem(
   const relations = touchedRelations(definitions, values)
   const autoIds = definitions.map((d) => d.attribute).filter((a) => a.type === 'auto_id')
 
-  return db.transaction().execute(async (trx) => {
+  return inTransaction(db, async (trx) => {
     // History outlives a deleted item, so an ID is never reused, even after a delete.
     const used = await trx
       .selectFrom('revision')
@@ -372,14 +391,24 @@ export async function createItem(
 
     await writeIndex(trx, workspaceId, id, definitions, stored, false)
     await writeLinks(trx, workspaceId, id, relations, stored, false)
-    await appendRevision(
-      trx,
-      workspaceId,
-      id,
-      row.version,
-      { op: 'create', folderId: folder.id, values: stored },
-      actor,
-    )
+    try {
+      await appendRevision(
+        trx,
+        workspaceId,
+        folder.hub_id,
+        id,
+        row.version,
+        { op: 'create', folderId: folder.id, values: stored },
+        actor,
+      )
+    } catch (error) {
+      // The ID belonged to an item since deleted in a hub the writer can't read, so the check
+      // above could not see its history (row-level security). Still never reused.
+      if ((error as { constraint?: string }).constraint === REVISION_VERSION_KEY) {
+        throw new HttpError('id_taken', 'This item ID is already used')
+      }
+      throw error
+    }
     return toItem(row)
   })
 }
@@ -396,7 +425,7 @@ export async function patchItem(
   const validated = validate(definitions, input.values, true)
   const relations = touchedRelations(definitions, validated)
 
-  return db.transaction().execute(async (trx) => {
+  return inTransaction(db, async (trx) => {
     // NO KEY UPDATE, like the UPDATE below, so writers linking to this item are not blocked.
     const current = await trx
       .selectFrom('item')
@@ -432,7 +461,15 @@ export async function patchItem(
 
     await writeLinks(trx, workspaceId, id, relations, patch, true)
     await writeIndex(trx, workspaceId, id, definitions, patch, true)
-    await appendRevision(trx, workspaceId, id, row.version, { op: 'update', values: patch }, actor)
+    await appendRevision(
+      trx,
+      workspaceId,
+      row.hub_id,
+      id,
+      row.version,
+      { op: 'update', values: patch },
+      actor,
+    )
     return toItem(row)
   })
 }
@@ -444,7 +481,7 @@ export async function deleteItem(
   id: string,
   version: number,
 ): Promise<void> {
-  await db.transaction().execute(async (trx) => {
+  await inTransaction(db, async (trx) => {
     const row = await trx
       .deleteFrom('item')
       .where('workspace_id', '=', workspaceId)
@@ -455,10 +492,13 @@ export async function deleteItem(
     if (!row) throw conflict(await getItem(trx, workspaceId, id))
 
     // item_index rows and links from and to the item go with it (ON DELETE CASCADE). Relation
-    // values in other items keep the ID; with no link left, readers treat it as gone.
+    // values in other items keep the ID; with no link left, readers treat it as gone. The
+    // DELETE comes first: other writers hold links to this item while they wait for the hub,
+    // folder or workspace row, so cascading after taking those could deadlock. The delete
+    // revision is checked against the deleted item by revision_guard (migration 0008).
     await bumpCounts(trx, workspaceId, row.hub_id, row.folder_id, -1)
     // The delete is the item's last version, so `(item_id, version)` stays unique in the log.
-    await appendRevision(trx, workspaceId, id, row.version + 1, { op: 'delete' }, actor)
+    await appendRevision(trx, workspaceId, row.hub_id, id, row.version + 1, { op: 'delete' }, actor)
   })
 }
 
@@ -671,36 +711,44 @@ async function linkedItems(
   cap: number,
 ): Promise<{ linked: Record<string, LinkedItem>; truncated: boolean }> {
   if (fromIds.length === 0) return { linked: {}, truncated: false }
-  const rows = await db
-    .selectFrom('item')
-    .selectAll()
+  // A link row exists only while its target does (ON DELETE CASCADE), so the targets come from
+  // `link`; the items themselves are read only where the caller may. Under row-level security
+  // the others are not even visible, and they become "no access".
+  const targets = await db
+    .selectFrom('link')
+    .select('to_item')
+    .distinct()
     .where('workspace_id', '=', workspaceId)
-    .where('id', 'in', (qb) =>
-      qb
-        .selectFrom('link')
-        .select('to_item')
-        .where('workspace_id', '=', workspaceId)
-        .where('from_item', 'in', fromIds)
-        .where('attribute_id', 'in', attributeIds),
-    )
-    .orderBy('id')
+    .where('from_item', 'in', fromIds)
+    .where('attribute_id', 'in', attributeIds)
+    .orderBy('to_item')
     .limit(cap + 1)
     .execute()
-  const shown = rows.slice(0, cap)
+  const shown = targets.slice(0, cap).map((t) => t.to_item)
+  const rows =
+    shown.length === 0
+      ? []
+      : await db
+          .selectFrom('item')
+          .selectAll()
+          .where('workspace_id', '=', workspaceId)
+          .where('id', 'in', shown)
+          .execute()
   const readable = await readableHubs(
     db,
     workspaceId,
     actor,
-    shown.map((r) => r.hub_id),
+    rows.map((r) => r.hub_id),
   )
+  const byId = new Map(rows.filter((r) => readable.has(r.hub_id)).map((r) => [r.id, r]))
   return {
     linked: Object.fromEntries(
-      shown.map((row): [string, LinkedItem] => [
-        row.id,
-        readable.has(row.hub_id) ? { access: 'read', item: toItem(row) } : { access: 'none' },
-      ]),
+      shown.map((id): [string, LinkedItem] => {
+        const row = byId.get(id)
+        return [id, row ? { access: 'read', item: toItem(row) } : { access: 'none' }]
+      }),
     ),
-    truncated: rows.length > cap,
+    truncated: targets.length > cap,
   }
 }
 
@@ -792,16 +840,7 @@ export async function backlinks(
       .orderBy('l.attribute_id')
       .limit(page.limit + 1)
       .execute(),
-    db
-      .selectFrom(
-        linking()
-          .select(sql<number>`1`.as('one'))
-          .where('i.hub_id', 'not in', readable)
-          .limit(maxHidden)
-          .as('h'),
-      )
-      .select((eb) => eb.fn.countAll<string>().as('n'))
-      .executeTakeFirstOrThrow(),
+    hiddenBacklinks(db, id, maxHidden),
   ])
   const shown = rows.slice(0, page.limit)
   const last = shown.at(-1)
@@ -812,8 +851,20 @@ export async function backlinks(
     })),
     nextCursor:
       rows.length > page.limit && last ? encodeCursor([last.id, last.link_attribute_id]) : null,
-    hidden: Number(hidden.n),
+    hidden,
   }
+}
+
+/**
+ * Links to `id` from items the caller can't read, up to `maxHidden`. Row-level security hides
+ * those items and their links, so the count comes from `hidden_backlinks` (migration 0008),
+ * which returns a number only. Request-scoped only: it reads the caller from the transaction.
+ */
+async function hiddenBacklinks(db: Db, id: string, maxHidden: number): Promise<number> {
+  const { rows } = await sql<{ n: number }>`
+    SELECT hidden_backlinks(${id}, ${maxHidden}) AS n
+  `.execute(db)
+  return rows[0]?.n ?? 0
 }
 
 /**

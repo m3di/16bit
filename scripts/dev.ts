@@ -49,8 +49,18 @@ function canConnect(host: string, port: number): Promise<boolean> {
   })
 }
 
-function run(args: string[]): ChildProcess {
-  return spawn('pnpm', args, { cwd: root, stdio: 'inherit' })
+/**
+ * The environment for the API and web dev servers: everything but the owner's URL, which only
+ * migrations and seeds may hold (#44). Empty rather than deleted: the API's `dev` script loads
+ * .env with --env-file-if-exists, which never overrides a variable that is already set, so a
+ * deleted one would come straight back from .env.
+ */
+export function serverEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, MIGRATION_DATABASE_URL: '' }
+}
+
+function run(args: string[], env: NodeJS.ProcessEnv = process.env): ChildProcess {
+  return spawn('pnpm', args, { cwd: root, stdio: 'inherit', env })
 }
 
 function exitCode(child: ChildProcess): Promise<number> {
@@ -65,9 +75,11 @@ async function main(): Promise<void> {
   if (ensureEnvFile(root)) console.log('dev: created .env from .env.example')
   process.loadEnvFile(`${root}/.env`)
 
+  // DATABASE_URL is the API's role, under row-level security; migrations run as the owner of
+  // the tables (#44). A .env from before that has only DATABASE_URL: copy both from .env.example.
   const databaseUrl = process.env['DATABASE_URL']
-  if (!databaseUrl) {
-    console.error('dev: DATABASE_URL is not set. See .env.example.')
+  if (!databaseUrl || !process.env['MIGRATION_DATABASE_URL']) {
+    console.error('dev: DATABASE_URL and MIGRATION_DATABASE_URL must be set. See .env.example.')
     process.exit(1)
   }
 
@@ -100,7 +112,10 @@ async function main(): Promise<void> {
   if (migrated !== 0) process.exit(migrated)
   if (state.stopping) process.exit(0)
 
-  child = run(['--parallel', '--filter', '@16bit/api', '--filter', '@16bit/web', 'dev'])
+  child = run(
+    ['--parallel', '--filter', '@16bit/api', '--filter', '@16bit/web', 'dev'],
+    serverEnv(process.env),
+  )
   process.exit(await exitCode(child))
 }
 

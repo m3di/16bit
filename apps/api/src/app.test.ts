@@ -22,6 +22,8 @@ import { encodeCursor } from './http.ts'
 const ACTOR = 'dev-owner'
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
 let auth: { cookie: string }
@@ -30,14 +32,16 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
   auth = await sessionCookie(db, ACTOR)
-  app = buildApp({ db })
+  app = buildApp({ db: appDb })
 })
 
 afterEach(async () => {
   await app.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })
@@ -249,7 +253,7 @@ describe('workspaces and hubs', () => {
       return hubDescriptionSchema.parse(res.json())
     }
     await app.close()
-    app = buildApp({ db, maxHubEntries: 1 })
+    app = buildApp({ db: appDb, maxHubEntries: 1 })
     // build has 1 subfolder, 3 attributes and 4 folder attributes: only attributes exceed 1.
     const atCap = await describeBuild()
     expect(atCap.folders).toHaveLength(1)

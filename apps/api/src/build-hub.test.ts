@@ -472,7 +472,7 @@ async function waitForLockWait(): Promise<void> {
 describe('seed:build-hub', () => {
   it('refuses to run with NODE_ENV=production unless --force is passed', async () => {
     const script = fileURLToPath(new URL('./seed-build-hub.ts', import.meta.url))
-    // No DATABASE_URL: the guard must fire before anything else, so nothing can be written.
+    // No MIGRATION_DATABASE_URL: the guard must fire before anything else, so nothing is written.
     const env = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' }
     const run = async (args: string[]): Promise<{ code: unknown; stderr: string }> => {
       try {
@@ -488,6 +488,6 @@ describe('seed:build-hub', () => {
     expect(refused.stderr).toContain('NODE_ENV=production')
     const forced = await run(['--force'])
     expect(forced.code).toBe(1)
-    expect(forced.stderr).toContain('DATABASE_URL is not set')
+    expect(forced.stderr).toContain('MIGRATION_DATABASE_URL is not set')
   }, 30_000)
 })

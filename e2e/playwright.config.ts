@@ -48,6 +48,8 @@ export default defineConfig({
         {
           name: 'api',
           command: 'pnpm --filter @16bit/api start',
+          // The API never holds the owner's URL (#44). .env, loaded above, has it locally.
+          env: { MIGRATION_DATABASE_URL: '' },
           // /health also checks the database, so the suite starts only once Postgres answers.
           url: `${apiUrl}/health`,
           reuseExistingServer: !ci,

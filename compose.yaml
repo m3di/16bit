@@ -9,7 +9,7 @@ services:
   db:
     image: postgres:18.7-alpine3.24
     environment:
-      # Local-only credentials, matching DATABASE_URL in .env.example.
+      # Local-only credentials, matching MIGRATION_DATABASE_URL in .env.example.
       POSTGRES_USER: sixteenbit
       POSTGRES_PASSWORD: sixteenbit
       POSTGRES_DB: sixteenbit
@@ -32,7 +32,10 @@ services:
     pull_policy: never
     command: ['node', 'src/migrate.ts']
     environment:
-      DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
+      # Migrations run as the owner, then create the API's login role from DATABASE_URL (#44).
+      # Seeds run here too, as the owner (see the app service).
+      MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
+      DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@db:5432/sixteenbit
     depends_on:
       db:
         condition: service_healthy
@@ -41,7 +44,10 @@ services:
     image: 16bit:local
     build: .
     environment:
-      DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
+      # The API's role, under row-level security (#44). Never the owner: the app gets no
+      # MIGRATION_DATABASE_URL. Seed with the migrate service, which has it:
+      #   docker compose run --rm migrate node src/seed.ts --force
+      DATABASE_URL: postgres://sixteenbit_api:sixteenbit_api@db:5432/sixteenbit
       # The image runs with NODE_ENV=production, where the API refuses the seeds' published
       # password. This local stack opts back in, which is safe only because the port below is
       # bound to 127.0.0.1. Never set this on a deployment.

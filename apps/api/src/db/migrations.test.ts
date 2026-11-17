@@ -111,6 +111,7 @@ describe('migrations', () => {
       '0005_agent_key_lookup',
       '0006_link',
       '0007_principal_removed',
+      '0008_row_level_security',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -189,6 +190,7 @@ describe('schema constraints', () => {
         workspace_id: 'w1',
         seq: 1,
         item_id: 'i1',
+        hub_id: 'h1',
         version: 1,
         patch: JSON.stringify({ a1: 'hello' }),
         actor: 'p1',
@@ -341,7 +343,7 @@ describe('schema constraints', () => {
   })
 
   it('rejects a duplicate revision seq in a workspace', async () => {
-    const rev = { workspace_id: 'w1', seq: 1, patch: '{}', actor: 'p1', cause: null }
+    const rev = { workspace_id: 'w1', seq: 1, hub_id: 'h1', patch: '{}', actor: 'p1', cause: null }
     await db
       .insertInto('revision')
       .values({ ...rev, item_id: 'i1', version: 1 })
@@ -722,5 +724,38 @@ describe('0007_principal_removed', () => {
     expect(String(error)).toMatch(/removed members/)
     await db.updateTable('principal').set({ removed_at: null }).where('id', '=', 'p1').execute()
     expect((await migrator().migrateTo('0006_link')).error).toBeUndefined()
+  })
+})
+
+describe('0008_row_level_security', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+
+  it('gives every existing revision its hub, a deleted item’s from its create revision', async () => {
+    expect((await migrator().migrateTo('0007_principal_removed')).error).toBeUndefined()
+    await seedHub()
+    await sql`
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, updated_by)
+        VALUES ('w1', 'live', 'h1', 'f1', 1, 'p1');
+      INSERT INTO revision (workspace_id, seq, item_id, version, patch, actor) VALUES
+        ('w1', 1, 'live', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1'),
+        ('w1', 2, 'gone', 1, '{"op":"create","folderId":"h2","values":{}}', 'p1'),
+        ('w1', 3, 'gone', 2, '{"op":"delete"}', 'p1');
+    `.execute(db)
+
+    expect((await migrator().migrateTo('0008_row_level_security')).error).toBeUndefined()
+    const rows = await db.selectFrom('revision').select(['seq', 'hub_id']).orderBy('seq').execute()
+    expect(rows).toEqual([
+      { seq: 1, hub_id: 'h1' },
+      { seq: 2, hub_id: 'h2' },
+      { seq: 3, hub_id: 'h2' },
+    ])
+
+    expect((await migrator().migrateTo('0007_principal_removed')).error).toBeUndefined()
+    const { rows: rls } = await sql<{ n: number }>`
+      SELECT count(*)::int AS n FROM pg_class
+      WHERE relnamespace = 'public'::regnamespace AND relrowsecurity
+    `.execute(db)
+    expect(rls[0]?.n).toBe(0)
   })
 })

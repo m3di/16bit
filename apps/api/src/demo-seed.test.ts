@@ -29,6 +29,8 @@ import { hashAgentSecret } from './auth/agent-key.ts'
 const ACTOR = DEV_OWNER.id
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
 /** The dev owner, signed in with the development password. */
@@ -39,14 +41,16 @@ beforeAll(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   first = await applySeed(db)
-  app = buildApp({ db })
+  app = buildApp({ db: appDb })
   auth = await signIn(DEV_OWNER.email)
 }, 120_000)
 
 afterAll(async () => {
   await app.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })
@@ -432,7 +436,7 @@ describe('demo seed', () => {
 
   it('refuses to run with NODE_ENV=production unless --force is passed', async () => {
     const script = fileURLToPath(new URL('./seed.ts', import.meta.url))
-    // No DATABASE_URL: the guard must fire before anything else, so nothing can be written.
+    // No MIGRATION_DATABASE_URL: the guard must fire before anything else, so nothing can be written.
     const env = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' }
     const run = async (args: string[]): Promise<{ code: unknown; stderr: string }> => {
       try {
@@ -448,16 +452,16 @@ describe('demo seed', () => {
     expect(refused.stderr).toContain('NODE_ENV=production')
     const forced = await run(['--force'])
     expect(forced.code).toBe(1)
-    expect(forced.stderr).toContain('DATABASE_URL is not set')
+    expect(forced.stderr).toContain('MIGRATION_DATABASE_URL is not set')
   }, 30_000)
 
   it('gets --force from `pnpm seed` through the root and filtered scripts', async () => {
     const root = fileURLToPath(new URL('../../..', import.meta.url))
     // Under `pnpm test`, npm_execpath is the pnpm running the tests.
     const pnpm = process.env['npm_execpath'] ?? 'pnpm'
-    // DATABASE_URL is set but empty, so the scripts' --env-file-if-exists cannot fill it in from
-    // a local .env: the seed must stop at the URL check and can never reach a database.
-    const env = { ...process.env, NODE_ENV: 'production', DATABASE_URL: '' }
+    // MIGRATION_DATABASE_URL is set but empty, so the scripts' --env-file-if-exists cannot fill
+    // it in from a local .env: the seed must stop at the URL check and can never reach a database.
+    const env = { ...process.env, NODE_ENV: 'production', MIGRATION_DATABASE_URL: '' }
     const run = async (args: string[]): Promise<string> => {
       try {
         await promisify(execFile)(pnpm, args, { cwd: root, env })
@@ -471,7 +475,7 @@ describe('demo seed', () => {
       ['--filter', '@16bit/api', 'seed', '--force'],
     ]) {
       const stderr = await run(args)
-      expect(stderr, args.join(' ')).toContain('DATABASE_URL is not set')
+      expect(stderr, args.join(' ')).toContain('MIGRATION_DATABASE_URL is not set')
       expect(stderr, args.join(' ')).not.toContain('refusing to run')
     }
     expect(await run(['seed'])).toContain('refusing to run with NODE_ENV=production')

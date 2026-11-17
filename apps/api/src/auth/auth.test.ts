@@ -24,6 +24,8 @@ const PASSWORD = 'correct horse battery'
 const crossSite = { 'sec-fetch-site': 'cross-site' }
 
 let db: Kysely<Database>
+/** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
+let appDb: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
 let passwordHash: string
@@ -36,6 +38,7 @@ beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
+  appDb = createDb(test.appUrl)
   await migrateToLatest(db)
   await seed()
   app = build()
@@ -43,11 +46,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close()
+  await appDb.destroy()
   await db.destroy()
   await drop()
 })
 
-const build = (options: Partial<AppOptions> = {}) => buildApp({ db, ...options })
+const build = (options: Partial<AppOptions> = {}) => buildApp({ db: appDb, ...options })
 
 /**
  * w1 "Alpha": alice owner, bob admin, carol member, plus the dev owner.
