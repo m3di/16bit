@@ -1,5 +1,6 @@
 import { sql, type Transaction } from 'kysely'
 import type { Database, HubGrantTable } from './db/database.ts'
+import { HttpError } from './http.ts'
 
 /**
  * Appends to `access_log` (D48), taking `seq` from `workspace.next_access_seq`. Call it in the
@@ -28,9 +29,10 @@ export async function appendAccessLog(
     .where('id', '=', entry.actor)
     .forKeyShare()
     // No row means RLS hid the actor (removed, or no longer an admin): the lock would be a no-op
-    // and the #92 deadlock could come back, so stop here with a clear error.
+    // and the #92 deadlock could come back, so stop here. The actor lost the right to make this
+    // change while it was in flight, so it is a 403, not a 500 (#96).
     .executeTakeFirstOrThrow(
-      () => new Error(`appendAccessLog: actor ${entry.actor} cannot be locked (#92)`),
+      () => new HttpError('forbidden', 'Your role does not allow this action'),
     )
   const { seq } = await trx
     .updateTable('workspace')

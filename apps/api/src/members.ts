@@ -25,12 +25,13 @@ import { toFolder } from './mappers.ts'
 // Lock order for every access change (#92): members, grants and hubs here, agent keys, invites,
 // and redeem_invite (migration 0004). Each takes, in this order:
 //
-//   1. principal rows: the owners in ID order (member changes), then the target. FOR NO KEY
-//      UPDATE or FOR SHARE, never FOR UPDATE: every foreign key to principal (access_log.actor,
-//      revision.actor, item.updated_by, hub_grant, invite, agent_key) takes FOR KEY SHARE, which
-//      only FOR UPDATE blocks. A writer that already holds the workspace row and then inserts
-//      its log or revision row must never wait on a principal lock held by someone who is
-//      waiting for that workspace row.
+//   1. principal rows: the owners in ID order (member changes), then the target; createHub
+//      takes its actor here instead (#96). FOR NO KEY UPDATE or FOR SHARE, never FOR UPDATE:
+//      every foreign key to principal (access_log.actor, revision.actor, item.updated_by,
+//      hub_grant, invite, agent_key) takes FOR KEY SHARE, which only FOR UPDATE blocks. A
+//      writer that already holds the workspace row and then inserts its log or revision row
+//      must never wait on a principal lock held by someone who is waiting for that workspace
+//      row.
 //   2. hub_grant, invite and agent_key rows.
 //   3. removeMember only: the target's row again, now FOR UPDATE. That lock is the one the
 //      `UPDATE principal SET account_id = null` takes implicitly, because clearing account_id
@@ -179,10 +180,17 @@ export async function changeMemberRole(
 }
 
 /**
- * Removes a member by deactivating their principal (#43): their hub grants are revoked, their
- * unused invites expire, `account_id` is cleared so the account can no longer act in this
- * workspace, and `removed_at` is set. The row stays so history keeps its actor. Agent keys they
- * created stay until revoked (docs/ROLES.md).
+ * Removes a member by deactivating their principal (#43), in this order (the lock order at the
+ * top of this file): their hub grants are revoked, then `account_id` is cleared so the account
+ * can no longer act in this workspace and `removed_at` is set, then their unused invites expire.
+ * The row stays so history keeps its actor. Agent keys they created stay until revoked
+ * (docs/ROLES.md).
+ *
+ * Grants are deleted once, before the principal UPDATE, never again after it: a grant only
+ * visible there could be held FOR SHARE by the member's own item write, which then waits on the
+ * member's row, and that deadlocks (#96). A grant the member gives themselves concurrently
+ * can't be missed instead: createHub, and setHubGrant through grantTarget, lock the member FOR
+ * SHARE first, so lockForMemberChange waits for them, or they find the member removed.
  */
 export async function removeMember(
   db: Db,
@@ -337,7 +345,16 @@ export async function revokeHubGrant(
   })
 }
 
-/** Creates a hub. The creator becomes its hub admin in the same transaction (docs/ROLES.md). */
+/**
+ * Creates a hub. The creator becomes its hub admin in the same transaction (docs/ROLES.md).
+ *
+ * The creator is locked FOR SHARE first, step 1 of the lock order (#96), against a concurrent
+ * removeMember of the creator. If this lock comes first, the removal waits at its lock on the
+ * target, and its grant DELETE then sees the new grant. If the removal's comes first, this lock
+ * waits for it, finds the creator removed, and the creation gets 403. FOR KEY SHARE would not
+ * do: it doesn't conflict with the removal's NO KEY UPDATE, so the removal's DELETE could run
+ * before the new grant is visible and miss it.
+ */
 export async function createHub(
   db: Db,
   workspaceId: string,
@@ -347,6 +364,17 @@ export async function createHub(
   enforce(can(actor, 'hub.create'), 'Hub')
   const id = input.id ?? randomUUID()
   return inTransaction(db, async (trx) => {
+    // `removed_at` is checked on the row version the lock returns; RLS alone would answer from
+    // the statement's snapshot, from before a removal this lock waited for.
+    const creator = await trx
+      .selectFrom('principal')
+      .select('id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', actor.id)
+      .where('removed_at', 'is', null)
+      .forShare()
+      .executeTakeFirst()
+    if (!creator) throw new HttpError('forbidden', 'Your role does not allow this action')
     const row = await trx
       .insertInto('folder')
       .values({

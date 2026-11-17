@@ -10,14 +10,16 @@ import { withScope } from './db/scope.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { createItem, patchItem } from './items.ts'
 import { HttpError } from './http.ts'
-import { changeMemberRole, removeMember } from './members.ts'
+import { changeMemberRole, createHub, removeMember } from './members.ts'
 
-// Lock order of concurrent access changes (#92, the comment at the top of members.ts), against
-// a real Postgres under row-level security. Each test forces the interleaving that deadlocked:
-// writer B takes the workspace row and is then held, by a gate, just before it inserts its log
-// row; writer A takes its principal locks and waits for the workspace row; the gate opens and B
-// inserts, which takes FOR KEY SHARE on its actor. Before the fix A held that actor FOR UPDATE,
-// so Postgres aborted one of them with a deadlock (40P01, a 500). Now both commit.
+// Lock order of concurrent access changes (#92, #96, the comment at the top of members.ts),
+// against a real Postgres under row-level security. Every test but the last forces an
+// interleaving with a gate: writer B takes the workspace row and is then held, by the gate, just
+// before it inserts its log or revision row; writer A runs until it waits on a lock; then the
+// gate opens. In the #92 deadlock cases A waited for the workspace row while holding B's actor
+// FOR UPDATE, which B's insert needs FOR KEY SHARE, so Postgres aborted one of them (40P01, a
+// 500); now both commit. The other cases check what each side sees once it stops waiting. The
+// last test holds its writer with a promise instead of a gate: it checks an error, not a lock.
 //
 // The gate is an uncommitted row with the sequence number B is about to take, inserted by the
 // owner of the tables: B's insert waits on its unique key until the gate rolls back. Its actor
@@ -246,6 +248,37 @@ async function interleave(
   }
 }
 
+const newHub = { id: 'h-96', name: 'Hub 96', color: 'blue', idPrefix: 'H' } as const
+
+/** The 403 that `enforce` and a lost actor lock (#96) both throw. */
+function expectForbidden(r: Result): void {
+  expect(r.ok).toBe(false)
+  if (!r.ok) {
+    expect(r.error).toBeInstanceOf(HttpError)
+    expect((r.error as HttpError).status).toBe(403)
+  }
+}
+
+async function grantsOf(principalId: string) {
+  return db
+    .selectFrom('hub_grant')
+    .select(['hub_id', 'hub_role'])
+    .where('workspace_id', '=', 'w1')
+    .where('principal_id', '=', principalId)
+    .orderBy('hub_id')
+    .execute()
+}
+
+async function removalDetail() {
+  const row = await db
+    .selectFrom('access_log')
+    .select('detail')
+    .where('workspace_id', '=', 'w1')
+    .where('action', '=', 'member.remove')
+    .executeTakeFirstOrThrow()
+  return row.detail
+}
+
 async function accessLog() {
   return db
     .selectFrom('access_log')
@@ -415,9 +448,99 @@ describe('concurrent access changes (#92)', () => {
     expect(await accessLog()).toEqual([{ actor: 'own', action: 'member.role', target: 'own2' }])
   })
 
+  // #96, the creation first. createHub locks its creator FOR SHARE, so removal waits at its lock
+  // on the target and its grant DELETE then sees the new grant. Without that lock, removal's NO
+  // KEY UPDATE on adm doesn't wait, the DELETE misses the uncommitted grant, removal then waits
+  // only at its principal UPDATE, and adm, removed, keeps hub_admin on the new hub.
+  it('an admin creates a hub while an owner removes that admin', async () => {
+    await interleave(
+      'access_log',
+      () => run('adm', (trx) => createHub(trx, 'w1', adm, newHub)),
+      () => run('own', (trx) => removeMember(trx, 'w1', own, 'adm')),
+    )
+    const hub = await db
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'h-96')
+      .executeTakeFirst()
+    expect(hub).toEqual({ id: 'h-96' })
+    expect(await grantsOf('adm')).toEqual([])
+    expect(await removalDetail()).toMatchObject({
+      revokedGrants: [
+        { hubId: 'build', hubRole: 'viewer' },
+        { hubId: 'h-96', hubRole: 'hub_admin' },
+      ],
+    })
+  })
+
+  // #96, the removal first (the opposite ordering). The creation waits for the removal at its
+  // creator lock and then finds adm removed: 403, and no hub. Before #96 it waited at its
+  // grant's foreign key instead, and appendAccessLog then failed with a plain Error, a 500.
+  it('an admin whose removal commits first gets 403 for a hub creation in flight', async () => {
+    const [removal, creation] = await interleaveResults(
+      'access_log',
+      () => run('own', (trx) => removeMember(trx, 'w1', own, 'adm')),
+      () => run('adm', (trx) => createHub(trx, 'w1', adm, newHub)),
+    )
+    expect(removal).toEqual({ ok: true })
+    expectForbidden(creation)
+    const hub = await db
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'h-96')
+      .executeTakeFirst()
+    expect(hub).toBeUndefined()
+    expect(await grantsOf('adm')).toEqual([])
+  })
+
+  // #96, an invite insert by adm whose removal commits first. The insert's RLS check passes on
+  // its snapshot from before the removal, and its foreign key waits for the removal and then
+  // passes, since the principal row stays. appendAccessLog stops it: RLS now hides adm from the
+  // actor lock. That is a 403 and the invite rolls back; before #96 it was a 500.
+  it('an admin whose removal commits first gets 403 for an invite in flight', async () => {
+    const [removal, invite] = await interleaveResults(
+      'access_log',
+      () => run('own', (trx) => removeMember(trx, 'w1', own, 'adm')),
+      // What POST /invites does (auth/routes.ts): the invite, then its access_log row.
+      () =>
+        run('adm', async (trx) => {
+          await trx
+            .insertInto('invite')
+            .values({
+              workspace_id: 'w1',
+              id: 'inv-96',
+              token_hash: 'hash-96',
+              workspace_role: 'member',
+              created_by: 'adm',
+              expires_at: sql<Date>`now() + interval '7 days'`,
+              used_at: null,
+            })
+            .execute()
+          await appendAccessLog(trx, {
+            workspaceId: 'w1',
+            actor: 'adm',
+            action: 'invite.create',
+            target: 'inv-96',
+          })
+        }),
+    )
+    expect(removal).toEqual({ ok: true })
+    expectForbidden(invite)
+    const row = await db
+      .selectFrom('invite')
+      .select('id')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'inv-96')
+      .executeTakeFirst()
+    expect(row).toBeUndefined()
+  })
+
   // An admin's access change whose log row lands after their removal committed: RLS now hides
-  // the actor from the FOR KEY SHARE lock, which must fail loudly instead of locking nothing.
-  it("an admin's access log append after their removal fails with a clear error", async () => {
+  // the actor from the FOR KEY SHARE lock, which must refuse instead of locking nothing: a 403,
+  // since the actor lost the right to the change while it was in flight (#96).
+  it("an admin's access log append after their removal gets 403", async () => {
     let release!: () => void
     const removed = new Promise<void>((resolve) => (release = resolve))
     const b = run('adm', async (trx) => {
@@ -433,8 +556,6 @@ describe('concurrent access changes (#92)', () => {
     const a = await run('own', (trx) => removeMember(trx, 'w1', own, 'adm')).done
     expect(a).toEqual({ ok: true })
     release()
-    const result = await b.done
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(String(result.error)).toMatch(/actor adm cannot be locked/)
+    expectForbidden(await b.done)
   })
 })
