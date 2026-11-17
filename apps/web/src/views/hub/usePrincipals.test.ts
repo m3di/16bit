@@ -21,17 +21,16 @@ const me: Me = {
 }
 
 describe('usePrincipals', () => {
-  it('names actors from the member list, by name', async () => {
+  it('names people from the member list, by name', async () => {
     const api = fakeApi(() =>
-      json({ items: [person('p-zed', 'Zed'), person('p-bot', 'Bot', 'agent')], nextCursor: null }),
+      json({ items: [person('p-zed', 'Zed'), person('p-bob', 'Bob')], nextCursor: null }),
     )
     const p = usePrincipals('w', () => me, api.fetchFn)
     await p.load()
     expect(api.calls[0]?.path).toBe('/v1/workspaces/w/members?limit=200')
     expect(p.status.value).toEqual({ state: 'ready' })
     expect(p.actor('p-zed')).toEqual({ id: 'p-zed', name: 'Zed', kind: 'person', known: true })
-    expect(p.actor('p-bot')).toMatchObject({ kind: 'agent', known: true })
-    expect(p.choices.value.map((a) => a.name)).toEqual(['Ana', 'Bot', 'Zed'])
+    expect(p.choices.value.map((a) => a.name)).toEqual(['Ana', 'Bob', 'Zed'])
   })
 
   it('shows a short ID, never a made-up name, for someone it cannot name', async () => {
@@ -49,8 +48,19 @@ describe('usePrincipals', () => {
     })
   })
 
-  it('falls back to the signed-in user when there is no member list yet', async () => {
-    const api = fakeApi(() => json({ error: 'not_found', message: 'Not found' }, 404))
+  it('shows agents, who are not in the member list, by short ID', async () => {
+    const p = usePrincipals(
+      'w',
+      () => me,
+      fakeApi(() => json({ items: [person('p-zed', 'Zed')], nextCursor: null })).fetchFn,
+    )
+    await p.load()
+    expect(p.actor('agent-0123456789')).toMatchObject({ name: 'agent-01', known: false })
+    expect(p.choices.value.map((a) => a.name)).toEqual(['Ana', 'Zed'])
+  })
+
+  it('falls back to the signed-in user when it may not list members', async () => {
+    const api = fakeApi(() => json({ error: 'forbidden', message: 'Forbidden' }, 403))
     const p = usePrincipals('w', () => me, api.fetchFn)
     await p.load()
     expect(p.status.value).toEqual({ state: 'unavailable' })
@@ -58,7 +68,12 @@ describe('usePrincipals', () => {
     expect(p.actor('p-ana').known).toBe(true)
   })
 
-  it('reports other failures so they can be retried', async () => {
+  it('reports a missing workspace and other failures so they can be retried', async () => {
+    const missing = fakeApi(() => json({ error: 'not_found', message: 'Not found' }, 404))
+    const q = usePrincipals('w', () => null, missing.fetchFn)
+    await q.load()
+    expect(q.status.value.state).toBe('error')
+
     const api = fakeApi(() => json({ error: 'internal', message: 'Boom' }, 500))
     const p = usePrincipals('w', () => null, api.fetchFn)
     await p.load()

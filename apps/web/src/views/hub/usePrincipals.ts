@@ -1,20 +1,17 @@
-import { pageSchema, principalSchema, type Me, type Principal } from '@16bit/core'
+import { memberPageSchema, type Me, type Principal } from '@16bit/core'
 import { computed, ref } from 'vue'
 import { asRequestError, getAllPages, type ApiRequestError, type Fetch } from '../../api/client.ts'
 import type { Actor } from '../../ui/index.ts'
 
-/** `GET /v1/workspaces/:w/members` (#43): the people of the workspace. */
-const memberPageSchema = pageSchema(principalSchema)
-
 /**
- * Names for actor values. People come from the member list and the signed-in account. The
- * member list arrives with #43; until then, and for agents (who are not in it, #50), an actor
- * shows its avatar and a short ID, never an invented name.
+ * Names for actor values. People come from `GET /members` and the signed-in account. The list
+ * has no agents and no removed members, so those actors show their avatar and a short ID, never
+ * an invented name (a principal lookup that includes agents is asked of backend on #50).
  *
  * - `loading`: the list is on its way.
  * - `ready`: the list was read.
- * - `unavailable`: the server has no member list for this reader (404 or 403). Only the
- *   signed-in user can be named and picked.
+ * - `unavailable`: the reader may not list members (agents get 403). Only the signed-in user
+ *   can be named and picked.
  * - `error`: another failure; `retry` reads it again.
  */
 export type MembersState =
@@ -42,10 +39,7 @@ export function usePrincipals(
       status.value = { state: 'ready' }
     } catch (thrown) {
       const error = asRequestError(thrown)
-      status.value =
-        error.status === 404 || error.status === 403
-          ? { state: 'unavailable' }
-          : { state: 'error', error }
+      status.value = error.status === 403 ? { state: 'unavailable' } : { state: 'error', error }
     }
   }
 

@@ -80,7 +80,7 @@ function remove(principal: string) {
         @change="add"
       />
       <span v-if="members.state === 'unavailable'" class="text-secondary text-ink3"
-        >The member list is not available yet, so only you can be added.</span
+        >You cannot see the member list, so no one else can be added.</span
       >
       <span
         v-else-if="members.state === 'error'"

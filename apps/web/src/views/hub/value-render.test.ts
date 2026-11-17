@@ -179,7 +179,7 @@ describe('editors', () => {
       { attribute: owners, value: null },
       context({ members: () => ({ state: 'unavailable' }) }),
     )
-    expect(html).toContain('only you can be added')
+    expect(html).toContain('no one else can be added')
   })
 
   it('shows an auto ID as read-only text, with no input', async () => {
