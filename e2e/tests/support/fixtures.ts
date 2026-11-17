@@ -1,5 +1,7 @@
 import { conflictErrorSchema, itemSchema, type ConflictError, type Item } from '@16bit/core'
+import { readFileSync } from 'node:fs'
 import { test as base, expect, type APIRequestContext, type APIResponse } from '@playwright/test'
+import { OWNER_STATE } from './auth-state.ts'
 
 // Seeded by `pnpm seed` (apps/api/src/demo-seed.ts). Specs read these but never change them;
 // anything a spec writes is a new item it creates for itself.
@@ -15,7 +17,7 @@ export const demo = {
   },
 } as const
 
-/** The items API, as the dev principal. Only what the specs need. */
+/** The items API, as the seeded owner. Only what the specs need. */
 export class Api {
   readonly #request: APIRequestContext
 
@@ -82,14 +84,22 @@ export function uniqueTitle(label: string): string {
   return `e2e ${label} ${crypto.randomUUID().slice(0, 8)}`
 }
 
+/** The session cookie from the saved state, sent as a header so it also works over plain HTTP. */
+function ownerCookie(): Record<string, string> {
+  const state = JSON.parse(readFileSync(OWNER_STATE, 'utf8')) as {
+    cookies: { name: string; value: string }[]
+  }
+  const sid = state.cookies.find((c) => c.name === 'sid')
+  if (!sid) throw new Error(`No session cookie in ${OWNER_STATE}; did auth.setup.ts run?`)
+  return { Cookie: `sid=${sid.value}` }
+}
+
 export const test = base.extend<{ api: Api }>({
   api: async ({ playwright, baseURL }, use) => {
-    // Same origin as the app, as in production (D34). The dev server's proxy would add the
-    // key on its own, but sending it keeps the fixture working against any deployment.
-    const key = process.env['DEV_API_KEY']
+    // Same origin as the app, as in production (D34), signed in as the seeded owner.
     const request = await playwright.request.newContext({
       baseURL,
-      extraHTTPHeaders: key ? { Authorization: `Bearer ${key}` } : {},
+      extraHTTPHeaders: ownerCookie(),
     })
     await use(new Api(request))
     await request.dispose()

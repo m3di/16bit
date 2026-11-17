@@ -15,13 +15,15 @@ import {
 } from './build-hub.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { DEV_OWNER, DEV_PASSWORD } from './dev-accounts.ts'
+import { verifyPassword } from './auth/password.ts'
 import { workspaceSnapshot } from './db/test-snapshot.ts'
 import { deleteItem, getItem, patchItem } from './items.ts'
 
 // Integration tests against a fresh, migrated Postgres per test. `gh` is not called:
 // the importer takes parsed issues, so fixtures stand in for its output.
 
-const OWNER = 'dev-owner'
+const OWNER = DEV_OWNER.id
 const WS = BUILD_WORKSPACE.id
 
 let db: Kysely<Database>
@@ -34,7 +36,7 @@ beforeEach(async () => {
   dbUrl = test.url
   db = createDb(test.url)
   await migrateToLatest(db)
-  await ensureBuildHub(db, OWNER)
+  await ensureBuildHub(db)
 })
 
 afterEach(async () => {
@@ -136,18 +138,26 @@ describe('parseIssues', () => {
 })
 
 describe('ensureBuildHub', () => {
-  it('is idempotent and makes the hub visible to the dev principal', async () => {
-    await ensureBuildHub(db, OWNER)
+  it('is idempotent and makes the hub visible to the dev owner', async () => {
+    await ensureBuildHub(db)
     const principals = await db
       .selectFrom('principal')
-      .select(['id', 'kind', 'workspace_role'])
+      .select(['id', 'kind', 'workspace_role', 'account_id'])
       .where('workspace_id', '=', WS)
       .orderBy('id')
       .execute()
     expect(principals).toEqual([
-      { id: OWNER, kind: 'user', workspace_role: 'owner' },
-      { id: IMPORT_ACTOR.id, kind: 'agent', workspace_role: 'member' },
+      { id: OWNER, kind: 'user', workspace_role: 'owner', account_id: OWNER },
+      { id: IMPORT_ACTOR.id, kind: 'agent', workspace_role: 'member', account_id: null },
     ])
+    // The owner signs in with the development password (#51).
+    const account = await db
+      .selectFrom('account')
+      .select(['email', 'password_hash'])
+      .where('id', '=', OWNER)
+      .executeTakeFirstOrThrow()
+    expect(account.email).toBe(DEV_OWNER.email)
+    expect(await verifyPassword(DEV_PASSWORD, account.password_hash)).toBe(true)
     const attributes = await db
       .selectFrom('folder_attribute')
       .select(['attribute_id', 'position', 'required'])
@@ -174,7 +184,7 @@ describe('ensureBuildHub', () => {
 
   it('leaves an existing workspace and principal untouched', async () => {
     await db.updateTable('workspace').set({ name: 'Renamed' }).where('id', '=', WS).execute()
-    await ensureBuildHub(db, OWNER)
+    await ensureBuildHub(db)
     const ws = await db.selectFrom('workspace').select('name').where('id', '=', WS).execute()
     expect(ws).toEqual([{ name: 'Renamed' }])
   })

@@ -13,18 +13,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { sessionCookie } from './db/test-session.ts'
 import { workspaceSnapshot } from './db/test-snapshot.ts'
 import { encodeCursor } from './http.ts'
 
 // Integration tests: the real app against a fresh, migrated Postgres database per test.
 
-const KEY = 'test-key'
 const ACTOR = 'dev-owner'
-const auth = { authorization: `Bearer ${KEY}` }
 
 let db: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
+let auth: { cookie: string }
 
 beforeEach(async () => {
   const test = await createTestDatabase()
@@ -32,7 +32,8 @@ beforeEach(async () => {
   db = createDb(test.url)
   await migrateToLatest(db)
   await seed()
-  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
+  auth = await sessionCookie(db, ACTOR)
+  app = buildApp({ db })
 })
 
 afterEach(async () => {
@@ -164,7 +165,7 @@ describe('health', () => {
 
   it('answers 503 when the database is down', async () => {
     const dead = createDb('postgres://nobody:wrong@127.0.0.1:1/none')
-    const deadApp = buildApp({ db: dead, devApiKey: KEY, devPrincipalId: ACTOR })
+    const deadApp = buildApp({ db: dead })
     const res = await deadApp.inject({ method: 'GET', url: '/health' })
     expect(res.statusCode).toBe(503)
     await deadApp.close()
@@ -173,7 +174,7 @@ describe('health', () => {
 })
 
 describe('auth', () => {
-  it.each([undefined, 'Bearer wrong', `Basic ${KEY}`, 'Bearer '])(
+  it.each([undefined, 'Bearer wrong', 'Basic dGVzdA==', 'Bearer '])(
     'rejects authorization %s with 401',
     async (authorization) => {
       const res = await app.inject({
@@ -247,7 +248,7 @@ describe('workspaces and hubs', () => {
       return hubDescriptionSchema.parse(res.json())
     }
     await app.close()
-    app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR, maxHubEntries: 1 })
+    app = buildApp({ db, maxHubEntries: 1 })
     // build has 1 subfolder, 3 attributes and 4 folder attributes: only attributes exceed 1.
     const atCap = await describeBuild()
     expect(atCap.folders).toHaveLength(1)
