@@ -16,6 +16,7 @@ import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
 import { appendAccessLog } from '../access-log.ts'
 import type { Database } from '../db/database.ts'
+import { DEV_PASSWORD } from '../dev-accounts.ts'
 import { HttpError, parse } from '../http.ts'
 import {
   accountMemberships,
@@ -36,6 +37,8 @@ export interface AuthRouteOptions extends AuthOptions {
   emailLimiter: RateLimiter
   /** Sign-in and invite acceptance attempts per client IP. */
   ipLimiter: RateLimiter
+  /** Refuses the seeds' published password (production without ALLOW_DEV_PASSWORD=1). */
+  refuseDevPassword: boolean
 }
 
 const optional = { config: { auth: 'optional' as const } }
@@ -91,6 +94,10 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
     // Counted before the password check, for unknown emails too, so the limit tells nothing.
     const wait = Math.max(options.ipLimiter.hit(request.ip), options.emailLimiter.hit(email))
     if (wait) return tooMany(reply, wait)
+    // Before any lookup, so the answer is the same for every email.
+    if (options.refuseDevPassword && password === DEV_PASSWORD) {
+      throw new HttpError('unauthorized', 'The development password is refused in production')
+    }
 
     const account = await db
       .selectFrom('account')
@@ -118,20 +125,15 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
 
   v1.get('/me', async (request): Promise<Me> => {
     const identity = requireIdentity(request)
-    if (identity.kind === 'agent') {
-      // Names come from the key lookup, so nothing is read before a workspace is set (#44).
-      return {
-        kind: 'agent',
-        principalId: identity.principalId,
-        workspace: { id: identity.workspaceId, name: identity.workspaceName },
-        hub: { id: identity.hubId, name: identity.hubName },
-        hubRole: identity.hubRole,
-      }
+    if (identity.kind === 'person') return me(db, identity.accountId)
+    // Names come from the key lookup, so nothing is read before a workspace is set (#44).
+    return {
+      kind: 'agent',
+      principalId: identity.principalId,
+      workspace: { id: identity.workspaceId, name: identity.workspaceName },
+      hub: { id: identity.hubId, name: identity.hubName },
+      hubRole: identity.hubRole,
     }
-    if (identity.kind !== 'person') {
-      throw new HttpError('unauthorized', 'The development key has no account. Sign in.')
-    }
-    return me(db, identity.accountId)
   })
 
   v1.post('/auth/invites/:token', optional, async (request, reply) => {

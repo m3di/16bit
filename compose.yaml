@@ -42,15 +42,10 @@ services:
     build: .
     environment:
       DATABASE_URL: postgres://sixteenbit:sixteenbit@db:5432/sixteenbit
-      DEV_API_KEY: ${DEV_API_KEY:-dev-only-key}
-      DEV_PRINCIPAL_ID: ${DEV_PRINCIPAL_ID:-dev-owner}
-      # Local only (D41): the browser has no key in M0, so requests without one act as the
-      # dev owner, as through the Vite dev proxy. Never set this outside a local machine.
-      DEV_ANONYMOUS_AS_OWNER: 'true'
-      # The container binds 0.0.0.0, which the API refuses with the flag above unless told the
-      # port is reachable from loopback only. That holds because of the 127.0.0.1 binding below:
-      # keep the two together.
-      DEV_ANONYMOUS_ALLOW_NONLOCAL: '1'
+      # The image runs with NODE_ENV=production, where the API refuses the seeds' published
+      # password. This local stack opts back in, which is safe only because the port below is
+      # bound to 127.0.0.1. Never set this on a deployment.
+      ALLOW_DEV_PASSWORD: '1'
     ports:
       - '127.0.0.1:${APP_PORT:-8080}:3000'
     depends_on:

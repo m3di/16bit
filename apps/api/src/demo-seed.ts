@@ -1,23 +1,33 @@
 import {
   attributeSchema,
+  type AgentHubRole,
   type Attribute,
   type FolderAttributeDefinition,
+  type HubRole,
   type PaletteColor,
+  type RichTextDoc,
+  type RichTextListItem,
 } from '@16bit/core'
-import type { Kysely } from 'kysely'
-import { ensureHubAdmin } from './access-log.ts'
+import type { Kysely, Transaction } from 'kysely'
+import { appendAccessLog, ensureHubAdmin, seedHubGrant } from './access-log.ts'
+import { hashAgentSecret, newAgentSecret } from './auth/agent-key.ts'
 import type { Database, PrincipalTable } from './db/database.ts'
+import { DEV_OWNER, ensureDevAccounts, linkDevAccount, type DevPerson } from './dev-accounts.ts'
 import { createItem } from './items.ts'
 
 // `pnpm seed`: two demo workspaces whose hubs cover every size-meter step in docs/DESIGN.md
-// (0, 1 to 9, 10 to 99, 100 to 999, 1,000 or more items).
+// (0, 1 to 9, 10 to 99, 100 to 999, 1,000 or more items), people who can sign in with the
+// development password (dev-accounts.ts) in every workspace role, hub grants that exercise
+// docs/ROLES.md, one agent key, and a hub (Launch) with an attribute of every M1 type.
 //
 // Idempotent. Everything has a fixed ID. Workspaces, principals, folders, and attributes are
 // inserted with ON CONFLICT DO NOTHING. Items go through `createItem`, the API's own write path,
 // so counters, `seq_id`, and `revision` stay consistent; an item whose ID already appears in
 // `revision` is skipped, which also means an item deleted through the API is not brought back.
-// Changing a definition here does not update rows that already exist. One exception: the dev
-// principal is set back to `owner` if its row exists with a lower role.
+// Changing a definition here does not update rows that already exist. Exceptions: the dev
+// owner is set back to `owner` if its row exists with a lower role, and a seeded person's
+// principal without an account (from before #51) is linked to the person's account. Grants
+// are only added where the principal has none; the agent key only on the first run.
 
 type AttributeSeed = Pick<Attribute, 'id' | 'name' | 'type' | 'config'> & { required?: boolean }
 
@@ -33,17 +43,25 @@ interface HubSeed extends FolderSeed {
   /** Number of items, spread round-robin over the hub and its folders. */
   items: number
   attributes: AttributeSeed[]
+  /** Who creates the items, round-robin. Defaults to every principal in the workspace. */
+  authors?: string[]
 }
 
-// Seeded people have no account yet; accounts arrive with the M1 people seed (#51).
-type Person = Omit<PrincipalTable, 'workspace_id' | 'account_id' | 'removed_at'>
+/** A principal. People (`kind: 'user'`) also get an account with the development password. */
+type Person = Omit<PrincipalTable, 'workspace_id' | 'account_id' | 'removed_at'> & {
+  email?: string
+}
 
 interface WorkspaceSeed {
   id: string
   name: string
-  /** The first is the owner the dev key acts as. */
+  /** The first is the owner, hub admin of every hub here. */
   people: [Person, ...Person[]]
   hubs: HubSeed[]
+  /** Hub grants besides the owner's: principal, hub, role. */
+  grants: [string, string, HubRole][]
+  /** An agent principal from `people` that gets a key on its first run. */
+  agentKey?: { principalId: string; hubId: string; hubRole: AgentHubRole }
 }
 
 const stage = (id: string, labels: [string, PaletteColor][]): AttributeSeed => ({
@@ -84,23 +102,106 @@ function workAttributes(prefix: string): AttributeSeed[] {
   ]
 }
 
-export function demoSeed(devPrincipalId: string): WorkspaceSeed[] {
-  const owner = {
-    id: devPrincipalId,
+/** Every M1 attribute type (D44), so each cell and editor has data to show. */
+function launchAttributes(): AttributeSeed[] {
+  const option = (label: string, color: PaletteColor) => ({ id: slug(label), label, color })
+  return [
+    {
+      id: 'launch-title',
+      name: 'Title',
+      type: 'text',
+      config: { maxLength: 200 },
+      required: true,
+    },
+    { id: 'launch-key', name: 'Key', type: 'auto_id', config: { prefix: 'LCH' } },
+    stage('launch-stage', [
+      ['Idea', 'grey'],
+      ['Planned', 'blue'],
+      ['Building', 'amber'],
+      ['Shipped', 'green'],
+    ]),
+    {
+      id: 'launch-tags',
+      name: 'Tags',
+      type: 'multi_select',
+      config: {
+        options: [
+          option('Web', 'indigo'),
+          option('API', 'teal'),
+          option('Docs', 'violet'),
+          option('Marketing', 'pink'),
+          option('Ops', 'slate'),
+        ],
+      },
+    },
+    {
+      id: 'launch-effort',
+      name: 'Effort',
+      type: 'number',
+      config: { format: 'plain', decimals: 1, min: 0, max: 20 },
+    },
+    { id: 'launch-due', name: 'Due', type: 'date', config: { includeTime: false } },
+    { id: 'launch-shipped', name: 'Shipped', type: 'boolean', config: {} },
+    { id: 'launch-link', name: 'Link', type: 'url', config: {} },
+    { id: 'launch-owner', name: 'Owner', type: 'actor', config: { multiple: false } },
+    { id: 'launch-notes', name: 'Notes', type: 'rich_text', config: {} },
+    {
+      id: 'launch-depends',
+      name: 'Depends on',
+      type: 'relation',
+      config: { targetHubId: 'launch', crossHub: false, multiple: true },
+    },
+  ]
+}
+
+const person = (id: string, name: string, workspace_role: Person['workspace_role']): Person => ({
+  id,
+  kind: 'user',
+  name,
+  workspace_role,
+  email: `${id}@example.com`,
+})
+
+/**
+ * People with an account, all with the development password (README.md). Every workspace role
+ * in docs/ROLES.md is covered in Pixel Works: dev owner (owner), Mina (admin), Leo (member),
+ * Ivy (viewer) and Noor (finance). Sam is finance in Acme Studio.
+ */
+export function demoSeed(): WorkspaceSeed[] {
+  const owner: Person = {
+    id: DEV_OWNER.id,
     kind: 'user',
-    name: 'Dev Owner',
+    name: DEV_OWNER.name,
     workspace_role: 'owner',
-  } as const
+    email: DEV_OWNER.email,
+  }
   return [
     {
       id: 'demo',
       name: 'Pixel Works',
       people: [
         owner,
-        { id: 'mina', kind: 'user', name: 'Mina Park', workspace_role: 'admin' },
-        { id: 'leo', kind: 'user', name: 'Leo Varga', workspace_role: 'member' },
+        person('mina', 'Mina Park', 'admin'),
+        person('leo', 'Leo Varga', 'member'),
         { id: 'triage-bot', kind: 'agent', name: 'Triage bot', workspace_role: 'member' },
+        person('ivy', 'Ivy Chen', 'viewer'),
+        person('noor', 'Noor Haddad', 'finance'),
       ],
+      // Mina has no grant on Design, Hiring or Archive: she sees their names as "no access"
+      // (D45). Ivy's editor grant on Launch acts as viewer, capped by her role.
+      grants: [
+        ['mina', 'product', 'editor'],
+        ['mina', 'support', 'hub_admin'],
+        ['mina', 'launch', 'editor'],
+        ['leo', 'product', 'editor'],
+        ['leo', 'support', 'commenter'],
+        ['leo', 'design', 'viewer'],
+        ['leo', 'launch', 'editor'],
+        ['ivy', 'product', 'viewer'],
+        ['ivy', 'launch', 'editor'],
+        ['noor', 'support', 'viewer'],
+      ],
+      agentKey: { principalId: 'triage-bot', hubId: 'product', hubRole: 'editor' },
       hubs: [
         {
           id: 'product',
@@ -171,6 +272,17 @@ export function demoSeed(devPrincipalId: string): WorkspaceSeed[] {
           items: 0,
           attributes: workAttributes('archive'),
         },
+        {
+          id: 'launch',
+          name: 'Launch',
+          color: 'cyan',
+          idPrefix: 'LCH',
+          items: 36,
+          attributes: launchAttributes(),
+          // Relation targets must be readable by the writer, so only people with a grant here.
+          authors: [DEV_OWNER.id, 'leo'],
+          children: [{ id: 'launch-checklist', name: 'Checklist', color: 'blue' }],
+        },
       ],
     },
     {
@@ -178,10 +290,11 @@ export function demoSeed(devPrincipalId: string): WorkspaceSeed[] {
       name: 'Acme Studio',
       people: [
         owner,
-        { id: 'sam', kind: 'user', name: 'Sam Okafor', workspace_role: 'finance' },
+        person('sam', 'Sam Okafor', 'finance'),
         // D28: agents never manage members or billing, so no agent gets owner, admin, or finance.
         { id: 'ledger-bot', kind: 'agent', name: 'Ledger bot', workspace_role: 'member' },
       ],
+      grants: [['sam', 'operations', 'viewer']],
       hubs: [
         {
           id: 'operations',
@@ -285,7 +398,20 @@ const NOUNS = [
   'API limits',
 ]
 
-function valueFor(attribute: Attribute, index: number, rand: () => number): unknown {
+/** What a value may refer to: people for actor values, earlier items for relations. */
+interface ValueContext {
+  people: string[]
+  /** The hub's seeded item IDs in creation order. */
+  itemIds: string[]
+}
+
+/** A value for item `index`, or undefined for a type the server fills in (auto_id). */
+function valueFor(
+  attribute: Attribute,
+  index: number,
+  rand: () => number,
+  context: ValueContext,
+): unknown {
   const pick = <T>(list: readonly T[]): T => list[Math.floor(rand() * list.length)] as T
   switch (attribute.type) {
     case 'text':
@@ -306,8 +432,46 @@ function valueFor(attribute: Attribute, index: number, rand: () => number): unkn
       day.setUTCHours(8 + Math.floor(rand() * 10), Math.floor(rand() * 60))
       return day.toISOString()
     }
-    default:
-      throw new Error(`The demo seed has no values for ${attribute.type} yet`)
+    case 'multi_select': {
+      const options = attribute.config.options.map((o) => o.id)
+      const count = 1 + Math.floor(rand() * 3)
+      return [...new Set(Array.from({ length: count }, () => pick(options)))]
+    }
+    case 'url':
+      return `https://example.com/launch/${String(index + 1)}`
+    case 'actor':
+      return [pick(context.people)]
+    case 'auto_id':
+      return undefined
+    case 'rich_text':
+      return richText(`${pick(VERBS)} the ${pick(NOUNS)} before launch.`, rand() < 0.5)
+    case 'relation': {
+      // Earlier items only, so the target exists when this one is created.
+      if (index === 0) return undefined
+      const earlier = context.itemIds.slice(0, index)
+      return [...new Set([pick(earlier), pick(earlier)])]
+    }
+  }
+}
+
+function richText(sentence: string, withList: boolean): RichTextDoc {
+  const text = (value: string, bold = false) => ({
+    type: 'text' as const,
+    text: value,
+    ...(bold ? { marks: [{ type: 'bold' as const }] } : {}),
+  })
+  const item = (value: string): RichTextListItem => ({
+    type: 'listItem',
+    content: [{ type: 'paragraph', content: [text(value)] }],
+  })
+  return {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [text('Goal: ', true), text(sentence)] },
+      ...(withList
+        ? [{ type: 'bulletList' as const, content: [item('Draft'), item('Review'), item('Ship')] }]
+        : []),
+    ],
   }
 }
 
@@ -324,6 +488,10 @@ function flatten(
 export interface SeedResult {
   workspaces: number
   itemsCreated: number
+  /** Sign-in emails of the seeded people, sorted. */
+  accounts: string[]
+  /** Created this run; the secret is shown once and never stored. Null if it already exists. */
+  agentKey: { workspaceId: string; hubId: string; principalId: string; secret: string } | null
 }
 
 /** The seed's attributes parsed with the core contract, with the seed-only `required` flag. */
@@ -334,17 +502,23 @@ function hubDefinitions(ws: WorkspaceSeed, hub: HubSeed): FolderAttributeDefinit
   }))
 }
 
-export async function applySeed(
-  db: Kysely<Database>,
-  options: { devPrincipalId: string },
-): Promise<SeedResult> {
-  const workspaces = demoSeed(options.devPrincipalId)
+export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
+  const workspaces = demoSeed()
   // Parsed before any write, so a bad config in this file changes nothing in the database.
   const definitions = new Map(
     workspaces.flatMap((ws) => ws.hubs.map((hub) => [hub, hubDefinitions(ws, hub)] as const)),
   )
   const definitionsOf = (hub: HubSeed): FolderAttributeDefinition[] => definitions.get(hub) ?? []
   let itemsCreated = 0
+  let agentKey: SeedResult['agentKey'] = null
+
+  const people = new Map<string, DevPerson>()
+  for (const ws of workspaces) {
+    for (const p of ws.people) {
+      if (p.email !== undefined) people.set(p.id, { id: p.id, name: p.name, email: p.email })
+    }
+  }
+  const accounts = await ensureDevAccounts(db, [...people.values()])
 
   for (const ws of workspaces) {
     await db.transaction().execute(async (trx) => {
@@ -354,11 +528,11 @@ export async function applySeed(
         .onConflict((oc) => oc.column('id').doNothing())
         .execute()
       const [devOwner, ...others] = ws.people
-      // The dev key relies on this principal being owner (#6), so an existing row with a lower
-      // role is corrected. Every other existing principal is left as it is.
+      // Everything here is granted by this principal, so an existing row with a lower role is
+      // corrected. Every other existing principal is left as it is.
       await trx
         .insertInto('principal')
-        .values({ ...devOwner, workspace_id: ws.id })
+        .values({ ...principalRow(devOwner), workspace_id: ws.id })
         .onConflict((oc) =>
           oc
             .columns(['workspace_id', 'id'])
@@ -369,9 +543,13 @@ export async function applySeed(
       if (others.length > 0) {
         await trx
           .insertInto('principal')
-          .values(others.map((p) => ({ ...p, workspace_id: ws.id })))
+          .values(others.map((p) => ({ ...principalRow(p), workspace_id: ws.id })))
           .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
           .execute()
+      }
+      for (const p of ws.people) {
+        const accountId = accounts.get(p.id)
+        if (accountId !== undefined) await linkDevAccount(trx, ws.id, p.id, accountId)
       }
 
       for (const hub of ws.hubs) {
@@ -425,13 +603,84 @@ export async function applySeed(
           .execute()
         await ensureHubAdmin(trx, ws.id, hub.id, devOwner.id)
       }
+      for (const [principalId, hubId, hubRole] of ws.grants) {
+        await seedHubGrant(trx, ws.id, { hubId, principalId, hubRole }, devOwner.id)
+      }
+      if (ws.agentKey) {
+        const secret = await seedAgentKey(trx, ws.id, ws.agentKey, devOwner.id)
+        if (secret !== null) agentKey = { workspaceId: ws.id, ...ws.agentKey, secret }
+      }
     })
 
     for (const hub of ws.hubs) {
       itemsCreated += await seedItems(db, ws, hub, definitionsOf(hub))
     }
   }
-  return { workspaces: workspaces.length, itemsCreated }
+  return {
+    workspaces: workspaces.length,
+    itemsCreated,
+    accounts: [...people.values()].map((p) => p.email).sort(),
+    agentKey,
+  }
+}
+
+const principalRow = ({ id, kind, name, workspace_role }: Person) => ({
+  id,
+  kind,
+  name,
+  workspace_role,
+})
+
+/**
+ * Gives an agent principal its key and its one hub grant (D47), logged like a key made through
+ * the API, and returns the secret. Null when the principal already has a key, revoked or not,
+ * or holds a grant some other way, or is gone: a key is never replaced behind anyone's back.
+ */
+async function seedAgentKey(
+  trx: Transaction<Database>,
+  workspaceId: string,
+  key: { principalId: string; hubId: string; hubRole: AgentHubRole },
+  createdBy: string,
+): Promise<string | null> {
+  const existing = await trx
+    .selectFrom('agent_key')
+    .select('principal_id')
+    .where('workspace_id', '=', workspaceId)
+    .where('principal_id', '=', key.principalId)
+    .executeTakeFirst()
+  if (existing) return null
+  const granted = await seedHubGrant(
+    trx,
+    workspaceId,
+    { hubId: key.hubId, principalId: key.principalId, hubRole: key.hubRole },
+    createdBy,
+  )
+  if (!granted) return null
+  const secret = newAgentSecret()
+  await trx
+    .insertInto('agent_key')
+    .values({
+      workspace_id: workspaceId,
+      principal_id: key.principalId,
+      secret_hash: hashAgentSecret(secret),
+      created_by: createdBy,
+      expires_at: null,
+    })
+    .execute()
+  const name = await trx
+    .selectFrom('principal')
+    .select('name')
+    .where('workspace_id', '=', workspaceId)
+    .where('id', '=', key.principalId)
+    .executeTakeFirstOrThrow()
+  await appendAccessLog(trx, {
+    workspaceId,
+    actor: createdBy,
+    action: 'key.create',
+    target: key.principalId,
+    detail: { hubId: key.hubId, hubRole: key.hubRole, name: name.name, expiresAt: null },
+  })
+  return secret
 }
 
 async function seedItems(
@@ -460,24 +709,46 @@ async function seedItems(
     ).map((r) => r.item_id),
   )
 
+  // Relations only link items that still exist: one deleted through the API is left out.
+  const live = new Set(
+    (
+      await db
+        .selectFrom('item')
+        .select('id')
+        .where('workspace_id', '=', ws.id)
+        .where('id', 'in', ids)
+        .execute()
+    ).map((r) => r.id),
+  )
+  const context: ValueContext = {
+    people: ws.people.filter((p) => p.kind === 'user').map((p) => p.id),
+    itemIds: ids,
+  }
+  const authors = hub.authors ?? ws.people.map((p) => p.id)
+
   const rand = random(hashCode(`${ws.id}/${hub.id}`))
   let created = 0
   for (const [index, id] of ids.entries()) {
     // Values are drawn for every item, skipped or not, so a partial run continues identically.
     const values: Record<string, unknown> = {}
     for (const { attribute, required } of definitions) {
-      const value = valueFor(attribute, index, rand)
-      if (required || rand() < 0.85) values[attribute.id] = value
+      let value = valueFor(attribute, index, rand, context)
+      if (attribute.type === 'relation' && Array.isArray(value)) {
+        const targets = value.filter((target: string) => live.has(target))
+        value = targets.length > 0 ? targets : undefined
+      }
+      if ((required || rand() < 0.85) && value !== undefined) values[attribute.id] = value
     }
     if (used.has(id)) continue
     // createItem validates the values with the core contract against the stored attributes.
     // The `??` fallbacks below never apply (both arrays are non-empty and indexed modulo their
     // length); they only satisfy noUncheckedIndexedAccess.
-    await createItem(db, ws.id, (ws.people[index % ws.people.length] ?? ws.people[0]).id, {
+    await createItem(db, ws.id, authors[index % authors.length] ?? ws.people[0].id, {
       id,
       folderId: folders[index % folders.length] ?? hub.id,
       values,
     })
+    live.add(id)
     created++
   }
   return created

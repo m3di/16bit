@@ -12,21 +12,22 @@ import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
-import { createSession, DEFAULT_SESSION_POLICY, SESSION_COOKIE } from './auth/session.ts'
+import { SESSION_COOKIE } from './auth/session.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { sessionCookie } from './db/test-session.ts'
 import { createItem } from './items.ts'
 
 // Integration tests for #43 against a real Postgres: every route family checked against every
 // role in docs/ROLES.md, plus members, hub grants, hub creation and member removal. People act
-// through the dev key, one app per principal; agents through real keys. Access changes must
+// through test sessions (db/test-session.ts); agents through real keys. Access changes must
 // land in access_log (D48) and never in `revision`.
-
-const DEV_KEY = 'test-key'
 
 let db: Kysely<Database>
 let drop: () => Promise<void>
-const apps = new Map<string, FastifyInstance>()
+let app: FastifyInstance
+/** One test session per person, made on first use. */
+const sessions = new Map<string, { cookie: string }>()
 let editorKey: CreatedAgentKey
 let viewerKey: CreatedAgentKey
 
@@ -36,37 +37,34 @@ beforeEach(async () => {
   db = createDb(test.url)
   await migrateToLatest(db)
   await seed()
+  app = buildApp({ db })
   editorKey = await createKey('editor')
   viewerKey = await createKey('viewer')
 })
 
 afterEach(async () => {
-  for (const app of apps.values()) await app.close()
-  apps.clear()
+  await app.close()
+  sessions.clear()
   await db.destroy()
   await drop()
 })
 
-function as(principalId: string): FastifyInstance {
-  let app = apps.get(principalId)
-  if (!app) {
-    app = buildApp({ db, devApiKey: DEV_KEY, devPrincipalId: principalId })
-    apps.set(principalId, app)
+/** A session for the person `principalId`, made on first use. */
+async function as(principalId: string): Promise<{ cookie: string }> {
+  let session = sessions.get(principalId)
+  if (!session) {
+    session = await sessionCookie(db, principalId)
+    sessions.set(principalId, session)
   }
-  return app
+  return session
 }
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
-/** A request as `who`: a principal ID (dev key), or an agent secret. */
-function call(who: string, method: Method, url: string, payload?: object) {
-  const token = who.startsWith('16b_') ? who : DEV_KEY
-  return as(who.startsWith('16b_') ? 'nobody' : who).inject({
-    method,
-    url,
-    headers: { authorization: `Bearer ${token}` },
-    payload,
-  })
+/** A request as `who`: a principal ID (a session), or an agent secret (a bearer token). */
+async function call(who: string, method: Method, url: string, payload?: object) {
+  const headers = who.startsWith('16b_') ? { authorization: `Bearer ${who}` } : await as(who)
+  return app.inject({ method, url, headers, payload })
 }
 
 async function createKey(hubRole: 'editor' | 'viewer'): Promise<CreatedAgentKey> {
@@ -703,29 +701,13 @@ describe('members', () => {
 })
 
 describe('removing a member', () => {
-  /** Links `principalId` to a new account and returns a live session for it. */
+  /** The token of a live session for `principalId`. */
   async function signIn(principalId: string): Promise<string> {
-    const accountId = `acc-${principalId}`
-    await db
-      .insertInto('account')
-      .values({
-        id: accountId,
-        email: `${principalId}@example.com`,
-        password_hash: '$argon2id$unused',
-        name: principalId,
-      })
-      .execute()
-    await db
-      .updateTable('principal')
-      .set({ account_id: accountId })
-      .where('workspace_id', '=', 'w1')
-      .where('id', '=', principalId)
-      .execute()
-    return createSession(db, accountId, DEFAULT_SESSION_POLICY)
+    return (await as(principalId)).cookie.slice(`${SESSION_COOKIE}=`.length)
   }
 
   const withSession = (session: string, method: Method, url: string, payload?: object) =>
-    as('nobody').inject({
+    app.inject({
       method,
       url,
       headers: { cookie: `${SESSION_COOKIE}=${session}` },
@@ -751,7 +733,7 @@ describe('removing a member', () => {
     for (const url of ['/v1/workspaces/w1/hubs', `/v1/workspaces/w1/items/${itemId}`]) {
       expect((await withSession(session, 'GET', url)).statusCode, url).toBe(404)
     }
-    // Nor through the dev key.
+    // Nor through any other session of theirs: a removed principal is never linked again.
     expect((await call('ed', 'GET', '/v1/workspaces/w1/hubs')).statusCode).toBe(404)
     expect((await call('ed', 'GET', '/v1/workspaces')).json<{ items: unknown[] }>().items).toEqual(
       [],
@@ -776,7 +758,7 @@ describe('removing a member', () => {
         target: 'ed',
         detail: {
           workspaceRole: 'member',
-          accountId: 'acc-ed',
+          accountId: 'acct-ed',
           revokedGrants: [{ hubId: 'build', hubRole: 'editor' }],
           expiredInvites: [],
         },
@@ -824,7 +806,7 @@ describe('removing a member', () => {
       revokedGrants: [{ hubId: 'build', hubRole: 'hub_admin' }],
       expiredInvites: [invite.json<{ invite: { id: string } }>().invite.id],
     })
-    const redeem = await as('nobody').inject({
+    const redeem = await app.inject({
       method: 'POST',
       url: `/v1/auth/invites/${token}`,
       payload: { name: 'Sneaky', email: 'sneaky@example.com', password: 'long enough password' },

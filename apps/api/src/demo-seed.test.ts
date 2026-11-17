@@ -1,34 +1,46 @@
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { hubPageSchema, validateItemValues, workspacePageSchema, type Folder } from '@16bit/core'
+import {
+  attributeTypes,
+  hubPageSchema,
+  meSchema,
+  validateItemValues,
+  workspacePageSchema,
+  type Folder,
+  type HubListEntry,
+} from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
-import { applySeed, demoSeed } from './demo-seed.ts'
+import { applySeed, demoSeed, type SeedResult } from './demo-seed.ts'
+import { DEV_OWNER, DEV_PASSWORD } from './dev-accounts.ts'
 import { folderDefinitions } from './items.ts'
+import { hashAgentSecret } from './auth/agent-key.ts'
 
 // Integration tests: the demo seed against a fresh, migrated Postgres database. The seed is
 // applied once in beforeAll; the later tests run it again, so they depend on test order.
 
-const KEY = 'test-key'
-const ACTOR = 'dev-owner'
-const auth = { authorization: `Bearer ${KEY}` }
+const ACTOR = DEV_OWNER.id
 
 let db: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
+/** The dev owner, signed in with the development password. */
+let auth: { cookie: string }
+let first: SeedResult
 
 beforeAll(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
   await migrateToLatest(db)
-  await applySeed(db, { devPrincipalId: ACTOR })
-  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
+  first = await applySeed(db)
+  app = buildApp({ db })
+  auth = await signIn(DEV_OWNER.email)
 }, 120_000)
 
 afterAll(async () => {
@@ -36,6 +48,33 @@ afterAll(async () => {
   await db.destroy()
   await drop()
 })
+
+/** Signs in through the API with the development password; returns the cookie to send. */
+async function signIn(email: string): Promise<{ cookie: string }> {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/login',
+    payload: { email, password: DEV_PASSWORD },
+  })
+  expect(res.statusCode, `${email}: ${res.body}`).toBe(200)
+  const setCookie = res.headers['set-cookie']
+  const pair = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(';')[0]
+  if (!pair) throw new Error('no Set-Cookie')
+  return { cookie: pair }
+}
+
+async function hubList(
+  workspaceId: string,
+  headers: Record<string, string>,
+): Promise<HubListEntry[]> {
+  const res = await app.inject({
+    method: 'GET',
+    url: `/v1/workspaces/${workspaceId}/hubs?limit=50`,
+    headers,
+  })
+  expect(res.statusCode).toBe(200)
+  return hubPageSchema.parse(res.json()).items
+}
 
 /** The SizeMeter steps in docs/DESIGN.md: 0, 1 to 9, under 100, under 1,000, 1,000 or more. */
 const sizeStep = (count: number): number =>
@@ -67,6 +106,8 @@ async function tableCounts(): Promise<Record<string, number>> {
     'revision',
     'hub_grant',
     'access_log',
+    'account',
+    'agent_key',
   ] as const
   const counts: Record<string, number> = {}
   for (const table of tables) {
@@ -80,7 +121,7 @@ async function tableCounts(): Promise<Record<string, number>> {
 }
 
 describe('demo seed', () => {
-  it('creates two workspaces the dev key can see', async () => {
+  it('creates two workspaces the dev owner sees after signing in', async () => {
     const res = await app.inject({ method: 'GET', url: '/v1/workspaces', headers: auth })
     expect(res.statusCode).toBe(200)
     const ids = workspacePageSchema.parse(res.json()).items.map((w) => w.id)
@@ -154,14 +195,16 @@ describe('demo seed', () => {
       .execute()
     expect(authors.map((a) => a.updated_by).sort()).toEqual([
       'dev-owner',
+      'ivy',
       'leo',
       'mina',
+      'noor',
       'triage-bot',
     ])
   })
 
   it('stores only values that pass the core contracts', async () => {
-    for (const ws of demoSeed(ACTOR)) {
+    for (const ws of demoSeed()) {
       for (const hub of ws.hubs) {
         const items = await db
           .selectFrom('item')
@@ -178,7 +221,15 @@ describe('demo seed', () => {
             defs = await folderDefinitions(db, ws.id, item.folder_id)
             definitions.set(item.folder_id, defs)
           }
-          expect(validateItemValues(defs, item.values, { partial: false }).ok).toBe(true)
+          // Read-only values (auto_id) are the server's; a client may not send them.
+          const values = Object.fromEntries(
+            Object.entries(item.values).filter(([id]) => {
+              const def = defs.find((d) => d.attribute.id === id)
+              return !def || !attributeTypes[def.attribute.type].readOnly
+            }),
+          )
+          const result = validateItemValues(defs, values, { partial: false })
+          expect(result.ok, JSON.stringify(result)).toBe(true)
         }
       }
     }
@@ -186,7 +237,7 @@ describe('demo seed', () => {
 
   it('writes nothing on a second run', async () => {
     const before = await tableCounts()
-    const result = await applySeed(db, { devPrincipalId: ACTOR })
+    const result = await applySeed(db)
     expect(result.itemsCreated).toBe(0)
     expect(await tableCounts()).toEqual(before)
   }, 60_000)
@@ -199,7 +250,7 @@ describe('demo seed', () => {
     })
     expect(res.statusCode).toBe(204)
 
-    const result = await applySeed(db, { devPrincipalId: ACTOR })
+    const result = await applySeed(db)
     expect(result.itemsCreated).toBe(0)
     const gone = await app.inject({
       method: 'GET',
@@ -211,6 +262,121 @@ describe('demo seed', () => {
     expect(hiring?.itemCount).toBe(5)
   }, 60_000)
 
+  it('lets every seeded person sign in with the development password', async () => {
+    const expected: Record<string, [string, string][]> = {
+      [DEV_OWNER.email]: [
+        ['acme', 'owner'],
+        ['demo', 'owner'],
+      ],
+      'mina@example.com': [['demo', 'admin']],
+      'leo@example.com': [['demo', 'member']],
+      'ivy@example.com': [['demo', 'viewer']],
+      'noor@example.com': [['demo', 'finance']],
+      'sam@example.com': [['acme', 'finance']],
+    }
+    expect(first.accounts).toEqual(Object.keys(expected).sort())
+    for (const [email, memberships] of Object.entries(expected)) {
+      const res = await app.inject({ method: 'GET', url: '/v1/me', headers: await signIn(email) })
+      const me = meSchema.parse(res.json())
+      if (me.kind !== 'person') throw new Error(`${email} is not a person`)
+      expect(me.account.email).toBe(email)
+      const got = me.memberships.map((m) => [m.workspace.id, m.workspaceRole]).sort()
+      expect(got, email).toEqual(memberships)
+    }
+  })
+
+  it('covers every workspace role in one workspace, plus an agent', async () => {
+    const roles = await db
+      .selectFrom('principal')
+      .select(['kind', 'workspace_role'])
+      .distinct()
+      .where('workspace_id', '=', 'demo')
+      .execute()
+    expect(roles.map((r) => `${r.kind}:${r.workspace_role}`).sort()).toEqual([
+      'agent:member',
+      'user:admin',
+      'user:finance',
+      'user:member',
+      'user:owner',
+      'user:viewer',
+    ])
+  })
+
+  it('seeds hub grants that the role matrix caps and hides', async () => {
+    const byId = (list: HubListEntry[]) => new Map(list.map((h) => [h.id, h]))
+    // An admin sees every hub name, but nothing inside the ones she holds no grant on (D45).
+    const mina = byId(await hubList('demo', await signIn('mina@example.com')))
+    expect(mina.get('support')).toMatchObject({ access: 'granted', hubRole: 'hub_admin' })
+    expect(mina.get('design')).toMatchObject({ access: 'none' })
+    // A viewer's editor grant acts as viewer.
+    const ivy = byId(await hubList('demo', await signIn('ivy@example.com')))
+    expect(ivy.get('launch')).toMatchObject({ access: 'granted', hubRole: 'viewer' })
+    expect([...ivy.keys()].sort()).toEqual(['launch', 'product'])
+    // Seeded grants are access changes, so they are logged (D48), once.
+    const logged = await db
+      .selectFrom('access_log')
+      .select(['action', 'target', 'detail'])
+      .where('workspace_id', '=', 'demo')
+      .where('target', '=', 'ivy')
+      .execute()
+    expect(logged).toHaveLength(2)
+    expect(logged.every((l) => l.action === 'grant.set')).toBe(true)
+  })
+
+  it('creates one agent key, shows its secret once, and it works as a bearer token', async () => {
+    const key = first.agentKey
+    if (!key) throw new Error('no agent key on the first run')
+    expect(key).toMatchObject({ workspaceId: 'demo', hubId: 'product', principalId: 'triage-bot' })
+    const me = await app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${key.secret}` },
+    })
+    expect(meSchema.parse(me.json())).toMatchObject({
+      kind: 'agent',
+      principalId: 'triage-bot',
+      hub: { id: 'product' },
+      hubRole: 'editor',
+    })
+    const stored = await db.selectFrom('agent_key').select('secret_hash').execute()
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.secret_hash).toBe(hashAgentSecret(key.secret))
+    const log = await db
+      .selectFrom('access_log')
+      .select('action')
+      .where('workspace_id', '=', 'demo')
+      .where('target', '=', 'triage-bot')
+      .orderBy('seq')
+      .execute()
+    expect(log.map((l) => l.action)).toEqual(['grant.set', 'key.create'])
+  })
+
+  it('has a hub with an attribute of every M1 type, each with values', async () => {
+    const attributes = await db
+      .selectFrom('attribute')
+      .select(['id', 'type'])
+      .where('workspace_id', '=', 'demo')
+      .where('hub_id', '=', 'launch')
+      .execute()
+    expect(new Set(attributes.map((a) => a.type))).toEqual(new Set(Object.keys(attributeTypes)))
+    const items = await db
+      .selectFrom('item')
+      .select('values')
+      .where('workspace_id', '=', 'demo')
+      .where('hub_id', '=', 'launch')
+      .execute()
+    for (const { id, type } of attributes) {
+      const set = items.filter((i) => (i.values as Record<string, unknown>)[id] != null)
+      expect(set.length, `${type} values`).toBeGreaterThan(0)
+    }
+    const links = await db
+      .selectFrom('link')
+      .select(sql<number>`count(*)::int`.as('n'))
+      .where('workspace_id', '=', 'demo')
+      .executeTakeFirstOrThrow()
+    expect(links.n).toBeGreaterThan(0)
+  })
+
   it('gives no agent a role that manages members or billing (D28)', async () => {
     const agents = await db
       .selectFrom('principal')
@@ -221,6 +387,29 @@ describe('demo seed', () => {
     expect(agents).toEqual([])
   })
 
+  it('shows no agent secret on a second run', async () => {
+    const result = await applySeed(db)
+    expect(result.agentKey).toBeNull()
+  }, 60_000)
+
+  it('links a person’s principal from before accounts existed to their account', async () => {
+    // As an M0 database left it: the principal is there, with no account.
+    await db
+      .updateTable('principal')
+      .set({ account_id: null })
+      .where('workspace_id', '=', 'demo')
+      .where('id', '=', 'leo')
+      .execute()
+    await applySeed(db)
+    const row = await db
+      .selectFrom('principal')
+      .select('account_id')
+      .where('workspace_id', '=', 'demo')
+      .where('id', '=', 'leo')
+      .executeTakeFirstOrThrow()
+    expect(row.account_id).toBe('leo')
+  }, 60_000)
+
   it('makes the dev principal owner again if its row has a lower role', async () => {
     await db
       .updateTable('principal')
@@ -228,7 +417,7 @@ describe('demo seed', () => {
       .where('workspace_id', '=', 'demo')
       .where('id', '=', ACTOR)
       .execute()
-    await applySeed(db, { devPrincipalId: ACTOR })
+    await applySeed(db)
     const row = await db
       .selectFrom('principal')
       .select('workspace_role')
@@ -305,7 +494,7 @@ describe('demo seed', () => {
         .where('id', '=', 'events')
         .execute()
     })
-    const result = await applySeed(db, { devPrincipalId: ACTOR })
+    const result = await applySeed(db)
     expect(result.itemsCreated).toBe(1)
     const events = (await hubs('acme')).find((h) => h.id === 'events')
     expect(events?.itemCount).toBe(3)

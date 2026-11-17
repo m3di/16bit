@@ -78,9 +78,6 @@ jobs:
           --health-retries 15
     env:
       DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
-      # The development key from .env.example. Not a secret: it only opens this throwaway job's API.
-      DEV_API_KEY: dev-only-key
-      DEV_PRINCIPAL_ID: dev-owner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,7 +94,8 @@ jobs:
       # The browser version comes from the @playwright/test version pinned in e2e/package.json.
       - run: pnpm --filter @16bit/e2e exec playwright install --with-deps chromium
       - run: pnpm db:migrate
-      - run: pnpm seed
+      # The output holds the seeded agent key's secret; keep it out of the public log.
+      - run: pnpm seed > /dev/null
       # Playwright starts the API and the web app itself (webServer in e2e/playwright.config.ts).
       - run: pnpm e2e
 
@@ -143,7 +141,18 @@ jobs:
           curl --fail --silent --show-error "$base/health"
           curl --fail --silent --show-error -H 'Accept: text/html' "$base/" | grep -q '<div id="app">'
           curl --fail --silent --show-error -H 'Accept: text/html' "$base/hubs/any" | grep -q '<div id="app">'
-          curl --fail --silent --show-error "$base/v1/workspaces" | grep -q '"items"'
+          # No anonymous access (D41 retired in #51): the API wants a session or an agent key.
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$base/v1/workspaces")" = 401
+          # A seeded person signs in and gets data. The seed's output holds the agent secret,
+          # so it stays out of the log. The cookie is Secure and this is plain HTTP, so it is
+          # sent back as an explicit header rather than through a cookie jar.
+          docker compose run --rm app node src/seed.ts --force > /dev/null
+          sid=$(curl --fail --silent --show-error --output /dev/null --dump-header - \
+            -H 'Content-Type: application/json' \
+            --data '{"email":"owner@example.com","password":"16bit-dev-password"}' \
+            "$base/v1/auth/login" | sed -n 's/^[Ss]et-[Cc]ookie: sid=\([^;]*\).*/\1/p')
+          test -n "$sid"
+          curl --fail --silent --show-error -H "Cookie: sid=$sid" "$base/v1/workspaces" | grep -q 'Pixel Works'
 
       - name: Logs on failure
         if: failure()

@@ -5,17 +5,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
+import { sessionCookie } from './db/test-session.ts'
 import { encodeCursor } from './http.ts'
 import { itemQueryStatement, type ItemQuery } from './items.ts'
 
 // Integration tests for item_index, filters, and sorts (D6, D19, D20) against a real Postgres.
 
-const KEY = 'test-key'
 const ACTOR = 'dev-owner'
 
 let db: Kysely<Database>
 let drop: () => Promise<void>
 let app: FastifyInstance
+let auth: { cookie: string }
 
 /**
  * Hub `h`, one indexed attribute per M0 type (two dates), and `notes`, which is not indexed.
@@ -70,7 +71,7 @@ beforeEach(async () => {
   db = createDb(test.url)
   await migrateToLatest(db)
   await seedWorkspace('w1')
-  app = buildApp({ db, devApiKey: KEY, devPrincipalId: ACTOR })
+  app = buildApp({ db })
   for (const [id, values] of Object.entries(ITEMS)) await createIn('w1', id, values)
 })
 
@@ -81,6 +82,8 @@ async function seedWorkspace(ws: string): Promise<void> {
     .insertInto('principal')
     .values({ workspace_id: ws, id: ACTOR, kind: 'user', name: 'Dev', workspace_role: 'owner' })
     .execute()
+  // Signs in again, so the session also reaches this workspace.
+  auth = await sessionCookie(db, ACTOR)
   await db
     .insertInto('folder')
     .values({
@@ -151,7 +154,7 @@ afterEach(async () => {
 })
 
 function post(url: string, payload: object) {
-  return app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${KEY}` }, payload })
+  return app.inject({ method: 'POST', url, headers: auth, payload })
 }
 
 function query(body: object, ws = 'w1') {
@@ -203,7 +206,7 @@ describe('index writes', () => {
       app.inject({
         method: 'PATCH',
         url: '/v1/workspaces/w1/items/a',
-        headers: { authorization: `Bearer ${KEY}` },
+        headers: auth,
         payload: { version, values },
       })
     expect((await patch(1, { points: 20, title: null })).statusCode).toBe(200)
@@ -220,7 +223,7 @@ describe('index writes', () => {
     const res = await app.inject({
       method: 'DELETE',
       url: '/v1/workspaces/w1/items/b?version=1',
-      headers: { authorization: `Bearer ${KEY}` },
+      headers: auth,
     })
     expect(res.statusCode).toBe(204)
     expect(await rows('b')).toEqual([])

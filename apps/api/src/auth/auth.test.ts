@@ -12,14 +12,15 @@ import { createDb, migrateToLatest, type Database } from '../db/database.ts'
 import { createTestDatabase } from '../db/test-database.ts'
 import { resetPassword } from '../reset-password.ts'
 import { hashPassword, verifyPassword } from './password.ts'
+import { hashAgentSecret, newAgentSecret } from './agent-key.ts'
 import { hashToken } from './session.ts'
+import { sessionCookie } from '../db/test-session.ts'
+import { DEV_PASSWORD, devPasswordRefused } from '../dev-accounts.ts'
 
 // Integration tests for sign-in, sessions and invites (#41) against a fresh Postgres per test.
 
-const KEY = 'test-key'
 const DEV = 'dev-owner'
 const PASSWORD = 'correct horse battery'
-const dev = { authorization: `Bearer ${KEY}` }
 const crossSite = { 'sec-fetch-site': 'cross-site' }
 
 let db: Kysely<Database>
@@ -46,12 +47,12 @@ afterEach(async () => {
   await drop()
 })
 
-const build = (options: Partial<AppOptions> = {}) =>
-  buildApp({ db, devApiKey: KEY, devPrincipalId: DEV, ...options })
+const build = (options: Partial<AppOptions> = {}) => buildApp({ db, ...options })
 
 /**
  * w1 "Alpha": alice owner, bob admin, carol member, plus the dev owner.
- * w2 "Beta": only the dev owner. dave has an account and no workspace.
+ * w2 "Beta": only the dev owner. dave has an account and no workspace. The dev owner gets an
+ * account only when `inviteToken` signs it in.
  */
 async function seed(): Promise<void> {
   await db
@@ -131,10 +132,54 @@ async function createInvite(
   })
 }
 
+/** An invite made by the dev owner. Its session is gone again, so session counts stay exact. */
 async function inviteToken(workspaceId = 'w1', workspaceRole = 'member'): Promise<string> {
-  const res = await createInvite(dev, workspaceId, workspaceRole)
+  const res = await createInvite(await sessionCookie(db, DEV), workspaceId, workspaceRole)
   expect(res.statusCode).toBe(201)
+  await db.deleteFrom('session').where('account_id', '=', `acct-${DEV}`).execute()
   return createdInviteSchema.parse(res.json()).token
+}
+
+/** An agent key with viewer access to a new hub `h` in w1. Returns the bearer header. */
+async function agentKey(): Promise<{ authorization: string }> {
+  await db
+    .insertInto('folder')
+    .values({
+      workspace_id: 'w1',
+      id: 'h',
+      hub_id: 'h',
+      parent_id: null,
+      name: 'H',
+      color: 'blue',
+      id_prefix: 'H',
+    })
+    .execute()
+  await db
+    .insertInto('principal')
+    .values({ workspace_id: 'w1', id: 'bot', kind: 'agent', name: 'Bot', workspace_role: 'member' })
+    .execute()
+  await db
+    .insertInto('hub_grant')
+    .values({
+      workspace_id: 'w1',
+      hub_id: 'h',
+      principal_id: 'bot',
+      principal_kind: 'agent',
+      hub_role: 'viewer',
+    })
+    .execute()
+  const secret = newAgentSecret()
+  await db
+    .insertInto('agent_key')
+    .values({
+      workspace_id: 'w1',
+      principal_id: 'bot',
+      secret_hash: hashAgentSecret(secret),
+      created_by: 'p-alice',
+      expires_at: null,
+    })
+    .execute()
+  return { authorization: `Bearer ${secret}` }
 }
 
 const accept = (token: string, payload: object = {}, headers = {}) =>
@@ -215,6 +260,53 @@ describe('POST /v1/auth/login', () => {
     expect(await db.selectFrom('session').select('id_hash').execute()).toEqual([])
   })
 
+  describe('the development password', () => {
+    beforeEach(async () => {
+      await db
+        .updateTable('account')
+        .set({ password_hash: await hashPassword(DEV_PASSWORD) })
+        .where('id', '=', 'dave')
+        .execute()
+    })
+
+    it('is refused when configured, for every email, and other passwords still work', async () => {
+      app = build({ refuseDevPassword: true })
+      const known = await login('dave@example.com', DEV_PASSWORD)
+      const unknown = await login('nobody@example.com', DEV_PASSWORD)
+      for (const res of [known, unknown]) {
+        expect(res.statusCode).toBe(401)
+        expect(res.json()).toEqual({
+          error: 'unauthorized',
+          message: 'The development password is refused in production',
+        })
+        expect(res.headers['set-cookie']).toBeUndefined()
+      }
+      expect(await db.selectFrom('session').select('id_hash').execute()).toEqual([])
+      expect((await login('alice@example.com')).statusCode).toBe(200)
+    })
+
+    it('signs in when not refused (the opt-in)', async () => {
+      app = build({ refuseDevPassword: false })
+      const res = await login('dave@example.com', DEV_PASSWORD)
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['set-cookie']).toBeDefined()
+    })
+
+    it('counts a refused attempt towards the rate limit', async () => {
+      app = build({ refuseDevPassword: true, loginPerEmail: { max: 1, windowSeconds: 60 } })
+      expect((await login('dave@example.com', DEV_PASSWORD)).statusCode).toBe(401)
+      expect((await login('dave@example.com', DEV_PASSWORD)).statusCode).toBe(429)
+    })
+
+    it('is refused under NODE_ENV=production unless ALLOW_DEV_PASSWORD=1', () => {
+      expect(devPasswordRefused({ NODE_ENV: 'production' })).toBe(true)
+      expect(devPasswordRefused({ NODE_ENV: 'production', ALLOW_DEV_PASSWORD: 'true' })).toBe(true)
+      expect(devPasswordRefused({ NODE_ENV: 'production', ALLOW_DEV_PASSWORD: '1' })).toBe(false)
+      expect(devPasswordRefused({ NODE_ENV: 'development' })).toBe(false)
+      expect(devPasswordRefused({})).toBe(false)
+    })
+  })
+
   it('rejects a malformed body with 400', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -289,13 +381,17 @@ describe('sessions', () => {
     })
   })
 
-  it('GET /v1/me is 401 without credentials, with a bad cookie, and for the dev key', async () => {
+  it('GET /v1/me is 401 without credentials, with a bad cookie, and for the old dev key', async () => {
     expect((await app.inject({ url: '/v1/me' })).statusCode).toBe(401)
     const bad = await app.inject({ url: '/v1/me', headers: { cookie: 'sid=nope' } })
     expect(bad.statusCode).toBe(401)
-    const devMe = await app.inject({ url: '/v1/me', headers: dev })
+    // The M0 development key is gone (#51): its old value is just a wrong token.
+    const devKey = { authorization: 'Bearer dev-only-key' }
+    const devMe = await app.inject({ url: '/v1/me', headers: devKey })
     expect(devMe.statusCode).toBe(401)
     expect(devMe.json()).toMatchObject({ error: 'unauthorized' })
+    const devList = await app.inject({ url: '/v1/workspaces', headers: devKey })
+    expect(devList.statusCode).toBe(401)
   })
 
   it('a session acts as the account’s principal in the workspace of the path', async () => {
@@ -366,6 +462,26 @@ describe('sessions', () => {
     expect((await app.inject({ url: '/v1/me', headers: alice })).statusCode).toBe(401)
   })
 
+  it('answers an expired cookie with 401 everywhere, never as anyone else', async () => {
+    // With D41's anonymous dev owner, an expired cookie used to fall through to the owner.
+    const alice = await session('alice@example.com')
+    await db
+      .updateTable('session')
+      .set({
+        created_at: sql`now() - interval '31 days'`,
+        expires_at: sql`now() - interval '1 second'`,
+      })
+      .execute()
+    for (const url of ['/v1/me', '/v1/workspaces', '/v1/workspaces/w1/hubs']) {
+      const res = await app.inject({ url, headers: alice })
+      expect(res.statusCode, url).toBe(401)
+      expect(res.json()).toMatchObject({ error: 'unauthorized' })
+    }
+    const write = await createInvite(alice)
+    expect(write.statusCode).toBe(401)
+    expect(await db.selectFrom('invite').select('id').execute()).toEqual([])
+  })
+
   it('refreshes last_seen_at on use, at most once a minute', async () => {
     const alice = await session('alice@example.com')
     await db
@@ -394,7 +510,13 @@ describe('sessions', () => {
   })
 
   it('does not apply the CSRF guard to bearer-authenticated writes', async () => {
-    expect((await createInvite({ ...dev, ...crossSite })).statusCode).toBe(201)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/workspaces/w1/query',
+      headers: { ...(await agentKey()), ...crossSite },
+      payload: { from: 'h', limit: 10 },
+    })
+    expect(res.statusCode, res.body).toBe(200)
   })
 })
 
@@ -628,8 +750,8 @@ describe('POST /v1/auth/invites/:token', () => {
     const token = await inviteToken()
     const res = await accept(token, {})
     expect(res.statusCode).toBe(401)
-    // The dev key has no account to add.
-    expect((await accept(token, {}, dev)).statusCode).toBe(401)
+    // An agent key has no account to add.
+    expect((await accept(token, {}, await agentKey())).statusCode).toBe(401)
   })
 
   it('rejects a short password and a malformed token', async () => {

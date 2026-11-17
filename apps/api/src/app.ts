@@ -33,7 +33,7 @@ import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import { backlinks, createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
-import { toAttribute, toFolder, toFolderAttribute, toWorkspace } from './mappers.ts'
+import { toAttribute, toFolder, toFolderAttribute } from './mappers.ts'
 import {
   changeMemberRole,
   createHub,
@@ -46,10 +46,6 @@ import { isAppRoute, registerWeb, sendAppShell } from './web.ts'
 
 export interface AppOptions {
   db: Kysely<Database>
-  /** The M0 development key, sent as `Authorization: Bearer <key>`. */
-  devApiKey: string
-  /** The principal the development key acts as. It must exist in a workspace to see it. */
-  devPrincipalId: string
   /** Cap on folders and on attributes in a hub description. Folder attributes get 10 times it. */
   maxHubEntries?: number
   /** Cap on linked items in one query response. Defaults to `MAX_LINKED_ITEMS`; lowered in tests. */
@@ -58,16 +54,12 @@ export interface AppOptions {
   maxHiddenBacklinks?: number
   /** Directory of the built web app. When set, the API also serves the dashboard (D34). */
   webRoot?: string
-  /**
-   * Local only. A request with no Authorization header acts as the development principal,
-   * as the Vite dev proxy does in `pnpm dev`. Lets the browser use the dashboard the image
-   * serves without the key reaching the bundle. Removed when real auth lands in M1.
-   */
-  anonymousAsDevPrincipal?: boolean
   /** Session lifetimes. Defaults to 30 days absolute, 7 days idle. */
   session?: SessionPolicy
   /** Adds `Secure` to the session cookie. Off only for plain-HTTP local development. */
   secureCookies?: boolean
+  /** Refuses sign-in with the seeds' published `DEV_PASSWORD`. Set from `devPasswordRefused`. */
+  refuseDevPassword?: boolean
   /** Sign-in attempts per email. Defaults to 10 per 15 minutes. */
   loginPerEmail?: RateLimitPolicy
   /** Sign-in and invite acceptance attempts per client IP. Defaults to 100 per 15 minutes. */
@@ -93,9 +85,6 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const app = Fastify({ logger: false })
   const auth = {
     db,
-    devApiKey: options.devApiKey,
-    devPrincipalId: options.devPrincipalId,
-    anonymousAsDevPrincipal: options.anonymousAsDevPrincipal ?? false,
     session: options.session ?? DEFAULT_SESSION_POLICY,
     secureCookies: options.secureCookies ?? true,
   }
@@ -134,7 +123,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
   void app.register(
     (v1, _opts, done) => {
       registerAuthHook(v1, auth)
-      registerAuthRoutes(v1, { ...auth, emailLimiter, ipLimiter })
+      registerAuthRoutes(v1, {
+        ...auth,
+        emailLimiter,
+        ipLimiter,
+        refuseDevPassword: options.refuseDevPassword ?? false,
+      })
 
       v1.get('/workspaces', async (request): Promise<Page<Workspace>> => {
         const identity = requireIdentity(request)
@@ -160,29 +154,14 @@ export function buildApp(options: AppOptions): FastifyInstance {
           }))
           return page(workspaces, limit, (w) => [w.name, w.id])
         }
-        if (identity.kind === 'agent') {
-          // An agent has exactly one workspace, its key's, taken from the key lookup (RLS-safe
-          // like the branch above). One row never yields a next cursor, so any cursor is past it.
-          const workspace: Workspace = {
-            id: identity.workspaceId,
-            name: identity.workspaceName,
-            createdAt: identity.workspaceCreatedAt.toISOString(),
-          }
-          return page(after ? [] : [workspace], limit, (w) => [w.name, w.id])
+        // An agent has exactly one workspace, its key's, taken from the key lookup (RLS-safe
+        // like the branch above). One row never yields a next cursor, so any cursor is past it.
+        const workspace: Workspace = {
+          id: identity.workspaceId,
+          name: identity.workspaceName,
+          createdAt: identity.workspaceCreatedAt.toISOString(),
         }
-        let q = db
-          .selectFrom('workspace as w')
-          .innerJoin('principal as p', 'p.workspace_id', 'w.id')
-          .selectAll('w')
-          .where('p.id', '=', identity.principalId)
-          .where('p.removed_at', 'is', null)
-        if (after) q = q.where(sql<boolean>`(w.name, w.id) > (${after[0]}, ${after[1]})`)
-        const rows = await q
-          .orderBy('w.name')
-          .orderBy('w.id')
-          .limit(limit + 1)
-          .execute()
-        return page(rows.map(toWorkspace), limit, (w) => [w.name, w.id])
+        return page(after ? [] : [workspace], limit, (w) => [w.name, w.id])
       })
 
       void v1.register(
