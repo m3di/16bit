@@ -36,7 +36,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
 | Delete a hub | ✓ | ✓ | — | — | — | — |
-| Remove a member (revokes their grants in this workspace; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
+| Remove a member (revokes their grants in this workspace and expires the unused invites they created; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
 | Rename or delete the workspace | ✓ | — | — | — | — | — |
 
 ¹ An admin cannot change, remove or create an owner, and cannot set, change or revoke an owner's hub grants. There is always at least one owner.

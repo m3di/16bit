@@ -4,6 +4,7 @@ import type { ItemValues, SelectOption, ValueError } from '@16bit/core'
 import type { Kysely } from 'kysely'
 import { z } from 'zod'
 import type { Database } from './db/database.ts'
+import { ensureHubAdmin } from './access-log.ts'
 import { HttpError } from './http.ts'
 import { createItem, patchItem } from './items.ts'
 
@@ -198,6 +199,7 @@ export async function ensureBuildHub(db: Kysely<Database>, ownerId: string): Pro
       )
       .onConflict((oc) => oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing())
       .execute()
+    await ensureHubAdmin(trx, ws, BUILD_HUB.id, ownerId)
   })
 }
 

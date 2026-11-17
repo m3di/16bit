@@ -5,6 +5,7 @@ import {
   type PaletteColor,
 } from '@16bit/core'
 import type { Kysely } from 'kysely'
+import { ensureHubAdmin } from './access-log.ts'
 import type { Database, PrincipalTable } from './db/database.ts'
 import { createItem } from './items.ts'
 
@@ -35,7 +36,7 @@ interface HubSeed extends FolderSeed {
 }
 
 // Seeded people have no account yet; accounts arrive with the M1 people seed (#51).
-type Person = Omit<PrincipalTable, 'workspace_id' | 'account_id'>
+type Person = Omit<PrincipalTable, 'workspace_id' | 'account_id' | 'removed_at'>
 
 interface WorkspaceSeed {
   id: string
@@ -422,6 +423,7 @@ export async function applySeed(
           )
           .onConflict((oc) => oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing())
           .execute()
+        await ensureHubAdmin(trx, ws.id, hub.id, devOwner.id)
       }
     })
 

@@ -48,7 +48,11 @@ async function hubs(workspaceId: string): Promise<Folder[]> {
     headers: auth,
   })
   expect(res.statusCode).toBe(200)
-  return hubPageSchema.parse(res.json()).items
+  // The seed makes the dev owner hub admin of every hub it creates (D45).
+  return hubPageSchema.parse(res.json()).items.map((h) => {
+    if (h.access !== 'granted' || h.hubRole !== 'hub_admin') throw new Error(`No grant on ${h.id}`)
+    return h
+  })
 }
 
 /** Row counts per table, to prove a second run writes nothing. */
@@ -61,6 +65,8 @@ async function tableCounts(): Promise<Record<string, number>> {
     'folder_attribute',
     'item',
     'revision',
+    'hub_grant',
+    'access_log',
   ] as const
   const counts: Record<string, number> = {}
   for (const table of tables) {
