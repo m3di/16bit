@@ -108,3 +108,10 @@ export function multiSelectToggled(
   const next = (toggled(value, id, on) ?? []).filter((v) => live.has(v))
   return next.length > 0 ? next : null
 }
+
+/**
+ * Whether the picker says its matches come only from the loaded pages. Only above a list of
+ * matches: with none, the "No matches among the items loaded so far" line says it instead.
+ */
+export const showsLoadedOnlyNote = (local: boolean, searched: string, offered: number) =>
+  local && searched !== '' && offered > 0

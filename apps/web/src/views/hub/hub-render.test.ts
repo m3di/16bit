@@ -103,10 +103,13 @@ describe('ItemsBlock', () => {
     expect(await block(ready([]), [])).toContain('New item')
   })
 
-  it('offers no "New item" once the hub is read-only, and says why', async () => {
+  it('offers no "New item" once the hub is read-only, and leaves the reason to the page', async () => {
     const html = await block(ready([]), [], true)
+    expect(html).toContain('No items in this folder yet')
     expect(html).not.toContain('New item')
-    expect(html).toContain('You can view the items in this hub but not add them.')
+    // HubPage's header states the read-only reason once; the empty state does not repeat it.
+    expect(html).not.toContain('You can view the items')
+    expect(html).not.toContain('Items you add here')
   })
 })
 

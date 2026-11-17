@@ -7,6 +7,7 @@ import {
   listValue,
   multiSelectToggled,
   readableTarget,
+  showsLoadedOnlyNote,
   toggled,
 } from './relations.ts'
 import { folderColumns } from './useHub.ts'
@@ -112,5 +113,15 @@ describe('multi-select commits (#50)', () => {
     const next = multiSelectToggled(['gone', 'gone2'], options, 'gone', false)
     expect(next).toBeNull()
     expect(accepted(next)).toBe(true)
+  })
+})
+
+describe('picker notes', () => {
+  it('says matches are among the loaded items only above a list of matches', () => {
+    expect(showsLoadedOnlyNote(true, 'ship', 2)).toBe(true)
+    // No match: "No matches among the items loaded so far" stands alone.
+    expect(showsLoadedOnlyNote(true, 'ship', 0)).toBe(false)
+    expect(showsLoadedOnlyNote(true, '', 2)).toBe(false)
+    expect(showsLoadedOnlyNote(false, 'ship', 2)).toBe(false)
   })
 })
