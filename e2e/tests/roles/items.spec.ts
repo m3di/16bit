@@ -115,6 +115,21 @@ test('an editor adds an item and edits it in the browser', async ({ pageAs, as }
   expect(id).not.toBeNull()
   const stored = await getItem(as('owner'), id ?? '')
   expect(stored).toMatchObject({ updatedBy: people.leo.id, values: { [TITLE]: name } })
+
+  // The new item is open in the panel; Leo renames it there.
+  const edited = uniqueTitle('leo edits')
+  const field = itemPanel(page).getByLabel('Title (required)')
+  await expect(field).toHaveValue(name)
+  await field.fill(edited)
+  await field.press('Enter')
+  await expect(
+    itemsTable(page, 'Launch').getByRole('row').filter({ hasText: edited }),
+  ).toBeVisible()
+  await expect
+    .poll(async () => getItem(as('owner'), id ?? ''))
+    .toMatchObject({ version: 2, updatedBy: people.leo.id, values: { [TITLE]: edited } })
+  await page.reload()
+  await expect(itemPanel(page).getByLabel('Title (required)')).toHaveValue(edited)
 })
 
 test.describe('read-only from the hub role', () => {

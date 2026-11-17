@@ -139,13 +139,23 @@ interface Fixtures {
   pageAs: (person: Person, viewport?: ViewportSize) => Promise<Page>
   /** A browser page carrying this session cookie, or none (`null`): for people a spec invited. */
   pageWithSession: (sid: string | null, viewport?: ViewportSize) => Promise<Page>
-  /** Invites someone through the owner and accepts as a new account. Removed at the end. */
-  invite: (workspaceRole: 'admin' | 'member' | 'viewer' | 'finance') => Promise<Invited>
-  /** Creates an agent key as `creator` (default the owner). Revoked at the end. */
+  /**
+   * Invites someone through `by` (default the owner) and accepts as a new account. Removed at
+   * the end. Never an owner: a second owner would let the seeded one step down in a parallel test.
+   */
+  invite: (
+    workspaceRole: 'admin' | 'member' | 'viewer' | 'finance',
+    options?: { by?: Client },
+  ) => Promise<Invited>
+  /**
+   * Creates an agent key as `creator`: a seeded person (default the owner) or any client, such
+   * as an invited person's. Revoked at the end, even if the test revoked it already.
+   */
   agentKey: (input: {
     hubId: string
     hubRole: AgentHubRole
-    creator?: Person
+    creator?: Person | Client
+    expiresAt?: string
   }) => Promise<CreatedKey>
 }
 
@@ -226,8 +236,8 @@ export const test = base.extend<Fixtures>({
   invite: async ({ as, playwright, baseURL }, use) => {
     const invited: Invited[] = []
     const contexts: APIRequestContext[] = []
-    await use(async (workspaceRole) => {
-      const created = await as('owner').post('/invites', { workspaceRole })
+    await use(async (workspaceRole, { by = as('owner') } = {}) => {
+      const created = await by.post('/invites', { workspaceRole })
       await expectStatus(created, 201)
       const { token } = createdInviteSchema.parse(await created.json())
 
@@ -272,16 +282,19 @@ export const test = base.extend<Fixtures>({
 
   agentKey: async ({ as, bearer }, use) => {
     const keys: string[] = []
-    await use(async ({ hubId, hubRole, creator = 'owner' }) => {
-      const res = await as(creator).post(`/hubs/${hubId}/agent-keys`, {
+    await use(async ({ hubId, hubRole, creator = 'owner', expiresAt }) => {
+      const client = typeof creator === 'string' ? as(creator) : creator
+      const res = await client.post(`/hubs/${hubId}/agent-keys`, {
         name: `E2E key ${crypto.randomUUID().slice(0, 8)}`,
         hubRole,
+        ...(expiresAt ? { expiresAt } : {}),
       })
       await expectStatus(res, 201)
       const created = createdAgentKeySchema.parse(await res.json())
       keys.push(created.key.id)
       return { ...created, client: await bearer(created.secret) }
     })
+    // Revoking a revoked or expired key is a no-op that still answers 200.
     for (const id of keys) {
       await expectStatus(
         await as('owner').post(`/agent-keys/${encodeURIComponent(id)}/revoke`),

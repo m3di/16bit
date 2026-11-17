@@ -260,11 +260,13 @@ test('owners and admins grant and revoke on any hub; other roles cannot', async 
   const { client: agent, key } = await agentKey({ hubId: 'product', hubRole: 'editor' })
   await expectStatus(await agent.put(grant('product'), { hubRole: 'viewer' }), 403)
 
-  // Footnote ¹: an admin cannot set an owner's grant. An agent's grant comes with its key.
+  // Footnote ¹: an admin cannot set, change or revoke an owner's grant (the seeded owner is the
+  // only owner there can be, see workspace.spec.ts). An agent's grant comes with its key.
   await expectStatus(
     await as('mina').put(`/hubs/archive/grants/${people.owner.id}`, { hubRole: 'viewer' }),
     403,
   )
+  await expectStatus(await as('mina').delete(`/hubs/archive/grants/${people.owner.id}`), 403)
   await expectStatus(
     await as('owner').put(`/hubs/product/grants/${key.id}`, { hubRole: 'viewer' }),
     403,
@@ -285,6 +287,7 @@ test('a hub admin grants on their hub, but not on their own grant or an owner or
 }) => {
   const admin = await invite('member')
   const other = await invite('member')
+  const wsAdmin = await invite('admin')
   await expectStatus(
     await as('owner').put(`/hubs/archive/grants/${admin.principalId}`, { hubRole: 'hub_admin' }),
     200,
@@ -304,7 +307,12 @@ test('a hub admin grants on their hub, but not on their own grant or an owner or
   await expectStatus(await hubAdmin.delete(`/hubs/archive/grants/${other.principalId}`), 204)
   await expectStatus(await other.client.get('/hubs/archive'), 404)
 
-  // Not their own grant, and not a workspace owner's or admin's.
+  // Not their own grant, and not a workspace owner's or admin's. The admin is one this test
+  // invited, so a regression can't change a seeded person's grants.
+  await expectStatus(
+    await as('owner').put(`/hubs/archive/grants/${wsAdmin.principalId}`, { hubRole: 'viewer' }),
+    200,
+  )
   await expectStatus(
     await hubAdmin.put(`/hubs/archive/grants/${admin.principalId}`, { hubRole: 'editor' }),
     403,
@@ -312,9 +320,13 @@ test('a hub admin grants on their hub, but not on their own grant or an owner or
   await expectStatus(await hubAdmin.delete(`/hubs/archive/grants/${admin.principalId}`), 403)
   await expectStatus(await hubAdmin.delete(`/hubs/archive/grants/${people.owner.id}`), 403)
   await expectStatus(
-    await hubAdmin.put(`/hubs/archive/grants/${people.mina.id}`, { hubRole: 'viewer' }),
+    await hubAdmin.put(`/hubs/archive/grants/${wsAdmin.principalId}`, { hubRole: 'editor' }),
     403,
   )
+  await expectStatus(await hubAdmin.delete(`/hubs/archive/grants/${wsAdmin.principalId}`), 403)
+  expect(
+    hubDescriptionSchema.parse(await (await wsAdmin.client.get('/hubs/archive')).json()).hubRole,
+  ).toBe('viewer')
   // Only on this hub: they hold no grant on Hiring.
   await expectStatus(
     await hubAdmin.put(`/hubs/hiring/grants/${other.principalId}`, { hubRole: 'viewer' }),

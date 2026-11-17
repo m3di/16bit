@@ -1,7 +1,7 @@
-import { agentKeyPageSchema, meSchema } from '@16bit/core'
+import { agentKeyPageSchema, hubDescriptionSchema, meSchema } from '@16bit/core'
 import { readFileSync } from 'node:fs'
 import { stateFile } from '../support/auth-state.ts'
-import { expect, expectStatus, NO_STATE, people, test, uniqueTitle } from '../support/roles.ts'
+import { expect, expectStatus, NO_STATE, test, uniqueTitle } from '../support/roles.ts'
 
 // docs/ROLES.md, "Agent keys" and the key rows of "Workspace actions" and "Hub actions". A key
 // is its own principal with one hub grant (D47) and no workspace actions (D28). Agents have no
@@ -41,21 +41,30 @@ test('a key acts in its one hub, as its own principal, and nowhere else', async 
   )
 })
 
-test('a key never manages members, grants, keys or hubs', async ({ agentKey }) => {
+test('a key never manages members, grants, keys or hubs', async ({ agentKey, as, invite }) => {
   const { client: agent, key } = await agentKey({ hubId: 'product', hubRole: 'editor' })
+  // The target is someone this test invited, so a regression can't change a seeded person.
+  const target = await invite('member')
+  await expectStatus(
+    await as('owner').put(`/hubs/product/grants/${target.principalId}`, { hubRole: 'viewer' }),
+    200,
+  )
   const refused = [
     agent.get('/members'),
     agent.post('/invites', { workspaceRole: 'viewer' }),
-    agent.patch(`/members/${people.leo.id}`, { workspaceRole: 'viewer' }),
-    agent.delete(`/members/${people.leo.id}`),
+    agent.patch(`/members/${target.principalId}`, { workspaceRole: 'viewer' }),
+    agent.delete(`/members/${target.principalId}`),
     agent.post('/hubs', { name: 'Zz e2e by a key', color: 'lime', idPrefix: 'KEY' }),
-    agent.put(`/hubs/product/grants/${people.leo.id}`, { hubRole: 'viewer' }),
-    agent.delete(`/hubs/product/grants/${people.leo.id}`),
+    agent.put(`/hubs/product/grants/${target.principalId}`, { hubRole: 'editor' }),
+    agent.delete(`/hubs/product/grants/${target.principalId}`),
     agent.post('/hubs/product/agent-keys', { name: 'child', hubRole: 'viewer' }),
     agent.get('/hubs/product/agent-keys'),
     agent.post(`/agent-keys/${key.id}/revoke`),
   ]
   for (const res of await Promise.all(refused)) await expectStatus(res, 403)
+  expect(
+    hubDescriptionSchema.parse(await (await target.client.get('/hubs/product')).json()).hubRole,
+  ).toBe('viewer')
 })
 
 test('commenter and viewer keys read but cannot write', async ({ agentKey }) => {
@@ -99,10 +108,7 @@ test('owners and admins with a grant create keys up to their own hub role; other
     await admin.client.post('/hubs/archive/agent-keys', { ...body, hubRole: 'editor' }),
     403,
   )
-  const viewerKey = await admin.client.post('/hubs/archive/agent-keys', body)
-  await expectStatus(viewerKey, 201)
-  const { key } = (await viewerKey.json()) as { key: { id: string } }
-  await expectStatus(await as('owner').post(`/agent-keys/${key.id}/revoke`), 200)
+  await agentKey({ hubId: 'archive', hubRole: 'viewer', creator: admin.client })
 
   // A member who is hub admin of a hub makes keys for it.
   const hubAdmin = await invite('member')
@@ -110,14 +116,13 @@ test('owners and admins with a grant create keys up to their own hub role; other
     await as('owner').put(`/hubs/archive/grants/${hubAdmin.principalId}`, { hubRole: 'hub_admin' }),
     200,
   )
-  const made = await hubAdmin.client.post('/hubs/archive/agent-keys', {
-    ...body,
+  const { key: madeKey } = await agentKey({
+    hubId: 'archive',
     hubRole: 'editor',
+    creator: hubAdmin.client,
   })
-  await expectStatus(made, 201)
-  const listed = await hubAdmin.client.get('/hubs/archive/agent-keys')
+  const listed = await hubAdmin.client.get('/hubs/archive/agent-keys?limit=200')
   await expectStatus(listed, 200)
-  const madeKey = ((await made.json()) as { key: { id: string } }).key
   expect(agentKeyPageSchema.parse(await listed.json()).items.map((k) => k.id)).toContain(madeKey.id)
   await expectStatus(await hubAdmin.client.post(`/agent-keys/${madeKey.id}/revoke`), 200)
 })
@@ -158,23 +163,19 @@ test('owners and admins revoke any key, and a revoked key gets 401', async ({ as
   await expectStatus(await agent.post('/query', { from: 'design', limit: 1 }), 401)
 })
 
-test('an unknown key and an expired key get 401', async ({ as, bearer }) => {
+test('an unknown key and an expired key get 401', async ({ agentKey, bearer }) => {
   const unknown = await bearer('16b_this-is-not-a-real-key-at-all-0000000000')
   await expectStatus(await unknown.get('/v1/me'), 401)
   await expectStatus(await unknown.get('/hubs'), 401)
 
-  const res = await as('owner').post('/hubs/product/agent-keys', {
-    name: 'E2E expiring key',
+  const { client: expiring } = await agentKey({
+    hubId: 'product',
     hubRole: 'viewer',
     expiresAt: new Date(Date.now() + 3_000).toISOString(),
   })
-  await expectStatus(res, 201)
-  const { key, secret } = (await res.json()) as { key: { id: string }; secret: string }
-  const expiring = await bearer(secret)
   await expect
     .poll(async () => (await expiring.get('/v1/me')).status(), { timeout: 15_000 })
     .toBe(401)
-  await expectStatus(await as('owner').post(`/agent-keys/${key.id}/revoke`), 200)
 })
 
 test('a request with both a session and a key is refused (D49)', async ({

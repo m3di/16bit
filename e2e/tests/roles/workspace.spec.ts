@@ -1,4 +1,4 @@
-import { principalSchema, pageSchema } from '@16bit/core'
+import { createdInviteSchema, principalSchema, pageSchema } from '@16bit/core'
 import { expect, expectStatus, people, test, workspaceSection, WS_NAME } from '../support/roles.ts'
 
 // docs/ROLES.md, "Workspace actions": the workspace and its member list, invites, role
@@ -39,9 +39,13 @@ test('every person sees the workspace and its member list; an agent key sees nei
 test('only owners and admins invite, and an admin cannot invite an owner', async ({
   as,
   agentKey,
+  invite,
 }) => {
-  await expectStatus(await as('owner').post('/invites', { workspaceRole: 'owner' }), 201)
-  await expectStatus(await as('mina').post('/invites', { workspaceRole: 'member' }), 201)
+  // Every invite made here is accepted and the person removed again: M1 has no route to revoke
+  // an invite. The `invite` fixture is the owner inviting. An owner inviting an owner isn't
+  // tested: a second owner would let the seeded one step down in a parallel test.
+  const byAdmin = await invite('member', { by: as('mina') })
+  await expectStatus(await byAdmin.client.get('/hubs'), 200)
   await expectStatus(await as('mina').post('/invites', { workspaceRole: 'owner' }), 403)
   for (const person of ['leo', 'ivy', 'noor'] as const) {
     await expectStatus(await as(person).post('/invites', { workspaceRole: 'viewer' }), 403)
@@ -65,7 +69,8 @@ test('owners and admins change roles; an admin cannot touch an owner; the last o
   await expectStatus(byAdmin, 200)
   expect(principalSchema.parse(await byAdmin.json()).workspaceRole).toBe('finance')
 
-  // Footnote ¹: an admin cannot make an owner or change one.
+  // Footnote ¹: an admin cannot make an owner or change one. The only owner there can be is the
+  // seeded one (see the invite test above).
   await expectStatus(await as('mina').patch(path, { workspaceRole: 'owner' }), 403)
   await expectStatus(
     await as('mina').patch(`/members/${people.owner.id}`, { workspaceRole: 'admin' }),
@@ -117,4 +122,43 @@ test('owners and admins remove members, who then lose the workspace', async ({
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1, name: 'Workspaces' })).toBeVisible()
   await expect(workspaceSection(page)).toHaveCount(0)
+})
+
+test('removing a member expires their unused invites; their agent keys stay until revoked', async ({
+  as,
+  invite,
+  agentKey,
+  anonymous,
+}) => {
+  const admin = await invite('admin')
+  const created = await admin.client.post('/invites', { workspaceRole: 'viewer' })
+  await expectStatus(created, 201)
+  const { token } = createdInviteSchema.parse(await created.json())
+  await expectStatus(
+    await as('owner').put(`/hubs/archive/grants/${admin.principalId}`, { hubRole: 'viewer' }),
+    200,
+  )
+  const { client: agent, key } = await agentKey({
+    hubId: 'archive',
+    hubRole: 'viewer',
+    creator: admin.client,
+  })
+
+  await expectStatus(await as('owner').delete(`/members/${admin.principalId}`), 204)
+
+  // Their invite can no longer be accepted.
+  const tag = crypto.randomUUID().slice(0, 8)
+  await expectStatus(
+    await anonymous.post(`/v1/auth/invites/${token}`, {
+      name: `E2E late ${tag}`,
+      email: `e2e-late-${tag}@example.com`,
+      password: `e2e-password-${crypto.randomUUID()}`,
+    }),
+    404,
+  )
+  // Their key still works, in its hub, until someone revokes it.
+  await expectStatus(await agent.get('/v1/me'), 200)
+  await expectStatus(await agent.get('/hubs/archive'), 200)
+  await expectStatus(await as('owner').post(`/agent-keys/${key.id}/revoke`), 200)
+  await expectStatus(await agent.get('/v1/me'), 401)
 })
