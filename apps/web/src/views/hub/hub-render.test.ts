@@ -14,7 +14,7 @@ import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
 import { folderColumns, folderTree } from './useHub.ts'
-import type { ItemList } from './useItems.ts'
+import type { ItemList, SortKey } from './useItems.ts'
 
 const render = async (c: Component, props: Record<string, unknown> = {}, slot?: () => unknown) => {
   const router = createRouter({
@@ -38,13 +38,14 @@ const render = async (c: Component, props: Record<string, unknown> = {}, slot?: 
 const columns = folderColumns(description, 'bld')
 const ready = (ids: string[], nextCursor: string | null = null): Load<ItemList> => ({
   state: 'ready',
-  data: { ids, nextCursor, more: false, moreError: null },
+  data: { ids, nextCursor, more: false, moreError: null, sort: null, sorting: false },
 })
 
 const block = (
   list: Load<ItemList>,
   rows = [item('i1', 12, { title: 'Ship', stage: 'done', points: 3 })],
   readOnly = false,
+  sort: SortKey | null = null,
 ) =>
   render(ItemsBlock, {
     folderName: 'Build',
@@ -54,18 +55,70 @@ const block = (
     idPrefix: 'BLD',
     itemLink: (i: { id: string }) => ({ query: { item: i.id } }),
     readOnly,
+    sort,
   })
+
+/** Each header's text, without markup. */
+const headerTexts = (html: string) =>
+  [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) =>
+    (m[1] ?? '').replace(/<[^>]*>/g, '').trim(),
+  )
+const header = (html: string, label: string) =>
+  [...html.matchAll(/<th[^>]*>[\s\S]*?<\/th>/g)]
+    .map((m) => m[0])
+    .find((th) =>
+      th
+        .replace(/<[^>]*>/g, '')
+        .trim()
+        .startsWith(label),
+    ) ?? ''
 
 describe('ItemsBlock', () => {
   it('shows one column per attribute after the ID, in position order', async () => {
     const html = await block(ready(['i1']))
-    const headers = [...html.matchAll(/<th[^>]*>\s*([^<]*?)\s*<\/th>/g)].map((m) => m[1])
-    expect(headers).toEqual(['ID', 'Title', 'Stage', 'Points'])
+    expect(headerTexts(html)).toEqual(['ID', 'Title', 'Stage', 'Points'])
     expect(html).toContain('<caption')
     expect(html).toMatch(/<a [^>]*href="\/w\/w\/hubs\/bld\?item=i1"[^>]*>BLD-12<\/a>/)
     expect(html).toContain('Ship')
     expect(html).toContain('var(--pal-green-tint)')
     expect(html).toContain('Done')
+  })
+
+  it('makes headers of indexed, sortable attributes sort buttons', async () => {
+    const html = await block(ready(['i1']))
+    // Stage is indexed; Title and Points are not, and the ID column has no attribute.
+    expect(header(html, 'Stage')).toMatch(/<button type="button"[^>]*>\s*Stage/)
+    expect(header(html, 'Stage')).toContain('data-sort="none"')
+    expect(header(html, 'Stage')).not.toContain('aria-sort')
+    for (const label of ['ID', 'Title', 'Points']) {
+      expect(header(html, label)).not.toContain('<button')
+    }
+    expect(html).toContain('column headers with buttons are sortable')
+  })
+
+  it('marks the sorted column with aria-sort and an arrow', async () => {
+    const asc = await block(ready(['i1']), undefined, false, {
+      attribute: 'stage',
+      direction: 'asc',
+    })
+    expect(header(asc, 'Stage')).toContain('aria-sort="ascending"')
+    expect(header(asc, 'Stage')).toMatch(/<span aria-hidden="true">↑<\/span>/)
+    const desc = await block(ready(['i1']), undefined, false, {
+      attribute: 'stage',
+      direction: 'desc',
+    })
+    expect(header(desc, 'Stage')).toContain('aria-sort="descending"')
+    expect(header(desc, 'Stage')).toContain('↓')
+  })
+
+  it('keeps the rows while a new order loads, and holds "Load more" back', async () => {
+    const list = ready(['i1'], 'c1')
+    if (list.state === 'ready') list.data.sorting = true
+    const html = await block(list)
+    expect(html).toContain('aria-busy="true"')
+    expect(html).toContain('Ship')
+    expect(html).toContain('Sorting…')
+    expect(html).not.toContain('Load more')
   })
 
   it('offers more when there is a next page', async () => {
@@ -103,10 +156,13 @@ describe('ItemsBlock', () => {
     expect(await block(ready([]), [])).toContain('New item')
   })
 
-  it('offers no "New item" once the hub is read-only, and says why', async () => {
+  it('offers no "New item" once the hub is read-only, and leaves the reason to the page', async () => {
     const html = await block(ready([]), [], true)
+    expect(html).toContain('No items in this folder yet')
     expect(html).not.toContain('New item')
-    expect(html).toContain('You can view the items in this hub but not add them.')
+    // HubPage's header states the read-only reason once; the empty state does not repeat it.
+    expect(html).not.toContain('You can view the items')
+    expect(html).not.toContain('Items you add here')
   })
 })
 

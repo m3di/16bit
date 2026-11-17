@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { BaseButton, DataTable, StateBlock, type TableColumn } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
-import type { ItemList } from './useItems.ts'
+import { canSort, nextSort, type ItemList, type SortKey } from './useItems.ts'
 import ValueCell from './ValueCell.vue'
 
 const {
@@ -17,6 +17,7 @@ const {
   itemLink,
   isCreating = () => false,
   readOnly,
+  sort = null,
 } = defineProps<{
   folderName: string
   list: Load<ItemList>
@@ -29,9 +30,22 @@ const {
   isCreating?: (id: string) => boolean
   /** The server refused a write in this hub: no "New item" action. */
   readOnly?: boolean
+  /** The order asked for. Columns of indexed, sortable attributes can change it. */
+  sort?: SortKey | null
 }>()
 
-const emit = defineEmits<{ open: [item: Item]; retry: []; more: []; create: [] }>()
+const emit = defineEmits<{
+  open: [item: Item]
+  retry: []
+  more: []
+  create: []
+  sort: [sort: SortKey | null]
+}>()
+
+const ariaSort = (attributeId: string): 'ascending' | 'descending' | 'none' => {
+  if (sort?.attribute !== attributeId) return 'none'
+  return sort.direction === 'asc' ? 'ascending' : 'descending'
+}
 
 const tableColumns = computed<TableColumn[]>(() => [
   { key: '#id', label: 'ID' },
@@ -39,6 +53,7 @@ const tableColumns = computed<TableColumn[]>(() => [
     key: attribute.id,
     label: attribute.name,
     align: attribute.type === 'number' ? ('end' as const) : ('start' as const),
+    ...(canSort(attribute) ? { sort: ariaSort(attribute.id) } : {}),
   })),
 ])
 
@@ -77,11 +92,7 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
     v-else-if="rows.length === 0"
     state="empty"
     title="No items in this folder yet"
-    :message="
-      readOnly
-        ? 'You can view the items in this hub but not add them.'
-        : 'Items you add here show up in this table.'
-    "
+    :message="readOnly ? '' : 'Items you add here show up in this table.'"
   >
     <template v-if="!readOnly" #action>
       <BaseButton size="sm" @click="emit('create')">New item</BaseButton>
@@ -93,7 +104,9 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
       :columns="tableColumns"
       :rows="rows"
       :selected-id="selectedId"
+      :busy="list.data.sorting"
       @select="select"
+      @sort="emit('sort', nextSort(sort, $event))"
     >
       <template #cell="{ row, column }">
         <template v-if="column.key === '#id'">
@@ -111,8 +124,11 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
     </DataTable>
 
     <div class="flex flex-wrap items-center gap-3">
+      <span v-if="list.data.sorting" role="status" class="text-secondary text-ink3" data-sorting
+        >Sorting…</span
+      >
       <BaseButton
-        v-if="list.data.nextCursor"
+        v-else-if="list.data.nextCursor"
         size="sm"
         :disabled="list.data.more"
         @click="emit('more')"
