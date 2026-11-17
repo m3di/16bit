@@ -26,6 +26,7 @@ const tagOptions: ChipOption[] = [
   { id: 'ios', label: 'iOS', color: 'violet' },
   { id: 'android', label: 'Android', color: 'green' },
   { id: 'infra', label: 'Infra' },
+  { id: 'long', label: 'Push notifications and email digests', color: 'amber' },
 ]
 const tags = ref(['web', 'api', 'infra'])
 function removeTag(id: string) {
@@ -126,6 +127,19 @@ const failed = ref<unknown>(null)
           :limit="2"
         />
       </dd>
+      <dt class="text-ink3">Inline</dt>
+      <dd class="m-0 min-w-0">
+        <!-- A table cell: one line in a narrow box, long labels cut, the count kept. -->
+        <div class="w-56 max-w-full border-b border-line py-2">
+          <ChipList
+            :value="['long', 'web', 'api', 'ios']"
+            :options="tagOptions"
+            label="Platforms"
+            :limit="2"
+            inline
+          />
+        </div>
+      </dd>
       <dt class="text-ink3">Deleted option</dt>
       <dd class="m-0">
         <ChipList :value="['ios', 'old-option']" :options="tagOptions" label="Platforms" />
@@ -167,6 +181,10 @@ const failed = ref<unknown>(null)
       <dt class="text-ink3">Agent</dt>
       <dd class="m-0">
         <ActorChip :actor="{ id: 'qa-agent', name: 'qa-agent', kind: 'agent' }" />
+      </dd>
+      <dt class="text-ink3">Unknown</dt>
+      <dd class="m-0">
+        <ActorChip :actor="{ id: '7f3c9a21e4b04d6c', kind: 'unknown' }" />
       </dd>
       <dt class="text-ink3">Large</dt>
       <dd class="m-0">

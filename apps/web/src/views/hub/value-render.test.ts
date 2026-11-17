@@ -98,6 +98,7 @@ describe('cells', () => {
     expect(html).toContain('API')
     expect(html).not.toMatch(/>\s*DB\s*</)
     expect(html).toContain('+1')
+    expect(html).toContain('data-inline')
   })
 
   it('links a URL without its scheme, in a new tab', async () => {
@@ -114,6 +115,8 @@ describe('cells', () => {
     const unknown = await cell(owners, ['0123456789abcdef'])
     expect(unknown).toContain('01234567')
     expect(unknown).toContain('data-known="false"')
+    expect(unknown).toContain('data-kind="unknown"')
+    expect(unknown).toContain('name not available')
   })
 
   it('shows an auto ID in mono with its prefix', async () => {

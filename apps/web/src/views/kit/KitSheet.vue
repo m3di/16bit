@@ -5,6 +5,7 @@ import {
   BaseInput,
   BaseSelect,
   FormNotice,
+  HubCard,
   PALETTE_COLORS,
   PaletteChip,
   PixelAvatar,
@@ -187,6 +188,21 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
       <p class="m-0 text-caption text-ink3">
         Size squares: under 10 items, under 100, under 1,000, and 1,000 or more.
       </p>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">HubCard</h3>
+      <ul class="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 p-0">
+        <li class="flex min-w-0 flex-col">
+          <HubCard name="Engineering" color="teal" :count="1280" to="/kit" class="flex-1" />
+        </li>
+        <li class="flex min-w-0 flex-col">
+          <HubCard name="Design" color="violet" :count="1" class="flex-1" />
+        </li>
+        <li class="flex min-w-0 flex-col">
+          <HubCard name="Finance" color="amber" no-access class="flex-1" />
+        </li>
+      </ul>
     </section>
 
     <section class="flex flex-col gap-3">

@@ -109,7 +109,7 @@ Material Symbols, outlined, light weight, 18px. The package is added with the fi
 | StatusDot | 6px dot plus label |
 | Avatar | 5 by 5 pixel sprite generated deterministically from the principal ID, in a palette tint |
 | SizeMeter | Four 6px squares. 0 items fills none, 1 to 9 fills one, under 100 two, under 1,000 three, and 1,000 or more four |
-| HubCard | Colour square, name, status line, size meter, count, last active |
+| HubCard | Colour square, name, status line, size meter, count, last active. No-access variant (the reader sees the hub's name but has no grant): colour square, name, and "No access" beside a dashed `--line3` square; no count, no size meter, never a link. The props are a union, so a card with access must pass `count` and a no-access card cannot pass `count` or `to`. |
 | Table | Hairline rows, 36 to 38px, no outer box |
 | ItemPanel | Side panel with fields, version, and history |
 | StateBlock | Loading skeleton, empty, error, no permission, not found (see below) |
@@ -123,9 +123,9 @@ Editable values (CheckboxField, RichTextEditor) have a load-failure `error` stat
 |---|---|
 | ValueState | Inline loading, empty, error, and no-access states for one value. Every value component uses it. |
 | CheckboxField | Native checkbox with label, hint, and error. Read-only with a stated reason when the reader cannot edit. |
-| ChipList | Multi-select values as palette chips, in value order. Optional remove buttons and a "+N" limit. Deleted options show as a dashed "Deleted option" chip. |
+| ChipList | Multi-select values as palette chips, in value order. Optional remove buttons and a "+N" limit. Deleted options show as a dashed "Deleted option" chip. Wraps by default; `inline` (table cells) keeps one line: long labels are cut with an ellipsis and the full label as the title, and the "+N" count never shrinks. |
 | UrlLink | Web and mail addresses as a hairline-underlined link without the scheme, opening in a new tab. Other schemes are shown as text, never linked. |
-| ActorChip | PixelAvatar and name. Agents carry an "Agent" label. |
+| ActorChip | PixelAvatar and name. Agents carry an "Agent" label. Unknown variant (a principal whose name cannot be resolved, such as an agent or a removed member missing from the member list): PixelAvatar and the first 8 characters of the ID in JetBrains Mono 12px `--ink3`, with "name not available" for screen readers. Never an invented name. |
 | RelationChip | Linked item as mono ID and hairline-underlined title, as in the task mockup. A target the reader cannot see shows "No access", never its title or a link. |
 | RichTextView, RichTextEditor | Rich text for a small closed node set: paragraph, headings (h3, h4), bulleted and numbered lists, code block, line break; bold (shown at weight 500), italic, inline code, and http, https, or mailto links. Long text at 13px with 1.6 line height. The editor uses Tiptap and is imported directly, not from the `ui` barrel, so it stays out of the main bundle. |
 | StateBlock not found | A 404, separate from `empty` (the thing exists and has nothing in it) and from `no-permission` (a 403). Hidden things answer 404 like missing ones (`docs/ROLES.md`), so the text never says the thing does not exist: "This hub is not available", "It may not exist, or it may not be shared with you." No retry; offer a way back. The square is an outline in `--line3`; no permission uses a dashed outline, empty a `--line2` fill, error a `--danger` fill. |

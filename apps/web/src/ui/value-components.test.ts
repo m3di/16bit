@@ -112,6 +112,29 @@ describe('ChipList', () => {
     expect(html).toContain('more: API')
   })
 
+  it('wraps by default', async () => {
+    const html = await render(ChipList, { value: ['web', 'api'], options, label: 'Platforms' })
+    expect(html).toContain('flex-wrap')
+    expect(html).not.toContain('data-inline')
+  })
+
+  it('keeps an inline list on one line, cuts long labels, and keeps the count', async () => {
+    const html = await render(ChipList, {
+      value: ['web', 'api', 'gone'],
+      options,
+      label: 'Platforms',
+      limit: 2,
+      inline: true,
+    })
+    expect(html).toContain('data-inline')
+    expect(html).toContain('flex-nowrap whitespace-nowrap')
+    expect(html).not.toContain('flex-wrap')
+    expect(html).toContain('title="Web"')
+    expect(html).toContain('<span class="truncate">API</span>')
+    expect(html).toMatch(/<li class="inline-flex shrink-0">.*\+1/)
+    expect(html).toContain('more: Deleted option')
+  })
+
   it.each([
     [{ value: [] }, 'Empty'],
     [{ value: [], state: 'no-permission' }, 'No access'],
@@ -147,6 +170,16 @@ describe('ActorChip', () => {
     expect(html).toContain('<svg')
     expect(html).toContain('qa-agent')
     expect(html).toContain('Agent')
+  })
+
+  it('shows an unknown actor by avatar and short ID, never a name', async () => {
+    const html = await render(ActorChip, { actor: { id: '0123456789abcdef', kind: 'unknown' } })
+    expect(html).toContain('<svg')
+    expect(html).toContain('data-kind="unknown"')
+    expect(html).toContain('font-mono')
+    expect(html).toContain('01234567<span class="sr-only">, name not available</span>')
+    expect(html).not.toContain('89abcdef')
+    expect(html).not.toContain('Agent')
   })
 
   it('does not label people as agents', async () => {

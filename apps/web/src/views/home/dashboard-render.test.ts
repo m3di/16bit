@@ -99,6 +99,24 @@ describe('HubCard', () => {
     expect(html).not.toMatch(/\d items?</)
   })
 
+  it('types its props so only a card with access takes a count and a link', () => {
+    // Checked by `pnpm typecheck`; the calls only build vnodes.
+    h(HubCard, { name: 'A', color: 'teal', count: 3, to: '/w/w/hubs/a' })
+    h(HubCard, { name: 'A', color: 'teal', noAccess: true })
+    // @ts-expect-error A card with access needs its count.
+    h(HubCard, { name: 'A', color: 'teal' })
+    // @ts-expect-error A no-access card shows no count.
+    h(HubCard, { name: 'A', color: 'teal', noAccess: true, count: 3 })
+    // @ts-expect-error A no-access card is never a link.
+    h(HubCard, { name: 'A', color: 'teal', noAccess: true, to: '/w/w/hubs/a' })
+  })
+
+  it('reads the bare no-access attribute as true', async () => {
+    const html = await render(HubCard, { name: 'Finance', color: 'amber', 'no-access': '' })
+    expect(html).toContain('data-no-access')
+    expect(html).toContain('No access')
+  })
+
   it('has no "No access" marker when the reader has access', async () => {
     const html = await render(HubCard, { name: 'A', color: 'teal', count: 3 })
     expect(html).not.toContain('data-no-access')
