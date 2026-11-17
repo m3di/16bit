@@ -7,7 +7,7 @@ Reference screens are in `design/mockups/`. They are the agreed direction: light
 1. **Quiet.** Hairline borders, generous white space, no boxes around blocks unless the block is a card.
 2. **Thin.** Two font weights only, 400 and 500. Nothing heavier: bold in rich text is shown at 500.
 3. **Dense but calm.** Desktop first. Rows are 32 to 38px high.
-4. **Always designed.** Every block and screen has loading, empty, error, and no-permission states.
+4. **Always designed.** Every block and screen has loading, empty, error, and no-permission states. Anything opened by ID also has a not-found state for a 404.
 5. **Two surfaces.** Presentation has no schema or filter chrome. Settings is a separate area.
 6. **Brand in small doses.** Pixel avatars, the 16-colour palette, and the size squares carry the 16-bit feel. Everything else is plain.
 
@@ -112,7 +112,7 @@ Material Symbols, outlined, light weight, 18px. The package is added with the fi
 | HubCard | Colour square, name, status line, size meter, count, last active |
 | Table | Hairline rows, 36 to 38px, no outer box |
 | ItemPanel | Side panel with fields, version, and history |
-| StateBlock | Loading skeleton, empty, error, no permission |
+| StateBlock | Loading skeleton, empty, error, no permission, not found (see below) |
 | AppShell | Top bar on the main dashboard; light sidebar with folders inside a hub |
 
 ## Components for M1
@@ -128,6 +128,8 @@ Editable values (CheckboxField, RichTextEditor) have a load-failure `error` stat
 | ActorChip | PixelAvatar and name. Agents carry an "Agent" label. |
 | RelationChip | Linked item as mono ID and hairline-underlined title, as in the task mockup. A target the reader cannot see shows "No access", never its title or a link. |
 | RichTextView, RichTextEditor | Rich text for a small closed node set: paragraph, headings (h3, h4), bulleted and numbered lists, code block, line break; bold (shown at weight 500), italic, inline code, and http, https, or mailto links. Long text at 13px with 1.6 line height. The editor uses Tiptap and is imported directly, not from the `ui` barrel, so it stays out of the main bundle. |
+| StateBlock not found | A 404, separate from `empty` (the thing exists and has nothing in it) and from `no-permission` (a 403). Hidden things answer 404 like missing ones (`docs/ROLES.md`), so the text never says the thing does not exist: "This hub is not available", "It may not exist, or it may not be shared with you." No retry; offer a way back. The square is an outline in `--line3`; no permission uses a dashed outline, empty a `--line2` fill, error a `--danger` fill. |
+| FormNotice | A message about a whole form or action, not one field (fields show their own error under the input). `error`: `--danger` text and filled square, `role="alert"`. `info`: `--ink2` text and outlined square, `role="status"`, for news that is not a failure or a refusal, such as "Changes are saved as you type." A refused sign-in is a refusal and uses `error`. 12px, no box and no border. An optional action, such as a quiet Dismiss button, sits on the right and wraps below at narrow widths, outside the live region. |
 | AuthLayout, SignInForm | Pages outside a workspace: brand bar and a narrow column, no card. The form has empty, submitting, error, and no-permission states and never says which credential was wrong. |
 
 ## Screens without a mockup

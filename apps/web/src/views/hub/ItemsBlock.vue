@@ -56,7 +56,7 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
   />
   <StateBlock
     v-else-if="list.state === 'error' && list.error.isNotFound"
-    state="empty"
+    state="not-found"
     title="This folder is not available"
     message="It may have been deleted, or it may not be shared with you."
   />

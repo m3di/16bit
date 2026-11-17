@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import BaseButton from './BaseButton.vue'
 import BaseInput from './BaseInput.vue'
+import FormNotice from './FormNotice.vue'
 
 import type { SignInState } from './value-types.ts'
 
@@ -49,23 +50,7 @@ function submit() {
     :data-state="state"
     @submit.prevent="submit"
   >
-    <p
-      v-if="notice"
-      role="alert"
-      :class="[
-        'm-0 flex items-start gap-2 text-secondary',
-        state === 'error' ? 'text-danger' : 'text-ink2',
-      ]"
-    >
-      <span
-        aria-hidden="true"
-        :class="[
-          'mt-1 block size-1.5 shrink-0',
-          state === 'error' ? 'bg-danger' : 'border border-dashed border-line3',
-        ]"
-      />
-      {{ notice }}
-    </p>
+    <FormNotice v-if="notice">{{ notice }}</FormNotice>
     <BaseInput
       v-model="email"
       label="Email"

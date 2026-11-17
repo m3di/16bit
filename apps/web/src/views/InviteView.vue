@@ -10,7 +10,14 @@ import {
   type InviteOutcome,
 } from '../session/invite.ts'
 import { useSession } from '../session/session.ts'
-import { ActorChip, AuthLayout, BaseButton, BaseInput, StateBlock } from '../ui/index.ts'
+import {
+  ActorChip,
+  AuthLayout,
+  BaseButton,
+  BaseInput,
+  FormNotice,
+  StateBlock,
+} from '../ui/index.ts'
 
 // Two ways in: a new account sets a password and is signed in, or a signed-in account joins
 // with one click. Someone with an account who is signed out signs in first and comes back.
@@ -126,9 +133,9 @@ const linkClass = 'border-b border-line2 text-ink no-underline hover:border-line
         />
         <span class="truncate text-secondary text-ink3">{{ me.data.account.email }}</span>
       </div>
-      <p v-if="outcome?.kind === 'error'" role="alert" class="m-0 text-secondary text-danger">
+      <FormNotice v-if="outcome?.kind === 'error'">
         The invite was not accepted. {{ outcome.message }}
-      </p>
+      </FormNotice>
       <BaseButton variant="primary" type="submit" :disabled="busy">
         {{ busy ? 'Accepting' : 'Accept invite' }}
       </BaseButton>
@@ -145,13 +152,13 @@ const linkClass = 'border-b border-line2 text-ink no-underline hover:border-line
       @submit.prevent="createAccount"
     >
       <p class="m-0 text-ink2">Create your account to join the workspace.</p>
-      <p v-if="outcome?.kind === 'email-taken'" role="alert" class="m-0 text-secondary text-danger">
+      <FormNotice v-if="outcome?.kind === 'email-taken'">
         An account with this email exists.
         <RouterLink :to="signInLink" :class="linkClass">Sign in to accept the invite</RouterLink>.
-      </p>
-      <p v-else-if="outcome?.kind === 'error'" role="alert" class="m-0 text-secondary text-danger">
+      </FormNotice>
+      <FormNotice v-else-if="outcome?.kind === 'error'">
         The invite was not accepted. {{ outcome.message }}
-      </p>
+      </FormNotice>
       <BaseInput
         v-model="form.name"
         label="Name"
@@ -189,22 +196,25 @@ const linkClass = 'border-b border-line2 text-ink no-underline hover:border-line
     </form>
 
     <template #footer>
-      <p v-if="valid && me.state === 'ready' && me.data?.kind === 'person'" class="m-0">
-        Not you?
-        <button
-          type="button"
-          :class="linkClass"
-          class="cursor-pointer border-x-0 border-t-0 bg-transparent p-0 text-secondary"
-          :disabled="signingOut"
-          @click="signOut"
-        >
-          Sign out
-        </button>
-        to accept with another account.
-        <span v-if="signOutError" role="alert" class="mt-1 block text-danger">{{
-          signOutError
-        }}</span>
-      </p>
+      <div
+        v-if="valid && me.state === 'ready' && me.data?.kind === 'person'"
+        class="flex flex-col gap-2"
+      >
+        <p class="m-0">
+          Not you?
+          <button
+            type="button"
+            :class="linkClass"
+            class="cursor-pointer border-x-0 border-t-0 bg-transparent p-0 text-secondary"
+            :disabled="signingOut"
+            @click="signOut"
+          >
+            Sign out
+          </button>
+          to accept with another account.
+        </p>
+        <FormNotice v-if="signOutError">{{ signOutError }}</FormNotice>
+      </div>
       <p v-else-if="valid && me.state === 'ready' && !me.data" class="m-0">
         Already have an account?
         <RouterLink :to="signInLink" :class="linkClass">Sign in to accept</RouterLink>.

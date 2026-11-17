@@ -4,7 +4,7 @@ import { ApiRequestError } from '../../api/client.ts'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ShellUser from '../../session/ShellUser.vue'
-import { AppShell, BaseButton, ItemPanel } from '../../ui/index.ts'
+import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
 import HubState from './HubState.vue'
@@ -174,17 +174,14 @@ async function submitCreate(values: ItemValues) {
               >
             </div>
 
-            <div
-              v-if="notice"
-              role="alert"
-              class="flex flex-wrap items-center justify-between gap-2 rounded-control border border-danger px-3 py-2 text-danger"
-              data-notice
-            >
-              <span class="min-w-0 flex-[1_1_240px]">{{ notice }}</span>
-              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
-                >Dismiss</BaseButton
-              >
-            </div>
+            <FormNotice v-if="notice" data-notice>
+              {{ notice }}
+              <template #action>
+                <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                  >Dismiss</BaseButton
+                >
+              </template>
+            </FormNotice>
 
             <ItemsBlock
               :folder-name="folder.name"

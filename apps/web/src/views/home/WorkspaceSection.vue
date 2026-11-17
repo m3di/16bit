@@ -23,7 +23,7 @@ const headingId = computed(() => `workspace-${entry.workspace.id}`)
     />
     <StateBlock
       v-else-if="entry.hubs.state === 'error' && entry.hubs.error.isNotFound"
-      state="empty"
+      state="not-found"
       title="This workspace is not available"
       message="It may have been deleted, or you may no longer belong to it."
     />

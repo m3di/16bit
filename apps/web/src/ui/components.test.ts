@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import BaseButton from './BaseButton.vue'
 import BaseInput from './BaseInput.vue'
 import BaseSelect from './BaseSelect.vue'
+import FormNotice from './FormNotice.vue'
 import PixelAvatar from './PixelAvatar.vue'
 import SizeMeter from './SizeMeter.vue'
 import StateBlock from './StateBlock.vue'
@@ -66,7 +67,62 @@ describe('components', () => {
     ['empty', 'Nothing here yet'],
     ['error', 'role="alert"'],
     ['no-permission', 'You do not have access'],
+    ['not-found', 'This could not be found'],
   ])('StateBlock renders the %s state', async (state, expected) => {
     expect(await render(StateBlock, { state })).toContain(expected)
+  })
+
+  it('StateBlock keeps not found apart from empty and no permission', async () => {
+    const html = await render(StateBlock, { state: 'not-found' })
+    expect(html).toContain('data-state="not-found"')
+    expect(html).not.toContain('role="alert"')
+    // A hidden thing answers 404 like a missing one, so the default never says it is gone.
+    expect(html).not.toMatch(/does not exist/i)
+    const glyph = (h: string) => /<span aria-hidden="true" class="([^"]+)"/.exec(h)?.[1]
+    const others = await Promise.all(
+      (['empty', 'no-permission'] as const).map((state) => render(StateBlock, { state })),
+    )
+    for (const other of others) expect(glyph(other)).not.toBe(glyph(html))
+  })
+
+  it('StateBlock not found takes a title and message', async () => {
+    const html = await render(StateBlock, {
+      state: 'not-found',
+      title: 'This hub is not available',
+      message: 'It may not exist, or it may not be shared with you.',
+    })
+    expect(html).toContain('This hub is not available')
+    expect(html).toContain('It may not exist, or it may not be shared with you.')
+    expect(html).not.toContain('This could not be found')
+  })
+
+  it('FormNotice is an alert by default, in the danger colour', async () => {
+    const html = await render(FormNotice, {}, 'The invite was not accepted.')
+    expect(html).toMatch(/<p role="alert"[^>]*text-danger/)
+    expect(html).toContain('data-tone="error"')
+    expect(html).toContain('The invite was not accepted.')
+  })
+
+  it('FormNotice info is a polite status in secondary ink', async () => {
+    const html = await render(FormNotice, { tone: 'info' }, 'Ask an owner for an invite.')
+    expect(html).toMatch(/<p role="status"[^>]*text-ink2/)
+    expect(html).not.toContain('role="alert"')
+    expect(html).not.toContain('text-danger')
+  })
+
+  it('FormNotice keeps its action outside the live region', async () => {
+    const html = await renderToString(
+      createSSRApp({
+        render: () =>
+          h(FormNotice, null, {
+            default: () => 'Saving failed.',
+            action: () => h(BaseButton, null, () => 'Dismiss'),
+          }),
+      }),
+    )
+    const alert = /<p role="alert"[\s\S]*?<\/p>/.exec(html)?.[0] ?? ''
+    expect(alert).toContain('Saving failed.')
+    expect(alert).not.toContain('Dismiss')
+    expect(html).toContain('Dismiss')
   })
 })

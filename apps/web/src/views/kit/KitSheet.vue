@@ -4,6 +4,7 @@ import {
   BaseButton,
   BaseInput,
   BaseSelect,
+  FormNotice,
   PALETTE_COLORS,
   PaletteChip,
   PixelAvatar,
@@ -209,6 +210,36 @@ const counts = [0, 1, 7, 38, 412, 1280, 2345]
             state="no-permission"
             message="Ask a hub admin to give you access to this hub."
           />
+        </div>
+        <div class="rounded-card border border-line">
+          <StateBlock state="not-found" title="This hub is not available">
+            <template #action>
+              <a href="/" class="border-b border-line2 text-ink no-underline hover:border-line3"
+                >Back to workspaces</a
+              >
+            </template>
+          </StateBlock>
+        </div>
+      </div>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">FormNotice</h3>
+      <div class="flex max-w-md flex-col gap-4">
+        <div class="flex flex-col gap-2">
+          <span class="text-caption text-ink3">Error</span>
+          <FormNotice>The invite was not accepted. The server did not answer.</FormNotice>
+        </div>
+        <div class="flex flex-col gap-2">
+          <span class="text-caption text-ink3">Error with an action</span>
+          <FormNotice>
+            PT-412 was changed by someone else. Your change was not saved.
+            <template #action><BaseButton size="sm" variant="quiet">Dismiss</BaseButton></template>
+          </FormNotice>
+        </div>
+        <div class="flex flex-col gap-2">
+          <span class="text-caption text-ink3">Info</span>
+          <FormNotice tone="info">Changes are saved as you type.</FormNotice>
         </div>
       </div>
     </section>
