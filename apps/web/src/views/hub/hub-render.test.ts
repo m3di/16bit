@@ -216,7 +216,7 @@ describe('HubState', () => {
 
   it('renders a 404 (missing, or no grant) as not found, with a way back', async () => {
     const html = await hub(failed('not_found', 404))
-    expect(html).toContain('data-state="empty"')
+    expect(html).toContain('data-state="not-found"')
     expect(html).toContain('This hub is not available')
     expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Back to workspaces<\/a>/)
     expect(html).not.toContain('Try again')
@@ -242,6 +242,7 @@ describe('HubState', () => {
 
   it('says when the folder is not in this hub, and links to the hub', async () => {
     const html = await hub({ state: 'ready', data: description }, false)
+    expect(html).toContain('data-state="not-found"')
     expect(html).toContain('This folder is not in this hub')
     expect(html).toMatch(/<a [^>]*href="\/w\/w\/hubs\/bld"[^>]*>Open Build<\/a>/)
     expect(html).not.toContain('FOLDER')
@@ -270,7 +271,8 @@ describe('ItemPanelBody', () => {
 
   it('renders a missing item without a retry', async () => {
     const html = await panel(failed('not_found', 404))
-    expect(html).toContain('This item does not exist')
+    expect(html).toContain('data-state="not-found"')
+    expect(html).toContain('This item could not be found')
     expect(html).not.toContain('Try again')
   })
 

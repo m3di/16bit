@@ -121,18 +121,21 @@ test('a new row cannot be opened until the server confirms it', async ({ page })
   await expect(panel(page).getByLabel('Title (required)')).toBeEnabled()
 })
 
-test('?item= for an item from another hub shows that it does not exist', async ({ api, page }) => {
+test('?item= for an item from another hub shows that it could not be found', async ({
+  api,
+  page,
+}) => {
   const other = await api.createItem({
     folderId: 'hiring',
     values: { 'hiring-title': uniqueTitle('other hub') },
   })
 
   await page.goto(`${hubPath}?item=${other.id}`)
-  await expect(panel(page).getByText('This item does not exist')).toBeVisible()
+  await expect(panel(page).getByText('This item could not be found')).toBeVisible()
   await expect(panel(page).getByLabel('Title (required)')).toHaveCount(0)
 })
 
-test('?item= for an unknown item shows that it does not exist', async ({ page }) => {
+test('?item= for an unknown item shows that it could not be found', async ({ page }) => {
   await page.goto(`${hubPath}?item=e2e-no-such-item`)
-  await expect(panel(page).getByText('This item does not exist')).toBeVisible()
+  await expect(panel(page).getByText('This item could not be found')).toBeVisible()
 })

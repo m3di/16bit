@@ -20,7 +20,7 @@ defineSlots<{ default(): unknown }>()
   <!-- A hub without a grant answers 404 like a missing one (docs/ROLES.md), so both read alike. -->
   <StateBlock
     v-else-if="hub.state === 'error' && hub.error.isNotFound"
-    state="empty"
+    state="not-found"
     title="This hub is not available"
     message="It may not exist, or it may not be shared with you."
   >
@@ -49,7 +49,7 @@ defineSlots<{ default(): unknown }>()
   </StateBlock>
   <StateBlock
     v-else-if="!folderFound"
-    state="empty"
+    state="not-found"
     title="This folder is not in this hub"
     message="It may have been moved or deleted."
   >

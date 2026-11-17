@@ -18,8 +18,8 @@ defineSlots<{ default(props: { item: Item }): unknown }>()
   />
   <StateBlock
     v-else-if="item.state === 'error' && item.error.status === 404"
-    state="empty"
-    title="This item does not exist"
+    state="not-found"
+    title="This item could not be found"
     message="It may have been deleted, or it belongs to another hub."
   />
   <StateBlock
