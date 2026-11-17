@@ -17,6 +17,10 @@ export function devPasswordRefused(env: NodeJS.ProcessEnv): boolean {
   return env['NODE_ENV'] === 'production' && env['ALLOW_DEV_PASSWORD'] !== '1'
 }
 
+/** Why a new password equal to `DEV_PASSWORD` is refused (invite acceptance, operator reset). */
+export const DEV_PASSWORD_REFUSED =
+  'password: the development password is published and refused in production; choose another'
+
 export interface DevPerson {
   /** The principal ID in every workspace the person is seeded into, and the account ID. */
   id: string

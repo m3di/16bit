@@ -1,9 +1,11 @@
 // `pnpm account:reset-password <email>`: the operator's password reset (D42). There is no
 // reset in the API. With a password piped on stdin it sets that one; run in a terminal, it
-// generates one and prints it once. Every session of the account is ended.
+// generates one and prints it once. Every session of the account is ended. Like sign-in, it
+// refuses the seeds' published password under NODE_ENV=production unless ALLOW_DEV_PASSWORD=1.
 import { randomBytes } from 'node:crypto'
 import { text } from 'node:stream/consumers'
 import { createDb } from './db/database.ts'
+import { devPasswordRefused } from './dev-accounts.ts'
 import { resetPassword } from './reset-password.ts'
 
 // Runs as the owner of the tables, like migrations (#44).
@@ -20,7 +22,8 @@ const password = generated ?? (await text(process.stdin)).replace(/\r?\n$/, '')
 
 const db = createDb(databaseUrl)
 try {
-  if (!(await resetPassword(db, email, password))) {
+  const refuseDevPassword = devPasswordRefused(process.env)
+  if (!(await resetPassword(db, email, password, { refuseDevPassword }))) {
     console.error(`account:reset-password: no account with email ${email}`)
     process.exitCode = 1
   } else {
