@@ -45,8 +45,10 @@ export interface PrincipalTable {
   kind: PrincipalKind
   name: string
   workspace_role: WorkspaceRole
-  /** Users only. Null for agents and for users created before M1. */
+  /** Users only. Null for agents, for users created before M1, and for removed members. */
   account_id: Generated<string | null>
+  /** Set when the member was removed (#43). A removed principal acts nowhere. */
+  removed_at: Generated<Timestamp | null>
 }
 
 export interface InviteTable {

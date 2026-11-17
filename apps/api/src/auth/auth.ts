@@ -184,6 +184,7 @@ export async function resolvePrincipal(
     .select(['id', 'kind', 'workspace_role'])
     .where('workspace_id', '=', workspaceId)
     .where('id', '=', identity.principalId)
+    .where('removed_at', 'is', null)
     .executeTakeFirst()
   if (!row) throw notFound('Workspace')
   return { id: row.id, kind: row.kind, workspaceRole: row.workspace_role }

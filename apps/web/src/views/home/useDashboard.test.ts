@@ -42,6 +42,10 @@ function api(routes: Record<string, () => Response>): Fetch {
 
 const page = (items: unknown[]) => json({ items, nextCursor: null })
 
+/** A hub as the hub list sends it to a caller holding a grant on it. */
+const listed = (h: Folder) => ({ ...h, access: 'granted', hubRole: 'editor' })
+const hubPage = (hubs: Folder[]) => page(hubs.map(listed))
+
 describe('useDashboard', () => {
   it('starts loading', () => {
     expect(useDashboard(api({})).workspaces.value.state).toBe('loading')
@@ -51,7 +55,7 @@ describe('useDashboard', () => {
     const d = useDashboard(
       api({
         '/v1/workspaces': () => page([ws('a'), ws('b')]),
-        '/v1/workspaces/a/hubs': () => page([hub('a', 'h1', 412), hub('a', 'h2')]),
+        '/v1/workspaces/a/hubs': () => hubPage([hub('a', 'h1', 412), hub('a', 'h2')]),
         '/v1/workspaces/b/hubs': () => page([]),
       }),
     )
@@ -65,16 +69,33 @@ describe('useDashboard', () => {
     expect(d.totals.value).toEqual({ hubs: 2, workspaces: 2 })
   })
 
+  it('leaves out hubs the caller holds no grant on', async () => {
+    const d = useDashboard(
+      api({
+        '/v1/workspaces': () => page([ws('a')]),
+        '/v1/workspaces/a/hubs': () =>
+          page([
+            listed(hub('a', 'h1', 3)),
+            { access: 'none', workspaceId: 'a', id: 'h2', name: 'Hub h2', color: 'teal' },
+          ]),
+      }),
+    )
+    await d.load()
+    const value = d.workspaces.value
+    if (value.state !== 'ready') throw new Error(value.state)
+    expect(value.data[0]?.hubs).toEqual({ state: 'ready', data: [listed(hub('a', 'h1', 3))] })
+  })
+
   it('keeps other workspaces when one fails, and retries it', async () => {
     let fail = true
     const d = useDashboard(
       api({
         '/v1/workspaces': () => page([ws('a'), ws('b')]),
-        '/v1/workspaces/a/hubs': () => page([hub('a', 'h1')]),
+        '/v1/workspaces/a/hubs': () => hubPage([hub('a', 'h1')]),
         '/v1/workspaces/b/hubs': () =>
           fail
             ? json({ error: 'internal', message: 'Internal error' }, 500)
-            : page([hub('b', 'h2')]),
+            : hubPage([hub('b', 'h2')]),
       }),
     )
     await d.load()

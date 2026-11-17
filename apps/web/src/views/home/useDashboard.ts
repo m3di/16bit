@@ -25,7 +25,10 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
     entry.hubs = { state: 'loading' }
     const path = `/v1/workspaces/${encodeURIComponent(entry.workspace.id)}/hubs`
     try {
-      const hubs = await getAllPages(path, hubPageSchema, fetchFn)
+      const entries = await getAllPages(path, hubPageSchema, fetchFn)
+      // "No access" hubs (owners and admins, #43) get their own card in #67. Until then only
+      // hubs the caller can open are shown.
+      const hubs: Folder[] = entries.filter((h) => h.access === 'granted')
       if (gen === generation) entry.hubs = { state: 'ready', data: hubs }
     } catch (error) {
       if (gen === generation) entry.hubs = { state: 'error', error: asRequestError(error) }

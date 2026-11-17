@@ -108,6 +108,7 @@ describe('migrations', () => {
       '0003_auth_access',
       '0004_auth_functions',
       '0005_agent_key_lookup',
+      '0006_principal_removed',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -593,5 +594,55 @@ describe('0002_item_index', () => {
         db,
       ),
     ).rejects.toThrow(/item_index_pkey/)
+  })
+})
+
+describe('0006_principal_removed', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+
+  beforeEach(async () => {
+    await migrateToLatest(db)
+    await db.insertInto('workspace').values({ id: 'w1', name: 'W' }).execute()
+    await db
+      .insertInto('account')
+      .values({ id: 'a1', email: 'a@example.com', password_hash: '$argon2id$x', name: 'A' })
+      .execute()
+    await db
+      .insertInto('principal')
+      .values([
+        { workspace_id: 'w1', id: 'p1', kind: 'user', name: 'P', workspace_role: 'member' },
+        {
+          workspace_id: 'w1',
+          id: 'p2',
+          kind: 'user',
+          name: 'Q',
+          workspace_role: 'member',
+          account_id: 'a1',
+        },
+        { workspace_id: 'w1', id: 'bot', kind: 'agent', name: 'B', workspace_role: 'member' },
+      ])
+      .execute()
+  })
+
+  const remove = (id: string) =>
+    db
+      .updateTable('principal')
+      .set({ removed_at: sql`now()` })
+      .where('id', '=', id)
+      .execute()
+
+  it('only removes people whose account is unlinked', async () => {
+    await remove('p1')
+    await expect(remove('p2')).rejects.toThrow(/principal_removed_check/)
+    await expect(remove('bot')).rejects.toThrow(/principal_removed_check/)
+  })
+
+  it('migrates down only while nobody is removed', async () => {
+    await remove('p1')
+    const { error } = await migrator().migrateTo('0005_agent_key_lookup')
+    expect(String(error)).toMatch(/removed members/)
+    await db.updateTable('principal').set({ removed_at: null }).where('id', '=', 'p1').execute()
+    expect((await migrator().migrateTo('0005_agent_key_lookup')).error).toBeUndefined()
   })
 })

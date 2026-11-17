@@ -1,9 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { agentHubRoleSchema, can, type AgentHubRole, type Subject } from '@16bit/core'
+import { agentHubRoleSchema, type AgentHubRole } from '@16bit/core'
 import { sql, type Kysely } from 'kysely'
 import type { Database } from '../db/database.ts'
-import { enforce } from '../http.ts'
-import type { Identity } from './auth.ts'
 
 // Agent keys (D47): the bearer-token branch of the auth hook in `auth.ts`.
 
@@ -58,21 +56,4 @@ export async function resolveAgentKey(
     hubName: row.hub_name,
     hubRole: agentHubRoleSchema.parse(row.hub_role),
   }
-}
-
-/**
- * Holds an agent key to its one hub and role on the item routes. People are not checked
- * here yet: #43 puts every route, for every principal, behind `can()` and hub grants.
- * `what` names the thing in the 404, so a hidden hub looks the same as a missing one.
- */
-export function agentHubCheck(
-  identity: Identity | null,
-  principal: Subject,
-  hubId: string,
-  action: 'hub.read' | 'item.write',
-  what: string,
-): void {
-  if (identity?.kind !== 'agent') return
-  const hubGrant = hubId === identity.hubId ? identity.hubRole : null
-  enforce(can(principal, action, { hubGrant }), what)
 }

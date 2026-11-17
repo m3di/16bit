@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   conflictErrorSchema,
+  createHubSchema,
   createItemSchema,
+  hubListEntrySchema,
+  setHubGrantSchema,
   deleteItemQuerySchema,
   itemQuerySchema,
   pageQuerySchema,
@@ -54,5 +57,39 @@ describe('api contracts', () => {
     expect(createItemSchema.safeParse({ folderId: 'f1', id: 'bad id' }).success).toBe(false)
     expect(deleteItemQuerySchema.parse({ version: '3' })).toEqual({ version: 3 })
     expect(deleteItemQuerySchema.safeParse({}).success).toBe(false)
+  })
+
+  it('separates granted hubs from name-only ones in the hub list', () => {
+    const folder = {
+      workspaceId: 'w1',
+      id: 'h1',
+      hubId: 'h1',
+      parentId: null,
+      name: 'Hub',
+      color: 'blue',
+      idPrefix: 'H',
+      itemCount: 3,
+      version: 0,
+    }
+    const granted = { ...folder, access: 'granted', hubRole: 'editor' }
+    expect(hubListEntrySchema.safeParse(granted).success).toBe(true)
+    expect(hubListEntrySchema.safeParse({ ...granted, hubRole: undefined }).success).toBe(false)
+    const none = { access: 'none', workspaceId: 'w1', id: 'h1', name: 'Hub', color: 'blue' }
+    expect(hubListEntrySchema.safeParse(none).success).toBe(true)
+    expect(hubListEntrySchema.safeParse({ ...none, itemCount: 3 }).success).toBe(false)
+    expect(hubListEntrySchema.safeParse({ ...none, hubRole: 'viewer' }).success).toBe(false)
+  })
+
+  it('checks a new hub and a grant', () => {
+    expect(createHubSchema.parse({ name: ' Ops ', color: 'teal', idPrefix: 'OPS' })).toEqual({
+      name: 'Ops',
+      color: 'teal',
+      idPrefix: 'OPS',
+    })
+    expect(createHubSchema.safeParse({ name: 'x', color: 'teal', idPrefix: 'ops' }).success).toBe(
+      false,
+    )
+    expect(setHubGrantSchema.safeParse({ hubRole: 'hub_admin' }).success).toBe(true)
+    expect(setHubGrantSchema.safeParse({ hubRole: 'owner' }).success).toBe(false)
   })
 })
