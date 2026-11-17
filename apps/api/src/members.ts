@@ -32,9 +32,12 @@ import { toFolder } from './mappers.ts'
 //      its log or revision row must never wait on a principal lock held by someone who is
 //      waiting for that workspace row.
 //   2. hub_grant, invite and agent_key rows.
-//   3. removeMember only: the target's row again, now FOR UPDATE, because clearing account_id
-//      changes a unique key. This comes after the target's grants are deleted, so the target's
-//      own item writes, which hold their grant FOR SHARE, have finished or wait before any lock.
+//   3. removeMember only: the target's row again, now FOR UPDATE. That lock is the one the
+//      `UPDATE principal SET account_id = null` takes implicitly, because clearing account_id
+//      changes a unique key; never add an explicit forUpdate() earlier. It comes after the
+//      target's grants are deleted, so the target's own item writes, which hold their grant FOR
+//      SHARE, have finished or wait before any lock. The target's invites are expired after it:
+//      by then every in-flight invite insert by the target has committed or rolled back.
 //   4. appendAccessLog: the actor's principal row FOR KEY SHARE, then the workspace row
 //      (next_access_seq), then the access_log row. The actor is locked before the workspace
 //      row so a member being removed (step 3 elsewhere) blocks its own access change before
@@ -202,6 +205,15 @@ export async function removeMember(
       .where('principal_id', '=', targetId)
       .returning(['hub_id', 'hub_role'])
       .execute()
+    // Step 3 of the lock order: this UPDATE takes the target FOR UPDATE.
+    await trx
+      .updateTable('principal')
+      .set({ removed_at: sql`now()`, account_id: null })
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', targetId)
+      .execute()
+    // After the UPDATE above, which waited for every in-flight invite insert by the target
+    // (their foreign key holds the target FOR KEY SHARE), so this statement sees them all.
     const invites = await trx
       .updateTable('invite')
       .set({ expires_at: sql`now()` })
@@ -210,12 +222,6 @@ export async function removeMember(
       .where('used_at', 'is', null)
       .where('expires_at', '>', sql<Date>`now()`)
       .returning('id')
-      .execute()
-    await trx
-      .updateTable('principal')
-      .set({ removed_at: sql`now()`, account_id: null })
-      .where('workspace_id', '=', workspaceId)
-      .where('id', '=', targetId)
       .execute()
     await appendAccessLog(trx, {
       workspaceId,

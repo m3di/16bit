@@ -3,11 +3,13 @@ import { sql, type Kysely, type Transaction } from 'kysely'
 import pg from 'pg'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { checkHub } from './access.ts'
+import { appendAccessLog } from './access-log.ts'
 import { createAgentKey, revokeAgentKey } from './agent-keys.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { withScope } from './db/scope.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { createItem, patchItem } from './items.ts'
+import { HttpError } from './http.ts'
 import { changeMemberRole, removeMember } from './members.ts'
 
 // Lock order of concurrent access changes (#92, the comment at the top of members.ts), against
@@ -18,7 +20,8 @@ import { changeMemberRole, removeMember } from './members.ts'
 // so Postgres aborted one of them with a deadlock (40P01, a 500). Now both commit.
 //
 // The gate is an uncommitted row with the sequence number B is about to take, inserted by the
-// owner of the tables: B's insert waits on its unique key until the gate rolls back.
+// owner of the tables: B's insert waits on its unique key until the gate rolls back. Its actor
+// is `gk`, who takes part in nothing else, so the gate holds no lock on anyone under test.
 
 let db: Kysely<Database>
 /** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
@@ -52,9 +55,11 @@ afterEach(async () => {
 })
 
 /**
- * w1, hub `build` with attribute `title` and item `b1` (last written by own2).
+ * w1, hub `build` with attribute `title`, item `b1` (last written by own2) and item `b2` (last
+ * written by ed).
  *   own   owner,  hub_admin on build     own2  owner, hub_admin on build
  *   adm   admin,  viewer on build        ed    member, editor on build
+ *   gk    member, no grant (the gate's actor)
  */
 async function seed(): Promise<void> {
   await db.insertInto('workspace').values({ id: 'w1', name: 'Alpha' }).execute()
@@ -67,6 +72,7 @@ async function seed(): Promise<void> {
           ['own2', 'owner'],
           ['adm', 'admin'],
           ['ed', 'member'],
+          ['gk', 'member'],
         ] as const
       ).map(([id, workspace_role]) => ({
         workspace_id: 'w1',
@@ -130,6 +136,7 @@ async function seed(): Promise<void> {
     )
     .execute()
   await createItem(db, 'w1', 'own2', { id: 'b1', folderId: 'build', values: { title: 'Bug' } })
+  await createItem(db, 'w1', 'ed', { id: 'b2', folderId: 'build', values: { title: 'Task' } })
 }
 
 async function newKey(): Promise<string> {
@@ -149,12 +156,12 @@ async function openGate(table: 'access_log' | 'revision'): Promise<{ open: () =>
   if (table === 'access_log') {
     await client.query(
       `INSERT INTO access_log (workspace_id, seq, actor, action, target)
-       SELECT 'w1', next_access_seq, 'ed', 'gate-92', 'ed' FROM workspace WHERE id = 'w1'`,
+       SELECT 'w1', next_access_seq, 'gk', 'gate-92', 'gk' FROM workspace WHERE id = 'w1'`,
     )
   } else {
     await client.query(
       `INSERT INTO revision (workspace_id, seq, item_id, version, patch, actor, hub_id)
-       SELECT 'w1', next_revision_seq, 'gate-92', 1, '{"op":"create"}', 'ed', 'build'
+       SELECT 'w1', next_revision_seq, 'gate-92', 1, '{"op":"create"}', 'gk', 'build'
        FROM workspace WHERE id = 'w1'`,
     )
   }
@@ -207,25 +214,34 @@ async function untilBlocked(r: Run): Promise<void> {
   if (!state.finished) throw new Error(`backend ${String(pid)} never waited on a lock`)
 }
 
-/** Runs B up to the gate, then A until it waits, then opens the gate. Both must commit. */
-async function interleave(
+type Result = Awaited<Run['done']>
+
+/** Runs B up to the gate, then A until it waits, then opens the gate. Returns [B, A]. */
+async function interleaveResults(
   gate: 'access_log' | 'revision',
   b: () => Run,
   a: () => Run,
-): Promise<void> {
+): Promise<[Result, Result]> {
   const { open } = await openGate(gate)
-  let results
   try {
     const first = b()
     await untilBlocked(first)
     const second = a()
     await untilBlocked(second)
     await open()
-    results = await Promise.all([first.done, second.done])
+    return await Promise.all([first.done, second.done])
   } finally {
     await open()
   }
-  for (const r of results) {
+}
+
+/** Like interleaveResults; both must commit. */
+async function interleave(
+  gate: 'access_log' | 'revision',
+  b: () => Run,
+  a: () => Run,
+): Promise<void> {
+  for (const r of await interleaveResults(gate, b, a)) {
     if (!r.ok) throw r.error
   }
 }
@@ -292,5 +308,133 @@ describe('concurrent access changes (#92)', () => {
       .executeTakeFirstOrThrow()
     expect(item.version).toBe(2)
     expect(await accessLog()).toEqual([{ actor: 'own', action: 'member.role', target: 'ed' }])
+  })
+
+  // The review of #95: with the target only NO KEY UPDATE locked, removal no longer waits for
+  // an invite insert by the target at its first lock. It waits at the principal UPDATE (the
+  // insert's foreign key holds the target FOR KEY SHARE), so the invites must be expired after
+  // that UPDATE or the new invite stays redeemable.
+  it('an admin creates an invite while an owner removes that admin', async () => {
+    let inviteId = ''
+    await interleave(
+      'access_log',
+      // What POST /invites does (auth/routes.ts): the invite, then its access_log row.
+      () =>
+        run('adm', async (trx) => {
+          const row = await trx
+            .insertInto('invite')
+            .values({
+              workspace_id: 'w1',
+              id: 'inv-92',
+              token_hash: 'hash-92',
+              workspace_role: 'member',
+              created_by: 'adm',
+              expires_at: sql<Date>`now() + interval '7 days'`,
+              used_at: null,
+            })
+            .returning('id')
+            .executeTakeFirstOrThrow()
+          inviteId = row.id
+          await appendAccessLog(trx, {
+            workspaceId: 'w1',
+            actor: 'adm',
+            action: 'invite.create',
+            target: row.id,
+          })
+        }),
+      () => run('own', (trx) => removeMember(trx, 'w1', own, 'adm')),
+    )
+    const invite = await db
+      .selectFrom('invite')
+      .select(sql<boolean>`expires_at <= now()`.as('expired'))
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', inviteId)
+      .executeTakeFirstOrThrow()
+    expect(invite.expired).toBe(true)
+    const removal = await db
+      .selectFrom('access_log')
+      .select('detail')
+      .where('workspace_id', '=', 'w1')
+      .where('action', '=', 'member.remove')
+      .executeTakeFirstOrThrow()
+    expect(removal.detail).toMatchObject({ expiredInvites: ['inv-92'] })
+  })
+
+  // removeMember's principal UPDATE (FOR UPDATE) must come after the grant DELETE: the member's
+  // own write holds its grant FOR SHARE and only references the member at its revision insert.
+  // `b2` was last written by ed, so the item UPDATE takes no lock on ed before that insert.
+  it("a member's own item write runs while an owner removes that member", async () => {
+    await interleave(
+      'revision',
+      () =>
+        run('ed', async (trx) => {
+          const ed = subject('ed', 'member')
+          await checkHub(trx, 'w1', ed, 'build', 'item.write', 'Item')
+          await patchItem(trx, 'w1', 'ed', 'b2', { version: 1, values: { title: 'Done' } })
+        }),
+      () => run('own', (trx) => removeMember(trx, 'w1', own, 'ed')),
+    )
+    const item = await db
+      .selectFrom('item')
+      .select('version')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'b2')
+      .executeTakeFirstOrThrow()
+    expect(item.version).toBe(2)
+    const ed = await db
+      .selectFrom('principal')
+      .select(sql<boolean>`removed_at IS NOT NULL`.as('removed'))
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'ed')
+      .executeTakeFirstOrThrow()
+    expect(ed.removed).toBe(true)
+    expect(await accessLog()).toEqual([{ actor: 'own', action: 'member.remove', target: 'ed' }])
+  })
+
+  // The last-owner guarantee under NO KEY UPDATE: A waits on the owner rows B holds, then sees
+  // B's demotion and refuses, because A's target is now the last owner.
+  it('two owners demote each other: exactly one succeeds', async () => {
+    const [b, a] = await interleaveResults(
+      'access_log',
+      () => run('own', (trx) => changeMemberRole(trx, 'w1', own, 'own2', 'admin')),
+      () => run('own2', (trx) => changeMemberRole(trx, 'w1', own2, 'own', 'admin')),
+    )
+    expect(b).toEqual({ ok: true })
+    expect(a.ok).toBe(false)
+    if (!a.ok) {
+      expect(a.error).toBeInstanceOf(HttpError)
+      expect((a.error as HttpError).status).toBe(403)
+    }
+    const owners = await db
+      .selectFrom('principal')
+      .select('id')
+      .where('workspace_id', '=', 'w1')
+      .where('workspace_role', '=', 'owner')
+      .execute()
+    expect(owners).toEqual([{ id: 'own' }])
+    expect(await accessLog()).toEqual([{ actor: 'own', action: 'member.role', target: 'own2' }])
+  })
+
+  // An admin's access change whose log row lands after their removal committed: RLS now hides
+  // the actor from the FOR KEY SHARE lock, which must fail loudly instead of locking nothing.
+  it("an admin's access log append after their removal fails with a clear error", async () => {
+    let release!: () => void
+    const removed = new Promise<void>((resolve) => (release = resolve))
+    const b = run('adm', async (trx) => {
+      await removed
+      await appendAccessLog(trx, {
+        workspaceId: 'w1',
+        actor: 'adm',
+        action: 'key.revoke',
+        target: 'adm',
+      })
+    })
+    await b.pid
+    const a = await run('own', (trx) => removeMember(trx, 'w1', own, 'adm')).done
+    expect(a).toEqual({ ok: true })
+    release()
+    const result = await b.done
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(String(result.error)).toMatch(/actor adm cannot be locked/)
   })
 })
