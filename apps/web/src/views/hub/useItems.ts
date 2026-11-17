@@ -51,6 +51,18 @@ export function nextSort(current: SortKey | null, attribute: string): SortKey | 
   return current.direction === 'asc' ? { attribute, direction: 'desc' } : null
 }
 
+/**
+ * The query was refused because of its sort: a 400 whose `errors` name a `sort` path, for
+ * example an attribute that is no longer indexed (docs/ARCHITECTURE.md, "Query shape").
+ */
+export function refusedSort(error: ApiRequestError): boolean {
+  const raw = error.body?.['errors']
+  if (error.status !== 400 || !Array.isArray(raw)) return false
+  return (raw as { path?: unknown }[]).some(
+    (e) => typeof e.path === 'string' && (e.path === 'sort' || e.path.startsWith('sort.')),
+  )
+}
+
 /** An edit applied locally and not yet confirmed by the server. */
 interface PendingEdit {
   key: number
@@ -254,27 +266,52 @@ export function useItems(
     },
   })
 
-  /** Reads the open folder's first page in the order asked for, from the loading state. */
+  const staleSortNotice =
+    'The table can no longer be sorted by that column, so the items are shown newest update first.'
+
+  /**
+   * Reads the open folder's first page in the order asked for, from the loading state. If the
+   * server refuses the sort, the sort is dropped and the default order is read instead, so a
+   * retry never sends the refused sort again.
+   */
   async function reload() {
     const gen = ++generation
     const folder = folderId.value
-    const order = sort.value
     if (!folder) return
+    const order = sort.value
     list.value = { state: 'loading' }
     try {
       const page = await fetchPage(folder, null, order)
       if (gen === generation) list.value = firstPage(page, order)
-    } catch (error) {
-      if (gen === generation) list.value = { state: 'error', error: asRequestError(error) }
+    } catch (thrown) {
+      if (gen !== generation) return
+      const error = asRequestError(thrown)
+      if (order && refusedSort(error)) {
+        sort.value = null
+        notice.value = staleSortNotice
+        await reload()
+        return
+      }
+      list.value = { state: 'error', error }
     }
   }
 
   /**
-   * Shows a folder's first page, newest update first. `expandIds` are relation attributes whose
-   * linked items come back with each page. Another folder starts in the default order.
+   * Shows a folder's first page. `expandIds` are relation attributes whose linked items come
+   * back with each page. Another folder starts in the default order, newest update first; the
+   * same folder keeps its order while the attribute is among `sortableIds`, the folder's
+   * columns that pass `canSort`.
    */
-  async function openFolder(id: string, expandIds: readonly string[] = []) {
+  async function openFolder(
+    id: string,
+    expandIds: readonly string[] = [],
+    sortableIds?: readonly string[],
+  ) {
     if (id !== folderId.value) sort.value = null
+    else if (sort.value && sortableIds && !sortableIds.includes(sort.value.attribute)) {
+      sort.value = null
+      notice.value = staleSortNotice
+    }
     folderId.value = id
     expand = [...expandIds]
     await reload()
@@ -307,11 +344,9 @@ export function useItems(
       const error = asRequestError(thrown)
       data.sorting = false
       sort.value = data.sort
-      // A 400 means the column is not sortable any more, for example no longer indexed.
-      const reason =
-        error.status === 400
-          ? 'This column can no longer be sorted; reload the page to see the current columns.'
-          : `The items could not be shown in that order. ${sentence(error.message)}`
+      const reason = refusedSort(error)
+        ? 'This column can no longer be sorted; reload the page to see the current columns.'
+        : `The items could not be shown in that order. ${sentence(error.message)}`
       notice.value = `${reason} The items are shown in the previous order.`
     }
   }
@@ -494,7 +529,6 @@ export function useItems(
     folderId,
     sort,
     setSort,
-    reload,
     notice,
     view,
     isSaving,

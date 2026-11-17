@@ -1,7 +1,16 @@
 import type { Attribute, Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { attributes, fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
-import { canSort, inHub, LINKED_READ_LIMIT, nextSort, useItems, valueErrors } from './useItems.ts'
+import { ApiRequestError } from '../../api/client.ts'
+import {
+  canSort,
+  inHub,
+  LINKED_READ_LIMIT,
+  nextSort,
+  refusedSort,
+  useItems,
+  valueErrors,
+} from './useItems.ts'
 
 const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
 
@@ -198,7 +207,7 @@ describe('useItems: sorting', () => {
             {
               error: 'invalid_request',
               message: 'sort.0: Attribute "stage" is not indexed',
-              errors: [],
+              errors: [{ path: 'sort.0', message: 'Attribute "stage" is not indexed' }],
             },
             400,
           )
@@ -215,6 +224,21 @@ describe('useItems: sorting', () => {
     expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
     expect(s.notice.value).toBe(
       'This column can no longer be sorted; reload the page to see the current columns. The items are shown in the previous order.',
+    )
+  })
+
+  it('does not blame the column for a 400 that does not name the sort', async () => {
+    const api = fakeApi((call) =>
+      (call.body as QueryBody).sort.length
+        ? json({ error: 'invalid_request', message: 'limit: Too big' }, 400)
+        : page([item('i1', 1)]),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    await s.setSort({ attribute: 'stage', direction: 'asc' })
+    expect(s.sort.value).toBeNull()
+    expect(s.notice.value).toBe(
+      'The items could not be shown in that order. limit: Too big. The items are shown in the previous order.',
     )
   })
 
@@ -243,6 +267,111 @@ describe('useItems: sorting', () => {
     await s.openFolder('b')
     expect(s.sort.value).toBeNull()
     expect(queries(api.calls).at(-1)).toMatchObject({ from: 'b', sort: [] })
+  })
+})
+
+describe('useItems: a sort that went stale (#81)', () => {
+  type QueryBody = { from: string; sort: unknown[] }
+  const sorts = (calls: Call[]) =>
+    calls.filter((c) => c.path.endsWith('/query')).map((c) => (c.body as QueryBody).sort)
+  const stage = { attribute: 'stage', direction: 'asc' } as const
+  const refused = () =>
+    json(
+      {
+        error: 'invalid_request',
+        message: 'sort.0: Attribute "stage" is not indexed',
+        errors: [{ path: 'sort.0', message: 'Attribute "stage" is not indexed' }],
+      },
+      400,
+    )
+  const notice =
+    'The table can no longer be sorted by that column, so the items are shown newest update first.'
+
+  /** A folder sorted by stage, whose next query is answered by `next`. */
+  async function sortedThen(next: (body: QueryBody) => Response) {
+    let sorted = false
+    const api = fakeApi((call) => {
+      if (!sorted) return page([item('i1', 1)])
+      return next(call.body as QueryBody)
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    await s.setSort(stage)
+    sorted = true
+    return { s, calls: api.calls }
+  }
+
+  it('tells a refused sort from other 400s by the error path', () => {
+    const refusal = (errors: unknown, status = 400) =>
+      new ApiRequestError('invalid_request', 'x', status, {
+        error: 'invalid_request',
+        message: 'x',
+        errors,
+      })
+    expect(refusedSort(refusal([{ path: 'sort.0', message: 'm' }]))).toBe(true)
+    expect(refusedSort(refusal([{ path: 'where.and.0', message: 'm' }, { path: 'sort' }]))).toBe(
+      true,
+    )
+    expect(refusedSort(refusal([{ path: 'where.and.0', message: 'm' }]))).toBe(false)
+    expect(refusedSort(refusal([{ path: 'sorting', message: 'm' }]))).toBe(false)
+    expect(refusedSort(refusal([]))).toBe(false)
+    expect(refusedSort(refusal(undefined))).toBe(false)
+    expect(refusedSort(refusal([{ path: 'sort.0', message: 'm' }], 500))).toBe(false)
+  })
+
+  it('drops a refused sort on reopen and loads the default order', async () => {
+    const { s, calls } = await sortedThen((body) =>
+      body.sort.length ? refused() : page([item('i2', 2)]),
+    )
+    await s.openFolder('bld')
+    expect(sorts(calls).slice(-2)).toEqual([[stage], []])
+    expect(s.sort.value).toBeNull()
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { sort: null } })
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i2'])
+    expect(s.notice.value).toBe(notice)
+    // Retrying again does not send the refused sort.
+    await s.openFolder('bld')
+    expect(sorts(calls).at(-1)).toEqual([])
+  })
+
+  it('keeps the sort, and shows the error, for a failure that does not name it', async () => {
+    const { s, calls } = await sortedThen(() =>
+      json({ error: 'invalid_request', message: 'Invalid cursor' }, 400),
+    )
+    await s.openFolder('bld')
+    expect(sorts(calls).at(-1)).toEqual([stage])
+    expect(s.sort.value).toEqual(stage)
+    expect(s.list.value).toMatchObject({ state: 'error', error: { status: 400 } })
+    expect(s.notice.value).toBeNull()
+  })
+
+  it('shows the error state if the default order fails too', async () => {
+    const { s } = await sortedThen((body) =>
+      body.sort.length ? refused() : json({ error: 'internal', message: 'Down' }, 500),
+    )
+    await s.openFolder('bld')
+    expect(s.sort.value).toBeNull()
+    expect(s.list.value).toMatchObject({ state: 'error', error: { status: 500 } })
+  })
+
+  it('does not send a kept sort the folder columns no longer allow', async () => {
+    const { s, calls } = await sortedThen(() => page([item('i2', 2)]))
+    await s.openFolder('bld', [], ['points'])
+    expect(sorts(calls).at(-1)).toEqual([])
+    expect(s.sort.value).toBeNull()
+    expect(s.notice.value).toBe(notice)
+  })
+
+  it('keeps a sort the folder columns still allow', async () => {
+    const { s, calls } = await sortedThen(() => page([item('i2', 2)]))
+    await s.openFolder('bld', [], ['stage'])
+    expect(sorts(calls).at(-1)).toEqual([stage])
+    expect(s.notice.value).toBeNull()
+  })
+
+  it('keeps reload internal', () => {
+    const s = useItems('w', () => 'BLD', fakeApi(() => page([])).fetchFn)
+    expect('reload' in s).toBe(false)
   })
 })
 
