@@ -133,9 +133,7 @@ test('an editor adds an item and edits it in the browser', async ({ pageAs, as }
 })
 
 test.describe('read-only from the hub role', () => {
-  // The hub description carries hubRole since #73; the page doesn't use it yet (#90).
-  test.fixme(true, 'The hub page shows read-only only after a refused write (#90)')
-
+  // The page reads hubRole from the hub description, so no write has to be refused first (#90).
   for (const [person, item] of [
     ['ivy', { hubId: 'launch', folder: 'Launch' }],
     ['noor', { hubId: 'support', folder: 'Support' }],

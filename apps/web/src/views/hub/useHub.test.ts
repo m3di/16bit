@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { description, fakeApi, folder, json } from './fixtures.test-utils.ts'
-import { folderColumns, folderTree, truncatedNote, useHub } from './useHub.ts'
+import { canEditItems, folderColumns, folderTree, truncatedNote, useHub } from './useHub.ts'
 
 describe('folderTree', () => {
   it('puts the hub first, then folders by parent with children under them', () => {
@@ -66,6 +66,15 @@ describe('truncatedNote', () => {
   })
 })
 
+describe('canEditItems', () => {
+  it('lets hub admins and editors change items, not commenters or viewers', () => {
+    expect(canEditItems('hub_admin')).toBe(true)
+    expect(canEditItems('editor')).toBe(true)
+    expect(canEditItems('commenter')).toBe(false)
+    expect(canEditItems('viewer')).toBe(false)
+  })
+})
+
 describe('useHub', () => {
   it('loads the hub description', async () => {
     const api = fakeApi(() => json(description))
@@ -88,5 +97,26 @@ describe('useHub', () => {
     const h = useHub('w', 'bld', api.fetchFn)
     await Promise.all([h.load(), h.load()])
     expect(api.calls).toHaveLength(1)
+  })
+
+  it('is read-only on load for a commenter or viewer, and not while loading', async () => {
+    for (const [hubRole, readOnly] of [
+      ['viewer', true],
+      ['commenter', true],
+      ['editor', false],
+      ['hub_admin', false],
+    ] as const) {
+      const h = useHub('w', 'bld', fakeApi(() => json({ ...description, hubRole })).fetchFn)
+      expect(h.readOnly.value).toBe(false)
+      await h.load()
+      expect(h.readOnly.value).toBe(readOnly)
+    }
+  })
+
+  it('is not read-only when the hub cannot be read', async () => {
+    const api = fakeApi(() => json({ error: 'forbidden', message: 'No' }, 403))
+    const h = useHub('w', 'bld', api.fetchFn)
+    await h.load()
+    expect(h.readOnly.value).toBe(false)
   })
 })

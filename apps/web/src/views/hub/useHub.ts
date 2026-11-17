@@ -3,6 +3,7 @@ import {
   type Folder,
   type FolderAttributeDefinition,
   type HubDescription,
+  type HubRole,
 } from '@16bit/core'
 import { computed, ref } from 'vue'
 import { asRequestError, getJson, type Fetch } from '../../api/client.ts'
@@ -62,6 +63,12 @@ export function truncatedNote(description: HubDescription): string {
   return cut ? `This hub has more ${cut} than can be shown here.` : ''
 }
 
+/**
+ * Whether a hub role may add and change items. Commenters and viewers read only
+ * (docs/ROLES.md). The role in the hub description is already capped by the workspace role.
+ */
+export const canEditItems = (role: HubRole): boolean => role === 'hub_admin' || role === 'editor'
+
 /** A hub's description: its folders and attributes (`GET /v1/workspaces/:w/hubs/:h`). */
 export function useHub(
   workspaceId: string,
@@ -90,6 +97,10 @@ export function useHub(
   }
 
   const tree = computed(() => (hub.value.state === 'ready' ? folderTree(hub.value.data) : []))
+  /** The caller's hub role does not let them add or change items. `false` until it is known. */
+  const readOnly = computed(
+    () => hub.value.state === 'ready' && !canEditItems(hub.value.data.hubRole),
+  )
 
-  return { hub, tree, load }
+  return { hub, tree, readOnly, load }
 }

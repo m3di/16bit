@@ -28,10 +28,13 @@ const { workspaceId, hubId, folderId, itemId } = defineProps<{
 }>()
 
 const router = useRouter()
-const { hub, tree, load: loadHub } = useHub(workspaceId, hubId)
+const { hub, tree, readOnly: roleReadOnly, load: loadHub } = useHub(workspaceId, hubId)
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
 const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '')
 const { list, rows, notice } = items
+// Read-only from the hub role on load, or after the server refused a write: a grant lowered
+// while the page is open is only known once a write gets a 403.
+const readOnly = computed(() => roleReadOnly.value || items.readOnly.value)
 
 // Names for actors, and the hubs that linked items live in, for cells and editors.
 const session = useSession()
@@ -177,7 +180,7 @@ const closePanel = () => {
 }
 
 function startCreate() {
-  if (items.readOnly.value) return
+  if (readOnly.value) return
   createErrors.value = {}
   creating.value = true
   if (itemId) void router.push({ query: {} })
@@ -189,7 +192,7 @@ async function submitCreate(values: ItemValues) {
   if (result.ok) {
     creating.value = false
     void router.push(itemLink(result.item))
-  } else if (items.readOnly.value) {
+  } else if (readOnly.value) {
     // The hub refused the write: the form cannot succeed, the notice says why.
     creating.value = false
   } else {
@@ -230,7 +233,7 @@ async function submitCreate(values: ItemValues) {
                   truncated
                 }}</span>
               </div>
-              <span v-if="items.readOnly.value" class="text-secondary text-ink3" data-read-only
+              <span v-if="readOnly" class="text-secondary text-ink3" data-read-only
                 >You can view the items in this hub but not add or change them.</span
               >
               <BaseButton
@@ -261,7 +264,7 @@ async function submitCreate(values: ItemValues) {
               :selected-id="itemId"
               :item-link="itemLink"
               :is-creating="items.isCreating"
-              :read-only="items.readOnly.value"
+              :read-only="readOnly"
               :sort="items.sort.value"
               @open="openItem"
               @retry="openFolder(openFolderId)"
@@ -302,7 +305,7 @@ async function submitCreate(values: ItemValues) {
               :columns="description ? folderColumns(description, item.folderId) : []"
               :saving="items.isSaving(item.id)"
               :disabled="items.isCreating(item.id)"
-              :read-only="items.readOnly.value"
+              :read-only="readOnly"
               @save="items.save(item.id, $event)"
             />
           </template>
