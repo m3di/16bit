@@ -31,7 +31,7 @@ pnpm dev                  # migrations, then the API on :3000 and the web app on
 
 On its first run `pnpm dev` copies `.env.example` to `.env`. Every variable is documented there.
 
-The dashboard asks you to sign in. `pnpm seed` creates these people, all with the password `16bit-dev-password`. **Development only:** the password is public, so never run the seed against a database anyone else can reach.
+The dashboard asks you to sign in. `pnpm seed` creates these people, all with the password `16bit-dev-password`. **Development only:** the password is public, so never run the seed against a database anyone else can reach. As a backstop, the API refuses this password at sign-in when `NODE_ENV=production`, unless `ALLOW_DEV_PASSWORD=1` is set; only `compose.yaml` sets it, for its local stack.
 
 | Email | Pixel Works (`demo`) | Acme Studio (`acme`) |
 |---|---|---|
@@ -46,7 +46,7 @@ On its first run, `pnpm seed` also creates an agent key (Triage bot, editor of P
 
 The M0 development key and the anonymous dev owner are gone (D41 retired in #51). If your `.env` still sets `DEV_API_KEY`, `DEV_PRINCIPAL_ID` or `DEV_ANONYMOUS_*`, delete them; nothing reads them.
 
-**Only Docker.** `docker compose up --build` builds the image and starts the whole stack: Postgres, migrations, then the API and the built dashboard on http://localhost:8080 (`APP_PORT` changes the port). No Node.js needed. Load demo data with `docker compose run --rm app node src/seed.ts --force` (`--force` because the image runs with `NODE_ENV=production`; this database is your local one). Then sign in as one of the people above. The seed's password is public, so the port stays bound to 127.0.0.1. This stack is for trying the app; for working on it, use `pnpm dev`.
+**Only Docker.** `docker compose up --build` builds the image and starts the whole stack: Postgres, migrations, then the API and the built dashboard on http://localhost:8080 (`APP_PORT` changes the port). No Node.js needed. Load demo data with `docker compose run --rm app node src/seed.ts --force` (`--force` because the image runs with `NODE_ENV=production`; this database is your local one). Then sign in as one of the people above. The seed's password is public, so the port stays bound to 127.0.0.1, and compose sets `ALLOW_DEV_PASSWORD=1` so the production-mode image accepts it. Never set that variable on a deployment. This stack is for trying the app; for working on it, use `pnpm dev`.
 
 **Without Docker.** Create a database in your own Postgres, set `DATABASE_URL` in `.env` (or export it in your shell, which takes precedence), and run `pnpm dev`.
 

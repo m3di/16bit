@@ -16,6 +16,7 @@ import { sql, type Kysely } from 'kysely'
 import { z } from 'zod'
 import { appendAccessLog } from '../access-log.ts'
 import type { Database } from '../db/database.ts'
+import { DEV_PASSWORD } from '../dev-accounts.ts'
 import { HttpError, parse } from '../http.ts'
 import {
   accountMemberships,
@@ -36,6 +37,8 @@ export interface AuthRouteOptions extends AuthOptions {
   emailLimiter: RateLimiter
   /** Sign-in and invite acceptance attempts per client IP. */
   ipLimiter: RateLimiter
+  /** Refuses the seeds' published password (production without ALLOW_DEV_PASSWORD=1). */
+  refuseDevPassword: boolean
 }
 
 const optional = { config: { auth: 'optional' as const } }
@@ -91,6 +94,10 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
     // Counted before the password check, for unknown emails too, so the limit tells nothing.
     const wait = Math.max(options.ipLimiter.hit(request.ip), options.emailLimiter.hit(email))
     if (wait) return tooMany(reply, wait)
+    // Before any lookup, so the answer is the same for every email.
+    if (options.refuseDevPassword && password === DEV_PASSWORD) {
+      throw new HttpError('unauthorized', 'The development password is refused in production')
+    }
 
     const account = await db
       .selectFrom('account')

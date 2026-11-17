@@ -1,6 +1,9 @@
 import { sql, type Kysely } from 'kysely'
 import pg from 'pg'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ATTR,
   BUILD_HUB,
@@ -180,6 +183,25 @@ describe('ensureBuildHub', () => {
       .where('workspace_id', '=', WS)
       .execute()
     expect(log).toEqual([{ action: 'grant.set', target: OWNER }])
+  })
+
+  it('warns when the dev owner’s account ID is taken by another email', async () => {
+    await db
+      .updateTable('account')
+      .set({ email: 'renamed@example.com' })
+      .where('id', '=', OWNER)
+      .execute()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      await ensureBuildHub(db)
+      expect(warn).toHaveBeenCalledWith(
+        `seed: ${DEV_OWNER.email} not created, account ID ${OWNER} is taken; not linked`,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+    const emails = await db.selectFrom('account').select('email').execute()
+    expect(emails).toEqual([{ email: 'renamed@example.com' }])
   })
 
   it('leaves an existing workspace and principal untouched', async () => {
@@ -446,3 +468,26 @@ async function waitForLockWait(): Promise<void> {
   }
   throw new Error('The importer never waited on the row lock')
 }
+
+describe('seed:build-hub', () => {
+  it('refuses to run with NODE_ENV=production unless --force is passed', async () => {
+    const script = fileURLToPath(new URL('./seed-build-hub.ts', import.meta.url))
+    // No DATABASE_URL: the guard must fire before anything else, so nothing can be written.
+    const env = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' }
+    const run = async (args: string[]): Promise<{ code: unknown; stderr: string }> => {
+      try {
+        await promisify(execFile)(process.execPath, [script, ...args], { env })
+        return { code: 0, stderr: '' }
+      } catch (error) {
+        const { code, stderr } = error as { code: unknown; stderr: string }
+        return { code, stderr }
+      }
+    }
+    const refused = await run([])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('NODE_ENV=production')
+    const forced = await run(['--force'])
+    expect(forced.code).toBe(1)
+    expect(forced.stderr).toContain('DATABASE_URL is not set')
+  }, 30_000)
+})

@@ -15,6 +15,7 @@ import { hashPassword, verifyPassword } from './password.ts'
 import { hashAgentSecret, newAgentSecret } from './agent-key.ts'
 import { hashToken } from './session.ts'
 import { sessionCookie } from '../db/test-session.ts'
+import { DEV_PASSWORD, devPasswordRefused } from '../dev-accounts.ts'
 
 // Integration tests for sign-in, sessions and invites (#41) against a fresh Postgres per test.
 
@@ -257,6 +258,53 @@ describe('POST /v1/auth/login', () => {
     })
     expect(wrong.headers['set-cookie']).toBeUndefined()
     expect(await db.selectFrom('session').select('id_hash').execute()).toEqual([])
+  })
+
+  describe('the development password', () => {
+    beforeEach(async () => {
+      await db
+        .updateTable('account')
+        .set({ password_hash: await hashPassword(DEV_PASSWORD) })
+        .where('id', '=', 'dave')
+        .execute()
+    })
+
+    it('is refused when configured, for every email, and other passwords still work', async () => {
+      app = build({ refuseDevPassword: true })
+      const known = await login('dave@example.com', DEV_PASSWORD)
+      const unknown = await login('nobody@example.com', DEV_PASSWORD)
+      for (const res of [known, unknown]) {
+        expect(res.statusCode).toBe(401)
+        expect(res.json()).toEqual({
+          error: 'unauthorized',
+          message: 'The development password is refused in production',
+        })
+        expect(res.headers['set-cookie']).toBeUndefined()
+      }
+      expect(await db.selectFrom('session').select('id_hash').execute()).toEqual([])
+      expect((await login('alice@example.com')).statusCode).toBe(200)
+    })
+
+    it('signs in when not refused (the opt-in)', async () => {
+      app = build({ refuseDevPassword: false })
+      const res = await login('dave@example.com', DEV_PASSWORD)
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['set-cookie']).toBeDefined()
+    })
+
+    it('counts a refused attempt towards the rate limit', async () => {
+      app = build({ refuseDevPassword: true, loginPerEmail: { max: 1, windowSeconds: 60 } })
+      expect((await login('dave@example.com', DEV_PASSWORD)).statusCode).toBe(401)
+      expect((await login('dave@example.com', DEV_PASSWORD)).statusCode).toBe(429)
+    })
+
+    it('is refused under NODE_ENV=production unless ALLOW_DEV_PASSWORD=1', () => {
+      expect(devPasswordRefused({ NODE_ENV: 'production' })).toBe(true)
+      expect(devPasswordRefused({ NODE_ENV: 'production', ALLOW_DEV_PASSWORD: 'true' })).toBe(true)
+      expect(devPasswordRefused({ NODE_ENV: 'production', ALLOW_DEV_PASSWORD: '1' })).toBe(false)
+      expect(devPasswordRefused({ NODE_ENV: 'development' })).toBe(false)
+      expect(devPasswordRefused({})).toBe(false)
+    })
   })
 
   it('rejects a malformed body with 400', async () => {

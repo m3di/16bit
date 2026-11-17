@@ -192,7 +192,7 @@ A normalised store keyed by item ID sits between the server and every component.
 - `pnpm dev` runs migrations, then the API and the web dev server.
 - `pnpm seed` loads the demo workspaces, people with accounts in every workspace role (development password, `apps/api/src/dev-accounts.ts`), their hub grants (logged in `access_log`), one agent key whose secret it prints once, and a hub with every M1 attribute type (#51).
 - `pnpm seed:build-hub` imports this repository's GitHub issues into a local "Build" hub.
-- `docker compose up --build` runs the whole stack from the container image: Postgres, a one-shot migration service, then the app serving the API and the built dashboard on one port. People sign in as in `pnpm dev`; the port is published on 127.0.0.1 only, since seeded accounts share a public password. (Until #51 this stack let anonymous requests act as the dev owner, D41, now retired.)
+- `docker compose up --build` runs the whole stack from the container image: Postgres, a one-shot migration service, then the app serving the API and the built dashboard on one port. People sign in as in `pnpm dev`; the port is published on 127.0.0.1 only, since seeded accounts share a public password. Under `NODE_ENV=production` the API refuses that password at sign-in unless `ALLOW_DEV_PASSWORD=1`, which only this compose stack sets. (Until #51 this stack let anonymous requests act as the dev owner, D41, now retired.)
 - `.env.example` documents every variable.
 
 It must also run without Docker for anyone who has Postgres installed, by pointing `DATABASE_URL` at it.

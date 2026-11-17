@@ -1,5 +1,6 @@
 import { buildApp } from './app.ts'
 import { createDb } from './db/database.ts'
+import { devPasswordRefused } from './dev-accounts.ts'
 
 const port = Number(process.env['PORT'] ?? 3000)
 const host = process.env['HOST'] ?? '127.0.0.1'
@@ -16,7 +17,11 @@ if (!databaseUrl) {
 const db = createDb(databaseUrl)
 // Secure cookies unless explicitly turned off for plain-HTTP local development.
 const secureCookies = process.env['COOKIE_SECURE'] !== 'false'
-const app = buildApp({ db, webRoot, secureCookies })
+const refuseDevPassword = devPasswordRefused(process.env)
+if (process.env['NODE_ENV'] === 'production' && !refuseDevPassword) {
+  console.warn("api: ALLOW_DEV_PASSWORD=1, the seeds' published password signs in. Local only.")
+}
+const app = buildApp({ db, webRoot, secureCookies, refuseDevPassword })
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`api received ${signal}, closing`)

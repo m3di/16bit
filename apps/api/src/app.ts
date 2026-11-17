@@ -58,6 +58,8 @@ export interface AppOptions {
   session?: SessionPolicy
   /** Adds `Secure` to the session cookie. Off only for plain-HTTP local development. */
   secureCookies?: boolean
+  /** Refuses sign-in with the seeds' published `DEV_PASSWORD`. Set from `devPasswordRefused`. */
+  refuseDevPassword?: boolean
   /** Sign-in attempts per email. Defaults to 10 per 15 minutes. */
   loginPerEmail?: RateLimitPolicy
   /** Sign-in and invite acceptance attempts per client IP. Defaults to 100 per 15 minutes. */
@@ -121,7 +123,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
   void app.register(
     (v1, _opts, done) => {
       registerAuthHook(v1, auth)
-      registerAuthRoutes(v1, { ...auth, emailLimiter, ipLimiter })
+      registerAuthRoutes(v1, {
+        ...auth,
+        emailLimiter,
+        ipLimiter,
+        refuseDevPassword: options.refuseDevPassword ?? false,
+      })
 
       v1.get('/workspaces', async (request): Promise<Page<Workspace>> => {
         const identity = requireIdentity(request)

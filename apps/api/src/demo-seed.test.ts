@@ -19,6 +19,7 @@ import { createTestDatabase } from './db/test-database.ts'
 import { applySeed, demoSeed, type SeedResult } from './demo-seed.ts'
 import { DEV_OWNER, DEV_PASSWORD } from './dev-accounts.ts'
 import { folderDefinitions } from './items.ts'
+import { hashAgentSecret } from './auth/agent-key.ts'
 
 // Integration tests: the demo seed against a fresh, migrated Postgres database. The seed is
 // applied once in beforeAll; the later tests run it again, so they depend on test order.
@@ -339,7 +340,7 @@ describe('demo seed', () => {
     })
     const stored = await db.selectFrom('agent_key').select('secret_hash').execute()
     expect(stored).toHaveLength(1)
-    expect(stored[0]?.secret_hash).not.toContain(key.secret)
+    expect(stored[0]?.secret_hash).toBe(hashAgentSecret(key.secret))
     const log = await db
       .selectFrom('access_log')
       .select('action')

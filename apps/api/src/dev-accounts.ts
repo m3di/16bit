@@ -3,10 +3,19 @@ import { hashPassword } from './auth/password.ts'
 import type { Database } from './db/database.ts'
 
 // Accounts the seeds create so people can sign in locally (#51). DEVELOPMENT ONLY: every one
-// of them has the same published password. The seeds refuse NODE_ENV=production for this.
+// of them has the same published password. The seeds refuse NODE_ENV=production for this, and
+// under NODE_ENV=production the API refuses the password at sign-in (see `devPasswordRefused`).
 
 /** The password of every seeded account. Documented in README.md; never use it anywhere real. */
 export const DEV_PASSWORD = '16bit-dev-password'
+
+/**
+ * Whether sign-in must refuse `DEV_PASSWORD`: under NODE_ENV=production, unless
+ * ALLOW_DEV_PASSWORD=1 opts in. Only compose.yaml opts in, next to its 127.0.0.1-only port.
+ */
+export function devPasswordRefused(env: NodeJS.ProcessEnv): boolean {
+  return env['NODE_ENV'] === 'production' && env['ALLOW_DEV_PASSWORD'] !== '1'
+}
 
 export interface DevPerson {
   /** The principal ID in every workspace the person is seeded into, and the account ID. */
@@ -63,6 +72,8 @@ export async function ensureDevAccounts(
   for (const p of people) {
     const id = found.get(p.email)
     if (id !== undefined) accounts.set(p.id, id)
+    // The insert skipped them: another account already has their ID under a different email.
+    else console.warn(`seed: ${p.email} not created, account ID ${p.id} is taken; not linked`)
   }
   return accounts
 }
