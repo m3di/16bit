@@ -4,6 +4,8 @@ import {
   meSchema,
   workspacePageSchema,
 } from '@16bit/core'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -15,7 +17,7 @@ import { hashPassword, verifyPassword } from './password.ts'
 import { hashAgentSecret, newAgentSecret } from './agent-key.ts'
 import { hashToken } from './session.ts'
 import { sessionCookie } from '../db/test-session.ts'
-import { DEV_PASSWORD, devPasswordRefused } from '../dev-accounts.ts'
+import { DEV_PASSWORD, DEV_PASSWORD_REFUSED, devPasswordRefused } from '../dev-accounts.ts'
 
 // Integration tests for sign-in, sessions and invites (#41) against a fresh Postgres per test.
 
@@ -27,6 +29,8 @@ let db: Kysely<Database>
 /** The API's role, under row-level security (#44). `db` is the owner, for fixtures. */
 let appDb: Kysely<Database>
 let drop: () => Promise<void>
+/** Owner URL of this test's database, for the CLI. */
+let dbUrl: string
 let app: FastifyInstance
 let passwordHash: string
 
@@ -37,6 +41,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
+  dbUrl = test.url
   db = createDb(test.url)
   appDb = createDb(test.appUrl)
   await migrateToLatest(db)
@@ -778,6 +783,73 @@ describe('POST /v1/auth/invites/:token', () => {
   })
 })
 
+describe('POST /v1/auth/invites/:token with the development password', () => {
+  const devAccount = { ...newAccount, password: DEV_PASSWORD }
+
+  it('is refused when configured, writes nothing, and leaves the invite usable', async () => {
+    app = build({ refuseDevPassword: true })
+    const token = await inviteToken('w2', 'viewer')
+    const res = await accept(token, devAccount)
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toEqual({ error: 'invalid_request', message: DEV_PASSWORD_REFUSED })
+    expect(res.headers['set-cookie']).toBeUndefined()
+    const erin = await db
+      .selectFrom('account')
+      .select('id')
+      .where('email', '=', 'erin@example.com')
+      .execute()
+    expect(erin).toEqual([])
+    const invite = await db.selectFrom('invite').select('used_at').executeTakeFirstOrThrow()
+    expect(invite.used_at).toBeNull()
+
+    expect((await accept(token, newAccount)).statusCode).toBe(201)
+  })
+
+  it('is refused before the invite is checked, so an unknown token says the same', async () => {
+    app = build({ refuseDevPassword: true })
+    const res = await accept('x'.repeat(43), devAccount)
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toEqual({ error: 'invalid_request', message: DEV_PASSWORD_REFUSED })
+  })
+
+  it('still lets a signed-in account accept, since no password is set', async () => {
+    app = build({ refuseDevPassword: true })
+    const token = await inviteToken('w2', 'member')
+    expect((await accept(token, {}, await session('carol@example.com'))).statusCode).toBe(201)
+  })
+
+  it('creates the account when not refused (the opt-in)', async () => {
+    app = build({ refuseDevPassword: false })
+    const token = await inviteToken('w2', 'viewer')
+    const res = await accept(token, devAccount)
+    expect(res.statusCode).toBe(201)
+    expect((await login('erin@example.com', DEV_PASSWORD)).statusCode).toBe(200)
+  })
+})
+
+/** Runs `pnpm account:reset-password`'s script with `password` on stdin. */
+function resetPasswordCli(
+  email: string,
+  password: string,
+  env: Record<string, string>,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const script = fileURLToPath(new URL('../account-reset-password.ts', import.meta.url))
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, email], {
+      env: { PATH: process.env['PATH'] ?? '', MIGRATION_DATABASE_URL: dbUrl, ...env },
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()))
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      resolve({ code, stdout, stderr })
+    })
+    child.stdin.end(`${password}\n`)
+  })
+}
+
 describe('resetPassword (pnpm account:reset-password)', () => {
   it('sets the password and ends every session of the account', async () => {
     const alice = await session('alice@example.com')
@@ -801,6 +873,37 @@ describe('resetPassword (pnpm account:reset-password)', () => {
     await expect(resetPassword(db, 'alice@example.com', 'short')).rejects.toThrow(/12 to 256/)
     expect((await login('alice@example.com')).statusCode).toBe(200)
   })
+
+  it('refuses the development password when configured and changes nothing', async () => {
+    const alice = await session('alice@example.com')
+    await expect(
+      resetPassword(db, 'alice@example.com', DEV_PASSWORD, { refuseDevPassword: true }),
+    ).rejects.toThrow(DEV_PASSWORD_REFUSED)
+    expect((await app.inject({ url: '/v1/me', headers: alice })).statusCode).toBe(200)
+    expect((await login('alice@example.com')).statusCode).toBe(200)
+
+    expect(
+      await resetPassword(db, 'alice@example.com', DEV_PASSWORD, { refuseDevPassword: false }),
+    ).toBe(true)
+    expect((await login('alice@example.com', DEV_PASSWORD)).statusCode).toBe(200)
+  })
+
+  it('the CLI refuses it under NODE_ENV=production unless ALLOW_DEV_PASSWORD=1', async () => {
+    const refused = await resetPasswordCli('alice@example.com', DEV_PASSWORD, {
+      NODE_ENV: 'production',
+    })
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain(DEV_PASSWORD_REFUSED)
+    expect((await login('alice@example.com')).statusCode).toBe(200)
+
+    const allowed = await resetPasswordCli('alice@example.com', DEV_PASSWORD, {
+      NODE_ENV: 'production',
+      ALLOW_DEV_PASSWORD: '1',
+    })
+    expect(allowed.code).toBe(0)
+    expect(allowed.stdout).toContain('password set for alice@example.com')
+    expect((await login('alice@example.com', DEV_PASSWORD)).statusCode).toBe(200)
+  }, 30_000)
 })
 
 describe('SECURITY DEFINER lookups', () => {
