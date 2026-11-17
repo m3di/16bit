@@ -70,6 +70,8 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 
 A relation attribute can point outside its hub only when that attribute allows it (D11). Even then, a principal sees a linked item only if they could read it directly: otherwise the link shows as "no access", never its values.
 
+Backlinks list only items you can read; others are counted, never named.
+
 ## Passwords
 
 There is no password reset in the API. The installation operator resets a password with a CLI command (D42).

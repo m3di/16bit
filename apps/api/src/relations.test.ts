@@ -411,6 +411,36 @@ describe('link maintenance', () => {
     ])
   })
 
+  it('refuses a required relation left empty once stale IDs are dropped', async () => {
+    const c = await create(owner, 'c', 'h1', { rel: ['b'] })
+    await db
+      .updateTable('folder_attribute')
+      .set({ required: true })
+      .where('workspace_id', '=', WS)
+      .where('folder_id', '=', 'h1')
+      .where('attribute_id', '=', 'rel')
+      .execute()
+    expect((await remove(owner, 'b', await versionOf('b'))).statusCode).toBe(204)
+
+    const errors = valueErrors(await patch(owner, 'c', c.version, { rel: ['b'] }))
+    expect(errors).toEqual([
+      { attributeId: 'rel', code: 'required', message: 'A value is required' },
+    ])
+    expect(await versionOf('c')).toBe(c.version)
+    const stored = await db
+      .selectFrom('item')
+      .select('values')
+      .where('id', '=', 'c')
+      .executeTakeFirstOrThrow()
+    expect(stored.values).toMatchObject({ rel: ['b'] })
+
+    // A live target left alongside the stale one is enough.
+    const res = await patch(owner, 'c', c.version, { rel: ['b', 'a'] })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(itemSchema.parse(res.json()).values['rel']).toEqual(['a'])
+    expect(await linksFrom('c')).toEqual(['rel:a'])
+  })
+
   it('answers 404 for a patch of a missing item', async () => {
     const res = await patch(owner, 'nope', 1, { rel: ['a'] })
     expect(res.statusCode, res.body).toBe(404)

@@ -409,6 +409,11 @@ export async function patchItem(
 
     // The item cannot change folder, so the definitions read before the transaction still apply.
     const patch = await checkTargets(trx, workspaceId, actor, relations, validated, current.values)
+    // Dropping stale IDs can empty a relation: check it again, so a required one is refused.
+    const emptied = Object.keys(patch).filter((k) => patch[k] === null && validated[k] !== null)
+    if (emptied.length > 0) {
+      validate(definitions, Object.fromEntries(emptied.map((k) => [k, null])), true)
+    }
     const cleared = Object.keys(patch).filter((key) => patch[key] === null)
     const row = await trx
       .updateTable('item')
