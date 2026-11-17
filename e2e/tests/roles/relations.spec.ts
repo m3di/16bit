@@ -103,4 +103,64 @@ test.describe('links into a hub the reader has no grant on', () => {
         .getByRole('link', { name: secret }),
     ).toBeVisible()
   })
+
+  test('Mina opening a picker into Design sees she cannot see its items (#99)', async ({
+    as,
+    pageAs,
+  }) => {
+    const secret = uniqueTitle('secret design')
+    // A year no seeded or e2e item uses, so its absence from Mina's page means something.
+    const due = '2041-09-17'
+    const design = await as('owner').createItem('design', {
+      'design-title': secret,
+      'design-due': due,
+      'design-blocked': true,
+    })
+    const designId = new RegExp(`\\bDSN-${String(design.seqId)}\\b`)
+    const from = await as('owner').createItem('launch', { [TITLE]: uniqueTitle('links design') })
+
+    // The owner links it through Launch's "Design refs" picker, which searches Design.
+    const owner = await pageAs('owner')
+    await owner.goto(`${hubPath('launch')}?item=${from.id}`)
+    const ownerField = itemPanel(owner).getByRole('group', { name: 'Design refs' })
+    await ownerField.getByRole('button', { name: 'Link an item' }).click()
+    const search = ownerField.getByRole('searchbox', { name: 'Search Design' })
+    await expect(search).toBeFocused()
+    await search.fill(secret)
+    await search.press('Enter')
+    await ownerField
+      .getByRole('list', { name: 'Items to link to Design refs' })
+      .getByRole('button', { name: new RegExp(secret) })
+      .click()
+    await expect(
+      ownerField.getByRole('list', { name: 'Design refs' }).getByRole('link', { name: secret }),
+    ).toBeVisible()
+    await expect
+      .poll(async () => {
+        const res = await as('owner').get(`/items/${from.id}`)
+        await expectStatus(res, 200)
+        return itemReadSchema.parse(await res.json()).values[DESIGN_REFS]
+      })
+      .toEqual([design.id])
+
+    // Mina (editor of Launch, no grant on Design) sees the link as "No access", and the picker
+    // tells her she cannot see what it links to instead of offering a search.
+    const page = await pageAs('mina')
+    await page.goto(`${hubPath('launch')}?item=${from.id}`)
+    const field = itemPanel(page).getByRole('group', { name: 'Design refs' })
+    await expect(field.getByText('No access')).toBeVisible()
+    await field.getByRole('button', { name: 'Link an item' }).click()
+    await expect(field.getByText('You cannot see the items this field links to')).toBeVisible()
+    await expect(field.getByRole('searchbox')).toHaveCount(0)
+    await expect(field.getByRole('list', { name: 'Items to link to Design refs' })).toHaveCount(0)
+
+    // Nothing of the Design item reaches her page: not its title, display ID or values.
+    await expect(page.getByText(secret)).toHaveCount(0)
+    await expect(page.getByText(designId)).toHaveCount(0)
+    const html = await page.content()
+    expect(html).not.toContain(secret)
+    expect(html).not.toMatch(designId)
+    expect(html).not.toContain(due)
+    await expect(page.locator('body')).not.toContainText('2041')
+  })
 })
