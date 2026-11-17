@@ -14,7 +14,7 @@ import { Placeholder, UndoRedo } from '@tiptap/extensions'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { computed, nextTick, onBeforeUnmount, ref, useId, useTemplateRef, watch } from 'vue'
 import { HEADING_LEVELS, normalizeRichText, safeHref, type RichDoc } from './rich-text.ts'
-import { RICH_CLASSES as C } from './rich-text-classes.ts'
+import { editorLinkAttributes, RICH_CLASSES as C } from './rich-text-classes.ts'
 import RichTextView from './RichTextView.vue'
 import { rovingIndex } from './roving.ts'
 import ValueState from './ValueState.vue'
@@ -48,6 +48,9 @@ const id = useId()
 const labelId = `${id}-label`
 const hintId = `${id}-hint`
 const errorId = `${id}-error`
+// Links inside the editable document cannot hold extra text, so each one points here for the
+// "opens in a new tab" note that RichTextView and UrlLink put inside the link.
+const newTabId = `${id}-new-tab`
 const noInput = computed(() => state === 'loading' || state === 'error')
 const shownHint = computed(() =>
   state === 'no-permission' ? hint || 'You can view this but not change it.' : hint,
@@ -96,7 +99,7 @@ const editor = useEditor({
       autolink: true,
       protocols: ['http', 'https', 'mailto'],
       isAllowedUri: (url) => safeHref(url) !== null,
-      HTMLAttributes: { class: C.link, rel: 'noopener noreferrer', target: '_blank' },
+      HTMLAttributes: editorLinkAttributes(newTabId),
     }),
     UndoRedo,
     Placeholder.configure({ placeholder: () => placeholder }),
@@ -194,6 +197,7 @@ function onToolbarKey(event: KeyboardEvent) {
 <template>
   <div class="flex flex-col gap-1">
     <span :id="labelId" class="text-secondary text-ink3">{{ label }}</span>
+    <span :id="newTabId" hidden>(opens in a new tab)</span>
     <template v-if="state === 'loading'">
       <ValueState state="loading" :label="`Loading ${label}`" />
     </template>

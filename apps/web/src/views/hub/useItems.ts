@@ -1,15 +1,20 @@
 import {
   conflictErrorSchema,
   DEFAULT_PAGE_LIMIT,
-  itemPageSchema,
+  itemQueryResultSchema,
   itemSchema,
   type Item,
+  type ItemQueryResult,
   type ItemValues,
   type ValueError,
 } from '@16bit/core'
 import { computed, ref } from 'vue'
 import { ApiRequestError, asRequestError, getJson, sendJson, type Fetch } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
+import { listValue, type LinkedState } from './relations.ts'
+
+/** Direct reads of linked items running at once, until #73 lets one request cover them. */
+export const LINKED_READ_LIMIT = 6
 
 export interface ItemList {
   ids: string[]
@@ -70,6 +75,16 @@ export function useItems(
   const folderId = ref<string | null>(null)
   /** The last write that failed, shown until dismissed or replaced. */
   const notice = ref<string | null>(null)
+  /**
+   * Linked items by ID, from `expand` on the folder query and from direct reads. Kept for the
+   * life of the hub page on purpose: it is not cleared when another folder opens, so a chip
+   * does not flicker back to loading. A reload of the page reads everything again.
+   */
+  const linked = ref<Record<string, LinkedState>>({})
+  /** The server refused an edit with 403: the reader can see this hub's items but not change them. */
+  const readOnly = ref(false)
+  /** Relation attributes the open folder's query expands. */
+  let expand: string[] = []
 
   let generation = 0
   let editKey = 0
@@ -100,22 +115,102 @@ export function useItems(
   const isCreating = (id: string) => Boolean(creating.value[id])
   const isSaving = (id: string) => Boolean(pending.value[id]?.length || creating.value[id])
 
+  /**
+   * Keeps what an expanded page says about its linked items. An ID in an expanded value with
+   * no entry was deleted, unless the server cut `linked` short.
+   */
+  function absorbLinked(page: ItemQueryResult, attributes: readonly string[]) {
+    for (const [id, entry] of Object.entries(page.linked ?? {})) linked.value[id] = entry
+    if (page.linkedTruncated || attributes.length === 0) return
+    for (const item of page.items) {
+      for (const attributeId of attributes) {
+        for (const id of listValue(item.values[attributeId])) {
+          if (!page.linked?.[id]) linked.value[id] = { access: 'gone' }
+        }
+      }
+    }
+  }
+
   async function fetchPage(folder: string, cursor: string | null) {
+    const attributes = expand
     const page = await sendJson(
       'POST',
       `${base}/query`,
-      { from: folder, limit: DEFAULT_PAGE_LIMIT, cursor },
-      itemPageSchema,
+      { from: folder, limit: DEFAULT_PAGE_LIMIT, cursor, expand: attributes },
+      itemQueryResultSchema,
       fetchFn,
     )
     for (const item of page.items) server.value[item.id] = item
+    absorbLinked(page, attributes)
     return page
   }
 
-  /** Shows a folder's first page, newest update first. */
-  async function openFolder(id: string) {
+  /** What is known about a linked item. */
+  const linkState = (id: string): LinkedState => linked.value[id] ?? { access: 'unknown' }
+
+  /** Records an item the reader just picked to link to: they can read it. */
+  function rememberLinked(item: Item) {
+    linked.value[item.id] = { access: 'read', item }
+  }
+
+  /** Linked IDs waiting for a direct read, and how many reads are running. */
+  const linkWaiting: string[] = []
+  let linkReads = 0
+
+  /** Starts waiting direct reads, at most `LINKED_READ_LIMIT` at a time. */
+  function pumpLinked() {
+    while (linkReads < LINKED_READ_LIMIT && linkWaiting.length > 0) {
+      const id = linkWaiting.shift() as string
+      if (linkState(id).access !== 'unknown') continue
+      // What the expanded folder query says wins over a direct read: only it can tell "no
+      // access" from "deleted". So a read that ends after the list answered is dropped.
+      const settle = (state: LinkedState) => {
+        if (linkState(id).access === 'unknown') linked.value[id] = state
+      }
+      linkReads++
+      const run = getJson(itemPath(id), itemSchema, fetchFn)
+        .then((item): Load<Item> => {
+          settle({ access: 'read', item })
+          return { state: 'ready', data: item }
+        })
+        .catch((thrown: unknown): Load<Item> => {
+          const error = asRequestError(thrown)
+          settle(error.isNotFound ? { access: 'none' } : { access: 'error' })
+          return { state: 'error', error }
+        })
+        .finally(() => {
+          opening.delete(`link:${id}`)
+          linkReads--
+          pumpLinked()
+        })
+      opening.set(`link:${id}`, run)
+    }
+  }
+
+  /**
+   * Reads linked items the folder query did not cover, one by one, a few at a time. A 404 is
+   * shown as "no access": the server answers the same for hidden and deleted items, and "no
+   * access" never shows anything of the item (#73 asks for a read with `expand` instead).
+   */
+  function resolveLinked(ids: Iterable<string>) {
+    // Nothing is read while the list is loading: its answer may cover these IDs.
+    if (list.value.state === 'loading') return
+    for (const id of ids) {
+      if (linkState(id).access !== 'unknown' || opening.has(`link:${id}`)) continue
+      if (linkWaiting.includes(id)) continue
+      linkWaiting.push(id)
+    }
+    pumpLinked()
+  }
+
+  /**
+   * Shows a folder's first page, newest update first. `expandIds` are relation attributes whose
+   * linked items come back with each page.
+   */
+  async function openFolder(id: string, expandIds: readonly string[] = []) {
     const gen = ++generation
     folderId.value = id
+    expand = [...expandIds]
     list.value = { state: 'loading' }
     try {
       const page = await fetchPage(id, null)
@@ -223,7 +318,11 @@ export function useItems(
       } catch (thrown) {
         const error = asRequestError(thrown)
         const conflict = conflictErrorSchema.safeParse(error.body)
-        if (error.code === 'conflict' && conflict.success) {
+        if (error.status === 403) {
+          drop()
+          readOnly.value = true
+          notice.value = `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`
+        } else if (error.code === 'conflict' && conflict.success) {
           server.value[id] = conflict.data.current
           pending.value[id] = []
           notice.value = `${label(before)} was changed by someone else before your edit was saved. Your edit was not applied; the latest values are shown.`
@@ -278,7 +377,13 @@ export function useItems(
       if (gen === generation && list.value.state === 'ready') {
         list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
       }
-      notice.value = `The item was not created. ${error.message}`
+      if (error.status === 403) {
+        readOnly.value = true
+        notice.value =
+          'The item was not created. You can view the items in this hub but not add them.'
+      } else {
+        notice.value = `The item was not created. ${error.message}`
+      }
       return { ok: false, error }
     } finally {
       Reflect.deleteProperty(creating.value, id)
@@ -304,5 +409,10 @@ export function useItems(
     save,
     create,
     dismissNotice,
+    linked,
+    linkState,
+    rememberLinked,
+    resolveLinked,
+    readOnly,
   }
 }
