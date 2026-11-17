@@ -127,6 +127,12 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
       <span v-if="list.data.sorting" role="status" class="text-secondary text-ink3" data-sorting
         >Sorting…</span
       >
+      <template v-else-if="list.data.moreRefused">
+        <span class="text-secondary text-ink3" data-more-refused
+          >More items cannot be loaded in this order.</span
+        >
+        <BaseButton size="sm" @click="emit('sort', null)">Show newest update first</BaseButton>
+      </template>
       <BaseButton
         v-else-if="list.data.nextCursor"
         size="sm"

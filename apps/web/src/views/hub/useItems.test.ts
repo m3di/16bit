@@ -288,7 +288,7 @@ describe('useItems: a sort that went stale (#81)', () => {
     'The table can no longer be sorted by that column, so the items are shown newest update first.'
 
   /** A folder sorted by stage, whose next query is answered by `next`. */
-  async function sortedThen(next: (body: QueryBody) => Response) {
+  async function sortedThen(next: (body: QueryBody) => Response | Promise<Response>) {
     let sorted = false
     const api = fakeApi((call) => {
       if (!sorted) return page([item('i1', 1)])
@@ -352,6 +352,27 @@ describe('useItems: a sort that went stale (#81)', () => {
     await s.openFolder('bld')
     expect(s.sort.value).toBeNull()
     expect(s.list.value).toMatchObject({ state: 'error', error: { status: 500 } })
+    // Nothing is shown newest update first, so the notice does not say so (#85).
+    expect(s.notice.value).toBeNull()
+  })
+
+  it('sets the notice only once the default order is shown (#85)', async () => {
+    const defaultRead = gate<Response>()
+    const { s } = await sortedThen((body) => (body.sort.length ? refused() : defaultRead.promise))
+    const done = s.openFolder('bld')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(s.list.value.state).toBe('loading')
+    expect(s.notice.value).toBeNull()
+    defaultRead.release(page([item('i2', 2)]))
+    await done
+    expect(s.notice.value).toBe(notice)
+  })
+
+  it('does not claim the default order when a dropped sort is followed by a failed read', async () => {
+    const { s } = await sortedThen(() => json({ error: 'internal', message: 'Down' }, 500))
+    await s.openFolder('bld', [], ['points'])
+    expect(s.list.value).toMatchObject({ state: 'error', error: { status: 500 } })
+    expect(s.notice.value).toBeNull()
   })
 
   it('does not send a kept sort the folder columns no longer allow', async () => {
@@ -367,6 +388,79 @@ describe('useItems: a sort that went stale (#81)', () => {
     await s.openFolder('bld', [], ['stage'])
     expect(sorts(calls).at(-1)).toEqual([stage])
     expect(s.notice.value).toBeNull()
+  })
+
+  describe('"Load more" in a refused sort (#85)', () => {
+    const moreNotice =
+      'The table can no longer be sorted by that column, so no more items can be loaded in this order. Show them newest update first to see the rest.'
+
+    /** A folder sorted by stage with a next page, whose later queries are answered by `next`. */
+    async function sortedWithMore(next: (body: QueryBody & { cursor: string | null }) => Response) {
+      let sorted = false
+      const api = fakeApi((call) => {
+        if (!sorted) return page([item('i1', 1)], 's1')
+        return next(call.body as QueryBody & { cursor: string | null })
+      })
+      const s = useItems('w', () => 'BLD', api.fetchFn)
+      await s.openFolder('bld')
+      await s.setSort(stage)
+      sorted = true
+      return { s, calls: api.calls }
+    }
+
+    it('keeps the rows, stops retrying, and says why', async () => {
+      const { s, calls } = await sortedWithMore(() => refused())
+      await s.loadMore()
+      expect(sorts(calls)).toEqual([[], [stage], [stage]])
+      expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+      expect(s.sort.value).toEqual(stage)
+      expect(s.list.value).toMatchObject({
+        state: 'ready',
+        data: { sort: stage, moreRefused: true, moreError: null, more: false, nextCursor: 's1' },
+      })
+      expect(s.notice.value).toBe(moreNotice)
+      // A second "Load more" sends nothing.
+      await s.loadMore()
+      expect(calls).toHaveLength(3)
+    })
+
+    it('reloads in the default order when asked, and clears the notice', async () => {
+      const { s, calls } = await sortedWithMore((body) =>
+        body.sort.length ? refused() : page([item('i2', 2)], 'd1'),
+      )
+      await s.loadMore()
+      await s.setSort(null)
+      expect(sorts(calls).at(-1)).toEqual([])
+      expect(s.rows.value.map((r) => r.id)).toEqual(['i2'])
+      expect(s.list.value).toMatchObject({
+        state: 'ready',
+        data: { sort: null, moreRefused: false, nextCursor: 'd1' },
+      })
+      expect(s.notice.value).toBeNull()
+    })
+
+    it('keeps the offer if the default order cannot be read', async () => {
+      const { s } = await sortedWithMore((body) =>
+        body.sort.length ? refused() : json({ error: 'internal', message: 'Down' }, 500),
+      )
+      await s.loadMore()
+      await s.setSort(null)
+      expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+      expect(s.list.value).toMatchObject({ state: 'ready', data: { moreRefused: true } })
+      expect(s.notice.value).toMatch(/could not be shown in that order\. Down\./)
+    })
+
+    it('treats a 400 that does not name the sort as a failed page, which can be retried', async () => {
+      const { s } = await sortedWithMore(() =>
+        json({ error: 'invalid_request', message: 'Invalid cursor' }, 400),
+      )
+      await s.loadMore()
+      expect(s.list.value).toMatchObject({
+        state: 'ready',
+        data: { moreRefused: false, moreError: { status: 400 } },
+      })
+      expect(s.notice.value).toBeNull()
+    })
   })
 
   it('keeps reload internal', () => {

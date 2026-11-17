@@ -30,6 +30,11 @@ export interface ItemList {
   /** A "load more" request is running. */
   more: boolean
   moreError: ApiRequestError | null
+  /**
+   * "Load more" was refused because the server no longer sorts by `sort`. The cursor is not
+   * retried; the rest can only be read after reloading in the default order.
+   */
+  moreRefused: boolean
   /** The order `ids` are in, which `nextCursor` belongs to. `null` is newest update first. */
   sort: SortKey | null
   /** A request for another order is running; the rows shown are still in `sort` order. */
@@ -261,6 +266,7 @@ export function useItems(
       nextCursor: page.nextCursor,
       more: false,
       moreError: null,
+      moreRefused: false,
       sort: order,
       sorting: false,
     },
@@ -268,13 +274,16 @@ export function useItems(
 
   const staleSortNotice =
     'The table can no longer be sorted by that column, so the items are shown newest update first.'
+  const moreRefusedNotice =
+    'The table can no longer be sorted by that column, so no more items can be loaded in this order. Show them newest update first to see the rest.'
 
   /**
    * Reads the open folder's first page in the order asked for, from the loading state. If the
    * server refuses the sort, the sort is dropped and the default order is read instead, so a
-   * retry never sends the refused sort again.
+   * retry never sends the refused sort again. `dropped` says a refused sort was just dropped:
+   * the notice says so once the default order is shown, and not before.
    */
-  async function reload() {
+  async function reload(dropped = false) {
     const gen = ++generation
     const folder = folderId.value
     if (!folder) return
@@ -282,14 +291,15 @@ export function useItems(
     list.value = { state: 'loading' }
     try {
       const page = await fetchPage(folder, null, order)
-      if (gen === generation) list.value = firstPage(page, order)
+      if (gen !== generation) return
+      list.value = firstPage(page, order)
+      if (dropped) notice.value = staleSortNotice
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
       if (order && refusedSort(error)) {
         sort.value = null
-        notice.value = staleSortNotice
-        await reload()
+        await reload(true)
         return
       }
       list.value = { state: 'error', error }
@@ -307,14 +317,15 @@ export function useItems(
     expandIds: readonly string[] = [],
     sortableIds?: readonly string[],
   ) {
+    let dropped = false
     if (id !== folderId.value) sort.value = null
     else if (sort.value && sortableIds && !sortableIds.includes(sort.value.attribute)) {
       sort.value = null
-      notice.value = staleSortNotice
+      dropped = true
     }
     folderId.value = id
     expand = [...expandIds]
-    await reload()
+    await reload(dropped)
   }
 
   /**
@@ -338,7 +349,10 @@ export function useItems(
     data.sorting = true
     try {
       const page = await fetchPage(folder, null, next)
-      if (gen === generation) list.value = firstPage(page, next)
+      if (gen !== generation) return
+      list.value = firstPage(page, next)
+      // The rows are no longer in the refused order, so "no more items" no longer applies.
+      if (notice.value === moreRefusedNotice) notice.value = null
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
@@ -351,6 +365,11 @@ export function useItems(
     }
   }
 
+  /**
+   * Reads the next page in the order the rows are in. If the server no longer sorts by it,
+   * the rows stay as they are and the cursor is not retried; the notice offers the default
+   * order instead of replacing the rows unasked.
+   */
   async function loadMore() {
     const gen = generation
     const current = list.value
@@ -359,6 +378,7 @@ export function useItems(
       current.state !== 'ready' ||
       !current.data.nextCursor ||
       current.data.more ||
+      current.data.moreRefused ||
       current.data.sorting ||
       !folder
     )
@@ -373,8 +393,13 @@ export function useItems(
       const known = new Set(data.ids)
       data.ids.push(...page.items.map((i) => i.id).filter((id) => !known.has(id)))
       data.nextCursor = page.nextCursor
-    } catch (error) {
-      if (gen === generation) data.moreError = asRequestError(error)
+    } catch (thrown) {
+      if (gen !== generation) return
+      const error = asRequestError(thrown)
+      if (data.sort && refusedSort(error)) {
+        data.moreRefused = true
+        notice.value = moreRefusedNotice
+      } else data.moreError = error
     } finally {
       if (gen === generation) data.more = false
     }
