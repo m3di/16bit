@@ -1,7 +1,7 @@
-import type { Item } from '@16bit/core'
+import type { Attribute, Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
-import { fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
-import { inHub, LINKED_READ_LIMIT, useItems, valueErrors } from './useItems.ts'
+import { attributes, fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
+import { canSort, inHub, LINKED_READ_LIMIT, nextSort, useItems, valueErrors } from './useItems.ts'
 
 const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
 
@@ -27,7 +27,7 @@ describe('useItems: reading', () => {
     expect(calls[0]).toEqual({
       method: 'POST',
       path: '/v1/workspaces/w/query',
-      body: { from: 'bld', limit: 50, cursor: null, expand: [] },
+      body: { from: 'bld', limit: 50, cursor: null, expand: [], sort: [] },
     })
     expect(s.rows.value.map((r) => r.id)).toEqual(['i2', 'i1'])
   })
@@ -71,6 +71,162 @@ describe('useItems: reading', () => {
     expect(await s.openItem('far')).toMatchObject({ state: 'ready', data: { seqId: 99 } })
     expect(calls.at(-1)?.path).toBe('/v1/workspaces/w/items/far')
     expect(s.view('far')?.seqId).toBe(99)
+  })
+})
+
+describe('useItems: sorting', () => {
+  type QueryBody = { from: string; cursor: string | null; sort: unknown[] }
+  const queries = (calls: Call[]) =>
+    calls.filter((c) => c.path.endsWith('/query')).map((c) => c.body as QueryBody)
+
+  it('offers sorting only on indexed attributes of a sortable type', () => {
+    const [title, stage, points] = attributes as [Attribute, Attribute, Attribute]
+    expect(canSort(stage)).toBe(true)
+    expect(canSort(title)).toBe(false)
+    expect(canSort({ ...title, indexed: true })).toBe(true)
+    expect(canSort({ ...points, indexed: true })).toBe(true)
+    const relation: Attribute = {
+      ...title,
+      indexed: true,
+      type: 'relation',
+      config: { targetHubId: 'bld', crossHub: false, multiple: true },
+    }
+    expect(canSort(relation)).toBe(false)
+  })
+
+  it('cycles a column through ascending, descending and the default order', () => {
+    const asc = nextSort(null, 'stage')
+    expect(asc).toEqual({ attribute: 'stage', direction: 'asc' })
+    const desc = nextSort(asc, 'stage')
+    expect(desc).toEqual({ attribute: 'stage', direction: 'desc' })
+    expect(nextSort(desc, 'stage')).toBeNull()
+    expect(nextSort(desc, 'points')).toEqual({ attribute: 'points', direction: 'asc' })
+  })
+
+  it('queries the new order, keeping the rows until it arrives', async () => {
+    const sorted = gate<Response>()
+    const api = fakeApi((call) =>
+      (call.body as QueryBody).sort.length ? sorted.promise : page([item('i2', 2), item('i1', 1)]),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    const done = s.setSort({ attribute: 'stage', direction: 'desc' })
+    expect(s.sort.value).toEqual({ attribute: 'stage', direction: 'desc' })
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { sorting: true, sort: null } })
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i2', 'i1'])
+    sorted.release(page([item('i1', 1), item('i2', 2)]))
+    await done
+    expect(queries(api.calls).at(-1)).toMatchObject({
+      cursor: null,
+      sort: [{ attribute: 'stage', direction: 'desc' }],
+    })
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i1', 'i2'])
+    expect(s.list.value).toMatchObject({
+      state: 'ready',
+      data: { sorting: false, sort: { attribute: 'stage', direction: 'desc' } },
+    })
+  })
+
+  it('pages a sorted list with the same sort and its cursor', async () => {
+    const api = fakeApi((call) => {
+      const body = call.body as QueryBody
+      return body.cursor === 's1' ? page([item('i3', 3)]) : page([item('i1', 1)], 's1')
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    await s.setSort({ attribute: 'stage', direction: 'asc' })
+    await s.loadMore()
+    expect(queries(api.calls).at(-1)).toMatchObject({
+      cursor: 's1',
+      sort: [{ attribute: 'stage', direction: 'asc' }],
+    })
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i1', 'i3'])
+  })
+
+  it('does not load more while a new order is loading', async () => {
+    const sorted = gate<Response>()
+    const api = fakeApi((call) =>
+      (call.body as QueryBody).sort.length ? sorted.promise : page([item('i1', 1)], 'c1'),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    const done = s.setSort({ attribute: 'stage', direction: 'asc' })
+    await s.loadMore()
+    expect(queries(api.calls).filter((b) => b.cursor === 'c1')).toHaveLength(0)
+    sorted.release(page([item('i1', 1)]))
+    await done
+  })
+
+  it('drops a page loaded for the old order', async () => {
+    const more = gate<Response>()
+    const api = fakeApi((call) => {
+      const body = call.body as QueryBody
+      if (body.cursor === 'c1') return more.promise
+      return body.sort.length ? page([item('s1', 1)]) : page([item('i1', 1)], 'c1')
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    const loading = s.loadMore()
+    await s.setSort({ attribute: 'stage', direction: 'asc' })
+    more.release(page([item('old', 2)]))
+    await loading
+    expect(s.rows.value.map((r) => r.id)).toEqual(['s1'])
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { more: false } })
+  })
+
+  it('keeps the latest of two quick sorts', async () => {
+    const first = gate<Response>()
+    const api = fakeApi((call) => {
+      const sort = (call.body as QueryBody).sort as { direction: string }[]
+      if (sort[0]?.direction === 'asc') return first.promise
+      return sort.length ? page([item('desc', 1)]) : page([item('i1', 1)])
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    const a = s.setSort({ attribute: 'stage', direction: 'asc' })
+    await s.setSort({ attribute: 'stage', direction: 'desc' })
+    first.release(page([item('asc', 1)]))
+    await a
+    expect(s.rows.value.map((r) => r.id)).toEqual(['desc'])
+    expect(s.sort.value).toEqual({ attribute: 'stage', direction: 'desc' })
+  })
+
+  it('rolls back to the previous order with a message when the API refuses', async () => {
+    const api = fakeApi((call) =>
+      (call.body as QueryBody).sort.length
+        ? json(
+            {
+              error: 'invalid_request',
+              message: 'sort.0: Attribute "stage" is not indexed',
+              errors: [],
+            },
+            400,
+          )
+        : page([item('i1', 1)], 'c1'),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    await s.setSort({ attribute: 'stage', direction: 'asc' })
+    expect(s.sort.value).toBeNull()
+    expect(s.list.value).toMatchObject({
+      state: 'ready',
+      data: { sorting: false, sort: null, nextCursor: 'c1' },
+    })
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(s.notice.value).toContain('could not be shown in that order')
+    expect(s.notice.value).toContain('is not indexed')
+  })
+
+  it('keeps the order on retry, and starts another folder in the default order', async () => {
+    const api = fakeApi(() => page([item('i1', 1)]))
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    await s.setSort({ attribute: 'stage', direction: 'asc' })
+    await s.openFolder('bld')
+    expect(queries(api.calls).at(-1)?.sort).toEqual([{ attribute: 'stage', direction: 'asc' }])
+    await s.openFolder('b')
+    expect(s.sort.value).toBeNull()
+    expect(queries(api.calls).at(-1)).toMatchObject({ from: 'b', sort: [] })
   })
 })
 

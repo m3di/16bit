@@ -261,10 +261,12 @@ async function submitCreate(values: ItemValues) {
               :item-link="itemLink"
               :is-creating="items.isCreating"
               :read-only="items.readOnly.value"
+              :sort="items.sort.value"
               @open="openItem"
               @retry="openFolder(openFolderId)"
               @more="items.loadMore()"
               @create="startCreate"
+              @sort="items.setSort($event)"
             />
           </template>
         </HubState>
