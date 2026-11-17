@@ -59,6 +59,10 @@ interface PendingEdit {
 
 export type CreateResult = { ok: true; item: Item } | { ok: false; error: ApiRequestError }
 
+/** Ends a server message with a full stop, so another sentence can follow it. */
+const sentence = (message: string) =>
+  /[.!?]$/.test(message.trim()) ? message.trim() : `${message.trim()}.`
+
 /** The `errors` of an `invalid_values` response, keyed by attribute ID. */
 export function valueErrors(error: ApiRequestError): Record<string, string> {
   const raw = error.body?.['errors']
@@ -303,7 +307,12 @@ export function useItems(
       const error = asRequestError(thrown)
       data.sorting = false
       sort.value = data.sort
-      notice.value = `The items could not be shown in that order. ${error.message} They are shown in the previous order.`
+      // A 400 means the column is not sortable any more, for example no longer indexed.
+      const reason =
+        error.status === 400
+          ? 'This column can no longer be sorted; reload the page to see the current columns.'
+          : `The items could not be shown in that order. ${sentence(error.message)}`
+      notice.value = `${reason} The items are shown in the previous order.`
     }
   }
 

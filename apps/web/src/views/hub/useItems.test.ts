@@ -213,8 +213,24 @@ describe('useItems: sorting', () => {
       data: { sorting: false, sort: null, nextCursor: 'c1' },
     })
     expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
-    expect(s.notice.value).toContain('could not be shown in that order')
-    expect(s.notice.value).toContain('is not indexed')
+    expect(s.notice.value).toBe(
+      'This column can no longer be sorted; reload the page to see the current columns. The items are shown in the previous order.',
+    )
+  })
+
+  it('names any other failure and keeps the rows', async () => {
+    const api = fakeApi((call) =>
+      (call.body as QueryBody).sort.length
+        ? json({ error: 'internal', message: 'Database unavailable' }, 500)
+        : page([item('i1', 1)]),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    await s.setSort({ attribute: 'stage', direction: 'desc' })
+    expect(s.notice.value).toBe(
+      'The items could not be shown in that order. Database unavailable. The items are shown in the previous order.',
+    )
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
   })
 
   it('keeps the order on retry, and starts another folder in the default order', async () => {
