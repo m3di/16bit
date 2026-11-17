@@ -226,6 +226,9 @@ export async function revokeAgentKey(
   actor: Subject,
   keyId: string,
 ): Promise<AgentKey> {
+  // Agents never revoke (D28): refused before any key is read, as they can't see other
+  // principals (row-level security, #44). Anyone who could revoke with a hub admin grant goes on.
+  enforce(can(actor, 'key.revoke', { hubGrant: 'hub_admin' }), 'Agent key')
   return inTransaction(db, async (trx) => {
     const key = await selectKeys(trx, workspaceId)
       .where('k.principal_id', '=', keyId)

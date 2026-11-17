@@ -23,7 +23,6 @@ if ('error' in devAnonymous) {
 if ('warning' in devAnonymous) console.warn(devAnonymous.warning)
 const anonymousAsDevPrincipal = devAnonymous.enabled
 
-// The pool connects lazily, so the server starts even while Postgres is still coming up.
 // DATABASE_URL is the API's role, under row-level security (#44).
 const db = createDb(databaseUrl)
 // M0 dev key only (#51 removes both): listing the dev principal's workspaces reads across
@@ -61,7 +60,8 @@ process.once('SIGTERM', (signal) => void shutdown(signal))
 
 /**
  * Exits if DATABASE_URL connects as a role row-level security does not apply to (the owner, a
- * superuser, BYPASSRLS). Runs once Postgres answers, retrying meanwhile, so startup never waits.
+ * superuser, BYPASSRLS). Waits for Postgres, retrying, and runs before the server binds, so
+ * not even one request is served with the wrong role.
  */
 async function guardRole(): Promise<void> {
   for (;;) {
@@ -77,7 +77,7 @@ async function guardRole(): Promise<void> {
         console.error(`api: refusing to serve: ${(error as Error).message}`)
         process.exit(1)
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000).unref())
+      await new Promise((resolve) => setTimeout(resolve, 2000))
       continue
     }
     if (reason === null) return
@@ -90,9 +90,9 @@ async function guardRole(): Promise<void> {
 }
 
 try {
+  await guardRole()
   const address = await app.listen({ port, host })
   console.log(`api listening on ${address}`)
-  void guardRole()
 } catch (error) {
   console.error(error)
   process.exit(1)

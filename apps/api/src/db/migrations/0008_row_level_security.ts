@@ -12,9 +12,12 @@ import { sql, type Kysely } from 'kysely'
 // owner of the tables, which RLS does not apply to (no FORCE). `account` and `session` stay
 // outside RLS (D46).
 //
-// Policies mirror `can()` in packages/core coarsely: workspace isolation, then hub grants with
-// the same effective role (viewer and finance act as viewer at most). The API still decides
-// every action with `can()`; this is the floor underneath it.
+// Policies follow `can()` in packages/core and docs/ROLES.md: workspace isolation, hub grants
+// with the same effective role (viewer and finance act as viewer at most, agents as editor at
+// most), and the matrix's rules for members, grants (footnotes 1 and 3), keys and the access
+// log. The API still decides every action with `can()`; this is the floor underneath it. Rules
+// that compare a row before and after an update (owner changes, `account_id`, the sequence
+// counters) are BEFORE UPDATE triggers, which skip roles RLS does not apply to.
 //
 // Helpers that read `principal` and `hub_grant` for a policy are SECURITY DEFINER, so a policy
 // on hub_grant can ask about hub_grant without recursing. They answer only about the caller in
@@ -95,8 +98,25 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     LANGUAGE sql STABLE SET search_path = public, pg_temp
     AS $$ SELECT coalesce(rls_workspace_role() IN ('owner', 'admin'), false) $$;
 
-    -- Hubs where the caller's effective hub role ranks at least p_min:
-    -- 1 viewer (read), 2 commenter, 3 editor (write items), 4 hub admin.
+    -- True if the caller is an active agent principal. Agents never see the member list.
+    CREATE FUNCTION rls_agent() RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$
+      SELECT EXISTS (
+        SELECT 1 FROM principal p
+        WHERE p.workspace_id = rls_workspace() AND p.id = rls_principal()
+          AND p.removed_at IS NULL AND p.kind = 'agent')
+    $$;
+
+    -- A hub role's rank: 1 viewer (read), 2 commenter, 3 editor (write items), 4 hub admin.
+    CREATE FUNCTION rls_rank(p_role text) RETURNS int
+    LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+    AS $$
+      SELECT CASE p_role WHEN 'hub_admin' THEN 4 WHEN 'editor' THEN 3
+                         WHEN 'commenter' THEN 2 WHEN 'viewer' THEN 1 END
+    $$;
+
+    -- Hubs where the caller's effective hub role ranks at least p_min (see rls_rank).
     -- Effective as in effectiveHubRole() in packages/core.
     CREATE FUNCTION rls_hubs(p_min int) RETURNS text[]
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -109,25 +129,95 @@ export async function up(db: Kysely<unknown>): Promise<void> {
         AND CASE
               WHEN p.workspace_role IN ('viewer', 'finance') THEN 1
               WHEN p.kind = 'agent' AND g.hub_role = 'hub_admin' THEN 3
-              ELSE CASE g.hub_role
-                     WHEN 'hub_admin' THEN 4 WHEN 'editor' THEN 3
-                     WHEN 'commenter' THEN 2 ELSE 1
-                   END
+              ELSE rls_rank(g.hub_role)
             END >= p_min
     $$;
 
-    -- Relation targets for an item write (#47): their hubs, locked FOR KEY SHARE so they can't
-    -- be deleted before the links commit. A writer may keep a stored link to an item it cannot
-    -- read, so this sees every item of the caller's workspace, but only the ID and hub.
+    -- May the caller set, change or revoke p_target's grant on p_hub? changeGrant() in
+    -- packages/core: owners on anyone; admins on anyone but an owner (footnote 1); a hub admin
+    -- of p_hub on anyone but themselves, an owner or an admin (footnote 3). The target is an
+    -- active person: agent grants come and go with their keys (D47).
+    CREATE FUNCTION rls_can_change_grant(p_hub text, p_target text) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$
+      SELECT EXISTS (
+        SELECT 1 FROM principal t
+        WHERE t.workspace_id = rls_workspace() AND t.id = p_target
+          AND t.kind = 'user' AND t.removed_at IS NULL
+          AND CASE rls_workspace_role()
+                WHEN 'owner' THEN true
+                WHEN 'admin' THEN t.workspace_role <> 'owner'
+                ELSE p_hub = ANY (rls_hubs(4))
+                     AND t.id <> rls_principal()
+                     AND t.workspace_role NOT IN ('owner', 'admin')
+              END)
+    $$;
+
+    -- Relation targets for an item write (#47), locked FOR KEY SHARE so they can't be deleted
+    -- before the links commit. Only for callers who can write items somewhere. A writer may keep
+    -- a stored link to an item it cannot read, so every item of the workspace is found, but the
+    -- hub comes back only when the caller can read it: NULL means "exists, not readable".
     CREATE FUNCTION lock_link_targets(p_ids text[])
     RETURNS TABLE (id text, hub_id text)
     LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
     AS $$
-      SELECT i.id, i.hub_id FROM item i
-      WHERE i.workspace_id = rls_workspace() AND rls_member() AND i.id = ANY (p_ids)
+      SELECT i.id, CASE WHEN i.hub_id = ANY (rls_hubs(1)) THEN i.hub_id END
+      FROM item i
+      WHERE i.workspace_id = rls_workspace() AND cardinality(rls_hubs(3)) > 0
+        AND i.id = ANY (p_ids)
       ORDER BY i.id
-      FOR KEY SHARE
+      FOR KEY SHARE OF i
     $$;
+
+    -- Row rules a policy can't express, because they compare the row before and after. Owners
+    -- of the tables (migrations, seeds) are outside RLS, and so outside these too.
+    CREATE FUNCTION principal_guard() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = public, pg_temp
+    AS $$
+    BEGIN
+      IF NOT row_security_active('principal') THEN RETURN NEW; END IF;
+      -- Footnote 1: only an owner changes, removes or makes an owner.
+      IF (OLD.workspace_role = 'owner' OR NEW.workspace_role = 'owner')
+         AND rls_workspace_role() IS DISTINCT FROM 'owner' THEN
+        RAISE EXCEPTION 'only an owner may change an owner' USING ERRCODE = '42501';
+      END IF;
+      -- account_id is only ever cleared, when a member is removed.
+      IF NEW.account_id IS NOT NULL AND NEW.account_id IS DISTINCT FROM OLD.account_id THEN
+        RAISE EXCEPTION 'account_id can only be cleared' USING ERRCODE = '42501';
+      END IF;
+      -- A removed member stays removed; a later invite makes a new principal.
+      IF OLD.removed_at IS NOT NULL THEN
+        RAISE EXCEPTION 'a removed member cannot be changed' USING ERRCODE = '42501';
+      END IF;
+      RETURN NEW;
+    END
+    $$;
+
+    -- The sequence counters move one step at a time, and only for callers on the write path
+    -- that takes them: item writers for revisions, managers of access for the access log.
+    CREATE FUNCTION workspace_guard() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = public, pg_temp
+    AS $$
+    BEGIN
+      IF NOT row_security_active('workspace') THEN RETURN NEW; END IF;
+      IF NEW.next_revision_seq IS DISTINCT FROM OLD.next_revision_seq
+         AND (NEW.next_revision_seq <> OLD.next_revision_seq + 1
+              OR cardinality(rls_hubs(3)) = 0) THEN
+        RAISE EXCEPTION 'next_revision_seq is taken by item writes only' USING ERRCODE = '42501';
+      END IF;
+      IF NEW.next_access_seq IS DISTINCT FROM OLD.next_access_seq
+         AND (NEW.next_access_seq <> OLD.next_access_seq + 1
+              OR NOT (rls_admin() OR cardinality(rls_hubs(4)) > 0)) THEN
+        RAISE EXCEPTION 'next_access_seq is taken by access changes only' USING ERRCODE = '42501';
+      END IF;
+      RETURN NEW;
+    END
+    $$;
+
+    CREATE TRIGGER principal_guard BEFORE UPDATE ON principal
+      FOR EACH ROW EXECUTE FUNCTION principal_guard();
+    CREATE TRIGGER workspace_guard BEFORE UPDATE ON workspace
+      FOR EACH ROW EXECUTE FUNCTION workspace_guard();
 
     -- Backlinks' hidden count (#47): links to a readable item from items the caller can't
     -- read, up to p_cap. A count only; their IDs stay hidden. Zero if the item isn't readable.
@@ -153,7 +243,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     'rls_workspace_role()',
     'rls_member()',
     'rls_admin()',
+    'rls_agent()',
+    'rls_rank(text)',
     'rls_hubs(int)',
+    'rls_can_change_grant(text, text)',
     'lock_link_targets(text[])',
     'hidden_backlinks(text, int)',
     // The three auth lookups from 0004 and 0005 (docs/ARCHITECTURE.md).
@@ -205,46 +298,71 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await sql`
     CREATE POLICY workspace_read ON workspace FOR SELECT
       USING (id = rls_workspace() AND (SELECT rls_member()));
+    -- Only the sequence counters are granted; workspace_guard checks how they move. Without
+    -- WITH CHECK, an UPDATE policy checks the new row with USING too.
     CREATE POLICY workspace_update ON workspace FOR UPDATE
-      USING (id = rls_workspace() AND (SELECT rls_member()))
-      WITH CHECK (id = rls_workspace() AND (SELECT rls_member()));
+      USING (id = rls_workspace()
+             AND ((SELECT rls_admin()) OR cardinality((SELECT rls_hubs(3))) > 0));
 
-    -- People see the workspace's principals. The API inserts only agents (people join through
-    -- redeem_invite); only owners and admins change roles or remove members. Hub admins lock
-    -- a grant's target row (FOR SHARE), which needs the UPDATE policy's USING to pass.
+    -- People see the workspace's principals; an agent sees only itself. The API inserts only
+    -- agents, with their keys (people join through redeem_invite). Only owners and admins
+    -- change roles or remove members, and only of people; principal_guard adds footnote 1.
+    -- Hub admins lock a grant's target row (FOR SHARE), which needs the UPDATE USING to pass.
     CREATE POLICY principal_read ON principal FOR SELECT
-      USING (workspace_id = rls_workspace() AND (SELECT rls_member()));
+      USING (workspace_id = rls_workspace() AND (SELECT rls_member())
+             AND (id = rls_principal() OR NOT (SELECT rls_agent())));
     CREATE POLICY principal_insert ON principal FOR INSERT
-      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_member())
-                  AND kind = 'agent' AND workspace_role = 'member' AND account_id IS NULL);
+      WITH CHECK (workspace_id = rls_workspace() AND kind = 'agent'
+                  AND ((SELECT rls_admin()) OR cardinality((SELECT rls_hubs(4))) > 0));
     CREATE POLICY principal_update ON principal FOR UPDATE
-      USING (workspace_id = rls_workspace() AND (SELECT rls_member()))
-      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_admin()));
+      USING (workspace_id = rls_workspace()
+             AND ((SELECT rls_admin()) OR cardinality((SELECT rls_hubs(4))) > 0))
+      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_admin()) AND kind = 'user');
 
-    -- Owners and admins only. Removing a member expires the invites that member created.
+    -- Owners and admins only, and only an owner invites an owner (footnote 1). Removing a
+    -- member expires the invites that member created: an update only ever ends an invite.
     CREATE POLICY invite_read ON invite FOR SELECT
       USING (workspace_id = rls_workspace() AND (SELECT rls_admin()));
     CREATE POLICY invite_insert ON invite FOR INSERT
       WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_admin())
-                  AND created_by = rls_principal());
+                  AND created_by = rls_principal()
+                  AND (workspace_role <> 'owner' OR (SELECT rls_workspace_role()) = 'owner'));
     CREATE POLICY invite_update ON invite FOR UPDATE
       USING (workspace_id = rls_workspace() AND (SELECT rls_admin()))
-      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_admin()));
+      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_admin())
+                  AND expires_at <= now());
 
+    -- Keys: people see them (the API decides who lists which); agents see none. Owners and
+    -- admins create and revoke any key, a hub admin those of their hub. A key's hub is its
+    -- principal's one grant, inserted just before the key. agent_key_insert and the agent
+    -- branch of hub_grant_insert together hold footnote 2.
     CREATE POLICY agent_key_read ON agent_key FOR SELECT
-      USING (workspace_id = rls_workspace() AND (SELECT rls_member()));
+      USING (workspace_id = rls_workspace() AND (SELECT rls_member())
+             AND NOT (SELECT rls_agent()));
     CREATE POLICY agent_key_insert ON agent_key FOR INSERT
-      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_member())
-                  AND created_by = rls_principal());
+      WITH CHECK (workspace_id = rls_workspace() AND created_by = rls_principal()
+                  AND ((SELECT rls_admin()) OR EXISTS (
+                    SELECT 1 FROM hub_grant g
+                    WHERE g.workspace_id = agent_key.workspace_id
+                      AND g.principal_id = agent_key.principal_id
+                      AND g.hub_id = ANY ((SELECT rls_hubs(4))::text[]))));
     CREATE POLICY agent_key_update ON agent_key FOR UPDATE
-      USING (workspace_id = rls_workspace() AND (SELECT rls_member()))
-      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_member()));
+      USING (workspace_id = rls_workspace()
+             AND ((SELECT rls_admin()) OR EXISTS (
+               SELECT 1 FROM hub_grant g
+               WHERE g.workspace_id = agent_key.workspace_id
+                 AND g.principal_id = agent_key.principal_id
+                 AND g.hub_id = ANY ((SELECT rls_hubs(4))::text[]))));
 
+    -- The caller appends as itself, for an action it may take: owners and admins any; a hub
+    -- admin grant and key changes on its hub (redeem_invite writes member.join as definer).
     CREATE POLICY access_log_read ON access_log FOR SELECT
       USING (workspace_id = rls_workspace() AND (SELECT rls_admin()));
     CREATE POLICY access_log_insert ON access_log FOR INSERT
-      WITH CHECK (workspace_id = rls_workspace() AND (SELECT rls_member())
-                  AND actor = rls_principal());
+      WITH CHECK (workspace_id = rls_workspace() AND actor = rls_principal()
+                  AND ((SELECT rls_admin())
+                       OR (action IN ('grant.set', 'grant.revoke', 'key.create', 'key.revoke')
+                           AND detail ->> 'hubId' = ANY ((SELECT rls_hubs(4))::text[]))));
 
     -- Folders of readable hubs. Owners and admins also see every hub row, for GET /hubs
     -- (names only; the API strips the rest) and for granting on hubs they hold no grant on.
@@ -311,26 +429,31 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       WITH CHECK (workspace_id = rls_workspace() AND hub_id = ANY ((SELECT rls_hubs(3))::text[])
                   AND actor = rls_principal());
 
-    -- A member sees their own grants, the grants on hubs they can read, and owners and admins
-    -- see all. Owners, admins and hub admins change them. The caller's own row also passes the
-    -- UPDATE policy's USING, so a write can lock the grant it relies on (FOR SHARE); WITH CHECK
-    -- still stops anyone raising their own role.
+    -- A person sees their own grants, the grants on hubs they can read, and owners and admins
+    -- see all; an agent sees only its own. Grants on people change as rls_can_change_grant
+    -- says. An agent's grant is made with its key, by an owner, admin or the hub's hub admin,
+    -- at most the creator's effective role on the hub (footnote 2). The caller's own row also
+    -- passes the UPDATE USING, so a write can lock the grant it relies on (FOR SHARE); WITH
+    -- CHECK still stops anyone but owners and admins changing their own.
     CREATE POLICY hub_grant_read ON hub_grant FOR SELECT
       USING (workspace_id = rls_workspace() AND (SELECT rls_member())
              AND (principal_id = rls_principal() OR (SELECT rls_admin())
-                  OR hub_id = ANY ((SELECT rls_hubs(1))::text[])));
+                  OR (NOT (SELECT rls_agent())
+                      AND hub_id = ANY ((SELECT rls_hubs(1))::text[]))));
     CREATE POLICY hub_grant_insert ON hub_grant FOR INSERT
       WITH CHECK (workspace_id = rls_workspace()
-                  AND ((SELECT rls_admin()) OR hub_id = ANY ((SELECT rls_hubs(4))::text[])));
+                  AND CASE principal_kind
+                        WHEN 'user' THEN rls_can_change_grant(hub_id, principal_id)
+                        ELSE hub_id = ANY (rls_hubs(rls_rank(hub_role)))
+                             AND ((SELECT rls_admin())
+                                  OR hub_id = ANY ((SELECT rls_hubs(4))::text[]))
+                      END);
     CREATE POLICY hub_grant_update ON hub_grant FOR UPDATE
       USING (workspace_id = rls_workspace() AND (SELECT rls_member())
-             AND (principal_id = rls_principal() OR (SELECT rls_admin())
-                  OR hub_id = ANY ((SELECT rls_hubs(4))::text[])))
-      WITH CHECK (workspace_id = rls_workspace()
-                  AND ((SELECT rls_admin()) OR hub_id = ANY ((SELECT rls_hubs(4))::text[])));
+             AND (principal_id = rls_principal() OR rls_can_change_grant(hub_id, principal_id)))
+      WITH CHECK (workspace_id = rls_workspace() AND rls_can_change_grant(hub_id, principal_id));
     CREATE POLICY hub_grant_delete ON hub_grant FOR DELETE
-      USING (workspace_id = rls_workspace()
-             AND ((SELECT rls_admin()) OR hub_id = ANY ((SELECT rls_hubs(4))::text[])));
+      USING (workspace_id = rls_workspace() AND rls_can_change_grant(hub_id, principal_id));
   `.execute(db)
 }
 
@@ -353,9 +476,16 @@ export async function down(db: Kysely<unknown>): Promise<void> {
     )
     .execute(db)
   await sql`
+    DROP TRIGGER workspace_guard ON workspace;
+    DROP TRIGGER principal_guard ON principal;
+    DROP FUNCTION workspace_guard();
+    DROP FUNCTION principal_guard();
     DROP FUNCTION hidden_backlinks(text, int);
     DROP FUNCTION lock_link_targets(text[]);
+    DROP FUNCTION rls_can_change_grant(text, text);
     DROP FUNCTION rls_hubs(int);
+    DROP FUNCTION rls_rank(text);
+    DROP FUNCTION rls_agent();
     DROP FUNCTION rls_admin();
     DROP FUNCTION rls_member();
     DROP FUNCTION rls_workspace_role();

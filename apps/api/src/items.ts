@@ -184,11 +184,12 @@ async function checkTargets(
   const ids = [...new Set(relations.flatMap((a) => linkedIds(values, a)))].sort()
   if (ids.length === 0) return values
   // In a request, through lock_link_targets (migration 0008): row-level security hides items
-  // in hubs the writer can't read, but a stored link to one is kept, so its existence and hub
-  // are needed. Seeds and imports run as the owner, outside RLS, and read the table.
-  const rows = isScoped(trx)
+  // in hubs the writer can't read, but a stored link to one is kept, so its existence is
+  // needed. Its hub comes back null. Seeds and imports run as the owner, outside RLS, and read
+  // the table.
+  const rows: { id: string; hub_id: string | null }[] = isScoped(trx)
     ? (
-        await sql<{ id: string; hub_id: string }>`
+        await sql<{ id: string; hub_id: string | null }>`
           SELECT id, hub_id FROM lock_link_targets(${ids}::text[])
         `.execute(trx)
       ).rows
@@ -205,7 +206,7 @@ async function checkTargets(
     trx,
     workspaceId,
     await loadSubject(trx, workspaceId, actor),
-    rows.map((r) => r.hub_id),
+    rows.flatMap((r) => (r.hub_id === null ? [] : [r.hub_id])),
   )
 
   const errors: ValueError[] = []
@@ -219,8 +220,11 @@ async function checkTargets(
         errors.push({ attributeId: attribute.id, code: 'invalid_value', message })
       if (hub === undefined) {
         if (!before.has(id)) fail(`Item "${id}" not found`)
-      } else if (!before.has(id) && !readable.has(hub)) {
+      } else if (!before.has(id) && (hub === null || !readable.has(hub))) {
         fail(`Item "${id}" not found`)
+      } else if (hub === null) {
+        // Stored, but in a hub the writer can't read: it was checked when it was stored, and
+        // items never move between hubs.
       } else if (hub !== attribute.hubId && !attribute.config.crossHub) {
         fail(`Item "${id}" is in another hub, and this relation does not allow cross-hub links`)
       } else if (hub !== attribute.config.targetHubId) {

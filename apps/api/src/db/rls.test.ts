@@ -72,6 +72,11 @@ async function fixtures(): Promise<void> {
       ('w1', 'vw', 'user', 'Viewer', 'viewer', NULL),
       ('w1', 'out', 'user', 'Outsider', 'member', NULL),
       ('w1', 'ag', 'agent', 'Agent', 'member', NULL),
+      ('w1', 'ha', 'user', 'Hub admin', 'member', NULL),
+      ('w1', 'adm2', 'user', 'Admin 2', 'admin', NULL),
+      ('w1', 'ag2', 'agent', 'Agent 2', 'member', NULL),
+      ('w1', 'ag3', 'agent', 'Agent 3', 'member', NULL),
+      ('w1', 'ag4', 'agent', 'Agent 4', 'member', NULL),
       ('w2', 'own2', 'user', 'Owner 2', 'owner', NULL),
       ('w2', 'mem', 'user', 'Member', 'member', NULL);
     INSERT INTO principal (workspace_id, id, kind, name, workspace_role, removed_at)
@@ -113,12 +118,17 @@ async function fixtures(): Promise<void> {
       ('w1', 'h1', 'mem', 'editor'),
       ('w1', 'h1', 'vw', 'editor'),
       ('w1', 'h1', 'gone', 'editor'),
+      ('w1', 'h1', 'ha', 'hub_admin'),
+      ('w1', 'h2', 'adm2', 'viewer'),
       ('w2', 'h1', 'own2', 'hub_admin'),
       ('w2', 'h1', 'mem', 'hub_admin');
     INSERT INTO hub_grant (workspace_id, hub_id, principal_id, principal_kind, hub_role)
-      VALUES ('w1', 'h1', 'ag', 'agent', 'viewer');
+      VALUES ('w1', 'h1', 'ag', 'agent', 'viewer'), ('w1', 'h2', 'ag2', 'agent', 'viewer'),
+             ('w1', 'h2', 'ag3', 'agent', 'viewer');
+    -- ag3 has a grant but no key yet; ag4 has neither.
     INSERT INTO agent_key (workspace_id, principal_id, secret_hash, created_by)
-      VALUES ('w1', 'ag', ${sql.lit(hashAgentSecret(AGENT_SECRET))}, 'own');
+      VALUES ('w1', 'ag', ${sql.lit(hashAgentSecret(AGENT_SECRET))}, 'own'),
+             ('w1', 'ag2', 'hash-ag2', 'own');
     INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at)
       VALUES ('w1', 'inv', 'tok', 'member', 'own', now() + interval '1 day'),
              ('w2', 'inv', 'tok2', 'member', 'own2', now() + interval '1 day');
@@ -405,23 +415,482 @@ describe('raw queries as the API role', () => {
   })
 
   it('answer the policy helpers only about the caller, in its own workspace', async () => {
+    const targets = (principalId: string, ids: string[]) =>
+      as({ workspaceId: 'w1', principalId }, async (trx) => {
+        const { rows } = await sql<{ id: string; hub_id: string | null }>`
+          SELECT id, hub_id FROM lock_link_targets(${ids}::text[])
+        `.execute(trx)
+        return rows
+      })
+    // Both w1 items exist (a stored link may point into a hidden hub), but mem can't read h2,
+    // so i2 comes back without its hub. i1 also exists in w2: only w1's comes back.
+    expect(await targets('mem', ['i1', 'i2', 'nope'])).toEqual([
+      { id: 'i1', hub_id: 'h1' },
+      { id: 'i2', hub_id: null },
+    ])
+    // Only callers who can write items somewhere may lock targets: not a capped viewer, an
+    // agent with read only, or a non-member.
+    for (const principalId of ['vw', 'ag', 'nobody']) {
+      expect(await targets(principalId, ['i1', 'i2']), principalId).toEqual([])
+    }
     const { rows } = await as({ workspaceId: 'w1', principalId: 'mem' }, (trx) =>
-      sql<{ targets: number; hidden: number; elsewhere: number }>`
-        SELECT (SELECT count(*)::int FROM lock_link_targets(ARRAY['i1', 'i2', 'nope'])) AS targets,
-               hidden_backlinks('i2', 10)::int AS hidden,
-               -- i1 also exists in w2: only w1's comes back, once.
-               (SELECT count(*)::int FROM lock_link_targets(ARRAY['i1'])) AS elsewhere
-      `.execute(trx),
+      sql<{ hidden: number }>`SELECT hidden_backlinks('i2', 10)::int AS hidden`.execute(trx),
     )
-    // Both w1 items exist (a stored link may point into a hidden hub); i2 isn't readable to
-    // mem, so its backlinks aren't counted for mem.
-    expect(rows[0]).toEqual({ targets: 2, hidden: 0, elsewhere: 1 })
-    const outsider = await as({ workspaceId: 'w1', principalId: 'nobody' }, (trx) =>
-      sql<{
-        n: number
-      }>`SELECT count(*)::int AS n FROM lock_link_targets(ARRAY['i1', 'i2'])`.execute(trx),
-    )
-    expect(outsider.rows[0]?.n).toBe(0)
+    // i2 isn't readable to mem, so its backlinks aren't counted for mem.
+    expect(rows[0]).toEqual({ hidden: 0 })
+  })
+})
+
+class Rollback extends Error {}
+
+/**
+ * Runs `query` as `principalId` in w1, then rolls back. Returns the rows it touched (or read),
+ * or the SQLSTATE it failed with.
+ */
+async function attempt(principalId: string, query: string): Promise<number | string> {
+  let touched = 0
+  try {
+    await as({ workspaceId: 'w1', principalId }, async (trx) => {
+      const result = await sql.raw(query).execute(trx)
+      touched = Number(result.numAffectedRows ?? result.rows.length)
+      throw new Rollback()
+    })
+  } catch (error) {
+    if (error instanceof Rollback) return touched
+    return String((error as { code?: unknown }).code)
+  }
+  return touched
+}
+
+const DENIED = INSUFFICIENT_PRIVILEGE
+
+/**
+ * docs/ROLES.md in the database (#44 review). Each refusal is paired with the case that is
+ * allowed, so removing any one clause turns a row red: a WITH CHECK refusal is 42501, a USING
+ * refusal touches no row.
+ */
+describe('the role matrix in the database', () => {
+  const cases: [string, string, string, number | string][] = [
+    // Members: only owners and admins, only people, and footnote 1 (principal_guard).
+    [
+      'owner makes an admin owner',
+      'own',
+      `UPDATE principal SET workspace_role = 'owner' WHERE id = 'adm'`,
+      1,
+    ],
+    [
+      'admin raises themselves to owner',
+      'adm',
+      `UPDATE principal SET workspace_role = 'owner' WHERE id = 'adm'`,
+      DENIED,
+    ],
+    [
+      'admin demotes an owner',
+      'adm',
+      `UPDATE principal SET workspace_role = 'admin' WHERE id = 'own'`,
+      DENIED,
+    ],
+    [
+      'admin changes a member',
+      'adm',
+      `UPDATE principal SET workspace_role = 'viewer' WHERE id = 'out'`,
+      1,
+    ],
+    [
+      'admin clears an account (removal)',
+      'adm',
+      `UPDATE principal SET account_id = NULL, removed_at = now() WHERE id = 'mem'`,
+      1,
+    ],
+    [
+      'admin binds another account',
+      'adm',
+      `UPDATE principal SET account_id = 'acc-mem' WHERE id = 'out'`,
+      DENIED,
+    ],
+    [
+      'admin restores a removed member',
+      'adm',
+      `UPDATE principal SET removed_at = NULL WHERE id = 'gone'`,
+      DENIED,
+    ],
+    [
+      'admin changes an agent principal',
+      'adm',
+      `UPDATE principal SET removed_at = now() WHERE id = 'ag'`,
+      DENIED,
+    ],
+    [
+      'hub admin changes a member',
+      'ha',
+      `UPDATE principal SET workspace_role = 'viewer' WHERE id = 'out'`,
+      DENIED,
+    ],
+    [
+      'member changes a member',
+      'mem',
+      `UPDATE principal SET workspace_role = 'viewer' WHERE id = 'out'`,
+      0,
+    ],
+    [
+      'hub admin adds an agent principal',
+      'ha',
+      `INSERT INTO principal (workspace_id, id, kind, name, workspace_role) VALUES ('w1', 'x', 'agent', 'X', 'member')`,
+      1,
+    ],
+    [
+      'member adds an agent principal',
+      'mem',
+      `INSERT INTO principal (workspace_id, id, kind, name, workspace_role) VALUES ('w1', 'x', 'agent', 'X', 'member')`,
+      DENIED,
+    ],
+    [
+      'admin adds a person directly',
+      'adm',
+      `INSERT INTO principal (workspace_id, id, kind, name, workspace_role) VALUES ('w1', 'x', 'user', 'X', 'member')`,
+      DENIED,
+    ],
+    ['person reads the member list', 'mem', `SELECT id FROM principal`, 12],
+    [
+      'agent reads the member list: itself only',
+      'ag',
+      `SELECT id FROM principal WHERE id <> 'ag'`,
+      0,
+    ],
+
+    // Grants on people: rls_can_change_grant (changeGrant() in core).
+    [
+      'hub admin grants a member',
+      'ha',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h1', 'out', 'viewer')`,
+      1,
+    ],
+    [
+      'editor grants a member',
+      'mem',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h1', 'out', 'viewer')`,
+      DENIED,
+    ],
+    [
+      'editor revokes a grant',
+      'mem',
+      `DELETE FROM hub_grant WHERE hub_id = 'h1' AND principal_id = 'vw'`,
+      0,
+    ],
+    [
+      'hub admin revokes a member',
+      'ha',
+      `DELETE FROM hub_grant WHERE hub_id = 'h1' AND principal_id = 'vw'`,
+      1,
+    ],
+    [
+      'hub admin changes their own grant',
+      'ha',
+      `UPDATE hub_grant SET hub_role = 'editor' WHERE hub_id = 'h1' AND principal_id = 'ha'`,
+      DENIED,
+    ],
+    [
+      'hub admin revokes their own grant',
+      'ha',
+      `DELETE FROM hub_grant WHERE hub_id = 'h1' AND principal_id = 'ha'`,
+      0,
+    ],
+    [
+      'hub admin changes an owner’s grant',
+      'ha',
+      `UPDATE hub_grant SET hub_role = 'viewer' WHERE hub_id = 'h1' AND principal_id = 'own'`,
+      0,
+    ],
+    [
+      'hub admin grants an admin',
+      'ha',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h1', 'adm', 'viewer')`,
+      DENIED,
+    ],
+    [
+      'hub admin of h1 grants on h2',
+      'ha',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h2', 'out', 'viewer')`,
+      DENIED,
+    ],
+    [
+      'admin grants themselves',
+      'adm',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h2', 'adm', 'hub_admin')`,
+      1,
+    ],
+    [
+      'admin changes an owner’s grant',
+      'adm',
+      `UPDATE hub_grant SET hub_role = 'viewer' WHERE hub_id = 'h1' AND principal_id = 'own'`,
+      0,
+    ],
+    [
+      'admin grants an owner',
+      'adm',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h2', 'own', 'viewer')`,
+      DENIED,
+    ],
+    [
+      'owner changes an admin’s grant',
+      'own',
+      `UPDATE hub_grant SET hub_role = 'editor' WHERE hub_id = 'h2' AND principal_id = 'adm2'`,
+      1,
+    ],
+    [
+      'admin changes an agent’s grant',
+      'adm',
+      `UPDATE hub_grant SET hub_role = 'editor' WHERE principal_id = 'ag'`,
+      0,
+    ],
+    [
+      'admin grants a removed member',
+      'adm',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES ('w1', 'h2', 'gone', 'viewer')`,
+      DENIED,
+    ],
+    [
+      'person reads grants of readable hubs only',
+      'mem',
+      `SELECT 1 FROM hub_grant WHERE hub_id = 'h2'`,
+      0,
+    ],
+    [
+      'agent reads grants: its own only',
+      'ag',
+      `SELECT 1 FROM hub_grant WHERE principal_id <> 'ag'`,
+      0,
+    ],
+
+    // Agent grants, made with a key: an owner, admin or the hub's hub admin, up to their own
+    // effective role on the hub (footnote 2).
+    [
+      'hub admin makes an agent grant',
+      'ha',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, principal_kind, hub_role) VALUES ('w1', 'h1', 'ag4', 'agent', 'editor')`,
+      1,
+    ],
+    [
+      'editor makes an agent grant',
+      'mem',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, principal_kind, hub_role) VALUES ('w1', 'h1', 'ag4', 'agent', 'viewer')`,
+      DENIED,
+    ],
+    [
+      'admin makes an agent grant up to their own role',
+      'adm2',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, principal_kind, hub_role) VALUES ('w1', 'h2', 'ag4', 'agent', 'viewer')`,
+      1,
+    ],
+    [
+      'admin makes an agent grant above their own role',
+      'adm2',
+      `INSERT INTO hub_grant (workspace_id, hub_id, principal_id, principal_kind, hub_role) VALUES ('w1', 'h2', 'ag4', 'agent', 'editor')`,
+      DENIED,
+    ],
+
+    // Agent keys: owners and admins any, a hub admin those of their hub.
+    [
+      'admin makes a key',
+      'adm',
+      `INSERT INTO agent_key (workspace_id, principal_id, secret_hash, created_by) VALUES ('w1', 'ag3', 'h3', 'adm')`,
+      1,
+    ],
+    [
+      'admin makes a key in someone else’s name',
+      'adm',
+      `INSERT INTO agent_key (workspace_id, principal_id, secret_hash, created_by) VALUES ('w1', 'ag3', 'h3', 'own')`,
+      DENIED,
+    ],
+    [
+      'hub admin of h1 makes a key on h2',
+      'ha',
+      `INSERT INTO agent_key (workspace_id, principal_id, secret_hash, created_by) VALUES ('w1', 'ag3', 'h3', 'ha')`,
+      DENIED,
+    ],
+    [
+      'hub admin revokes a key of their hub',
+      'ha',
+      `UPDATE agent_key SET revoked_at = now() WHERE principal_id = 'ag'`,
+      1,
+    ],
+    [
+      'hub admin of h1 revokes a key on h2',
+      'ha',
+      `UPDATE agent_key SET revoked_at = now() WHERE principal_id = 'ag2'`,
+      0,
+    ],
+    [
+      'admin revokes any key',
+      'adm',
+      `UPDATE agent_key SET revoked_at = now() WHERE principal_id = 'ag2'`,
+      1,
+    ],
+    ['viewer revokes a key', 'vw', `UPDATE agent_key SET revoked_at = now()`, 0],
+    ['editor revokes a key', 'mem', `UPDATE agent_key SET revoked_at = now()`, 0],
+    ['agent reads keys', 'ag', `SELECT 1 FROM agent_key`, 0],
+
+    // Invites: owners and admins, in their own name, and only an owner invites an owner.
+    [
+      'owner invites an owner',
+      'own',
+      `INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at) VALUES ('w1', 'x', 'tx', 'owner', 'own', now() + interval '1 day')`,
+      1,
+    ],
+    [
+      'admin invites an owner',
+      'adm',
+      `INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at) VALUES ('w1', 'x', 'tx', 'owner', 'adm', now() + interval '1 day')`,
+      DENIED,
+    ],
+    [
+      'admin invites in someone else’s name',
+      'adm',
+      `INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at) VALUES ('w1', 'x', 'tx', 'member', 'own', now() + interval '1 day')`,
+      DENIED,
+    ],
+    [
+      'member invites',
+      'mem',
+      `INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at) VALUES ('w1', 'x', 'tx', 'member', 'mem', now() + interval '1 day')`,
+      DENIED,
+    ],
+    ['member reads invites', 'mem', `SELECT 1 FROM invite`, 0],
+    ['admin expires an invite', 'adm', `UPDATE invite SET expires_at = now() WHERE id = 'inv'`, 1],
+    [
+      'admin extends an invite',
+      'adm',
+      `UPDATE invite SET expires_at = now() + interval '30 days' WHERE id = 'inv'`,
+      DENIED,
+    ],
+    // No WHERE, so invite_read (which an UPDATE's WHERE also needs) can't hide this row.
+    ['member expires an invite', 'mem', `UPDATE invite SET expires_at = now()`, 0],
+
+    // The access log: as the caller, for an action the caller may take.
+    [
+      'admin logs a role change',
+      'adm',
+      `INSERT INTO access_log (workspace_id, seq, actor, action, target) VALUES ('w1', 100, 'adm', 'member.role', 'out')`,
+      1,
+    ],
+    [
+      'admin logs in someone else’s name',
+      'adm',
+      `INSERT INTO access_log (workspace_id, seq, actor, action, target) VALUES ('w1', 100, 'own', 'member.role', 'out')`,
+      DENIED,
+    ],
+    [
+      'hub admin logs a grant on their hub',
+      'ha',
+      `INSERT INTO access_log (workspace_id, seq, actor, action, target, detail) VALUES ('w1', 100, 'ha', 'grant.set', 'out', '{"hubId":"h1"}')`,
+      1,
+    ],
+    [
+      'hub admin logs a grant on another hub',
+      'ha',
+      `INSERT INTO access_log (workspace_id, seq, actor, action, target, detail) VALUES ('w1', 100, 'ha', 'grant.set', 'out', '{"hubId":"h2"}')`,
+      DENIED,
+    ],
+    [
+      'hub admin logs a role change',
+      'ha',
+      `INSERT INTO access_log (workspace_id, seq, actor, action, target, detail) VALUES ('w1', 100, 'ha', 'member.role', 'out', '{"hubId":"h1"}')`,
+      DENIED,
+    ],
+    [
+      'viewer logs anything',
+      'vw',
+      `INSERT INTO access_log (workspace_id, seq, actor, action, target, detail) VALUES ('w1', 100, 'vw', 'grant.set', 'vw', '{"hubId":"h1"}')`,
+      DENIED,
+    ],
+
+    // Items, revisions and links: editors, in their own name.
+    [
+      'editor adds an item',
+      'mem',
+      `INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by) VALUES ('w1', 'x', 'h1', 'f1', 99, '{}', 'mem')`,
+      1,
+    ],
+    [
+      'editor adds an item in someone else’s name',
+      'mem',
+      `INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by) VALUES ('w1', 'x', 'h1', 'f1', 99, '{}', 'own')`,
+      DENIED,
+    ],
+    ['editor deletes an item', 'mem', `DELETE FROM item WHERE id = 'i1'`, 1],
+    ['viewer deletes an item', 'vw', `DELETE FROM item WHERE id = 'i1'`, 0],
+    [
+      'editor writes a revision',
+      'mem',
+      `INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES ('w1', 100, 'i1', 'h1', 2, '{}', 'mem')`,
+      1,
+    ],
+    [
+      'editor writes a revision in someone else’s name',
+      'mem',
+      `INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES ('w1', 100, 'i1', 'h1', 2, '{}', 'own')`,
+      DENIED,
+    ],
+    [
+      'editor links from their hub',
+      'mem',
+      `INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES ('w1', 'i1', 'rel', 'i1')`,
+      1,
+    ],
+    [
+      'viewer links from a hub they read',
+      'vw',
+      `INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES ('w1', 'i1', 'rel', 'i1')`,
+      DENIED,
+    ],
+
+    // The sequence counters: one step, by the write path that takes them (workspace_guard).
+    [
+      'editor takes a revision number',
+      'mem',
+      `UPDATE workspace SET next_revision_seq = next_revision_seq + 1 WHERE id = 'w1'`,
+      1,
+    ],
+    [
+      'editor skips revision numbers',
+      'mem',
+      `UPDATE workspace SET next_revision_seq = next_revision_seq + 5 WHERE id = 'w1'`,
+      DENIED,
+    ],
+    [
+      'viewer takes a revision number',
+      'vw',
+      `UPDATE workspace SET next_revision_seq = next_revision_seq + 1 WHERE id = 'w1'`,
+      0,
+    ],
+    [
+      'admin without a grant takes a revision number',
+      'adm',
+      `UPDATE workspace SET next_revision_seq = next_revision_seq + 1 WHERE id = 'w1'`,
+      DENIED,
+    ],
+    [
+      'hub admin takes an access number',
+      'ha',
+      `UPDATE workspace SET next_access_seq = next_access_seq + 1 WHERE id = 'w1'`,
+      1,
+    ],
+    [
+      'hub admin skips access numbers',
+      'ha',
+      `UPDATE workspace SET next_access_seq = next_access_seq + 2 WHERE id = 'w1'`,
+      DENIED,
+    ],
+    [
+      'editor takes an access number',
+      'mem',
+      `UPDATE workspace SET next_access_seq = next_access_seq + 1 WHERE id = 'w1'`,
+      DENIED,
+    ],
+  ]
+
+  it.each(cases)('%s', async (_name, principalId, query, expected) => {
+    expect(await attempt(principalId, query)).toBe(expected)
   })
 })
 
