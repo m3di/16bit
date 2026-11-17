@@ -120,7 +120,7 @@ async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: stri
     .where('workspace_role', '=', 'owner')
     .where('removed_at', 'is', null)
     .orderBy('id')
-    .forNoKeyUpdate()
+    .forKeyShare()
     .execute()
   const target = await trx
     .selectFrom('principal')
@@ -199,19 +199,6 @@ export async function removeMember(
       'Member',
     )
 
-    const grants = await trx
-      .deleteFrom('hub_grant')
-      .where('workspace_id', '=', workspaceId)
-      .where('principal_id', '=', targetId)
-      .returning(['hub_id', 'hub_role'])
-      .execute()
-    // Step 3 of the lock order: this UPDATE takes the target FOR UPDATE.
-    await trx
-      .updateTable('principal')
-      .set({ removed_at: sql`now()`, account_id: null })
-      .where('workspace_id', '=', workspaceId)
-      .where('id', '=', targetId)
-      .execute()
     // After the UPDATE above, which waited for every in-flight invite insert by the target
     // (their foreign key holds the target FOR KEY SHARE), so this statement sees them all.
     const invites = await trx
@@ -222,6 +209,19 @@ export async function removeMember(
       .where('used_at', 'is', null)
       .where('expires_at', '>', sql<Date>`now()`)
       .returning('id')
+      .execute()
+    // Step 3 of the lock order: this UPDATE takes the target FOR UPDATE.
+    await trx
+      .updateTable('principal')
+      .set({ removed_at: sql`now()`, account_id: null })
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', targetId)
+      .execute()
+    const grants = await trx
+      .deleteFrom('hub_grant')
+      .where('workspace_id', '=', workspaceId)
+      .where('principal_id', '=', targetId)
+      .returning(['hub_id', 'hub_role'])
       .execute()
     await appendAccessLog(trx, {
       workspaceId,

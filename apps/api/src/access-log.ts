@@ -27,11 +27,7 @@ export async function appendAccessLog(
     .where('workspace_id', '=', entry.workspaceId)
     .where('id', '=', entry.actor)
     .forKeyShare()
-    // No row means RLS hid the actor (removed, or no longer an admin): the lock would be a no-op
-    // and the #92 deadlock could come back, so stop here with a clear error.
-    .executeTakeFirstOrThrow(
-      () => new Error(`appendAccessLog: actor ${entry.actor} cannot be locked (#92)`),
-    )
+    .execute()
   const { seq } = await trx
     .updateTable('workspace')
     .set({ next_access_seq: sql`next_access_seq + 1` })
