@@ -16,7 +16,7 @@ import NewItemForm from './NewItemForm.vue'
 import { provideValueContext } from './context.ts'
 import { folderColumns, truncatedNote, useHub } from './useHub.ts'
 import { useHubDirectory } from './useHubDirectory.ts'
-import { inHub, useItems, valueErrors } from './useItems.ts'
+import { canSort, inHub, useItems, valueErrors } from './useItems.ts'
 import { usePrincipals } from './usePrincipals.ts'
 
 const { workspaceId, hubId, folderId, itemId } = defineProps<{
@@ -113,13 +113,14 @@ async function openFolder(id: string) {
   if (hub.value.state !== 'ready') await loadHub()
   if (id !== openFolderId.value) return
   const d = description.value
-  const expand = d
-    ? folderColumns(d, id)
-        .filter((c) => c.attribute.type === 'relation')
-        .slice(0, MAX_EXPAND_ATTRIBUTES)
-        .map((c) => c.attribute.id)
-    : []
-  await items.openFolder(id, expand)
+  const shown = d ? folderColumns(d, id).map((c) => c.attribute) : []
+  const expand = shown
+    .filter((a) => a.type === 'relation')
+    .slice(0, MAX_EXPAND_ATTRIBUTES)
+    .map((a) => a.id)
+  // A kept sort on a column that can no longer be sorted is dropped instead of sent again.
+  const sortable = d ? shown.filter(canSort).map((a) => a.id) : undefined
+  await items.openFolder(id, expand, sortable)
 }
 async function retryHub() {
   await loadHub()
