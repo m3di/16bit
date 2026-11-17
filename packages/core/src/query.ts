@@ -19,6 +19,7 @@ export const MAX_FILTER_CONDITIONS = 20
 export const MAX_FILTER_DEPTH = 3
 export const MAX_FILTER_IN_VALUES = 100
 export const MAX_SORT_KEYS = 3
+export const MAX_EXPAND_ATTRIBUTES = 3
 
 /**
  * One test on an indexed attribute. `value` depends on `op`: none for `is_empty` and
@@ -86,6 +87,17 @@ export const sortSchema = z
   })
 export type Sort = z.input<typeof sortSchema>
 
+/**
+ * Relation attributes of the `from` folder whose linked items come back with the page, one
+ * level deep (D20). Expansion reads the `link` table, so the attributes need not be indexed.
+ */
+export const expandSchema = z
+  .array(idSchema)
+  .max(MAX_EXPAND_ATTRIBUTES)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: 'Each attribute can be expanded once',
+  })
+
 /** A column of `item_index`. */
 export type IndexColumn = Exclude<IndexProjection, 'none'>
 
@@ -118,7 +130,7 @@ export interface QueryError {
 }
 
 export type CompileItemQueryResult =
-  | { ok: true; where: CompiledFilter | null; sort: CompiledSort[] }
+  | { ok: true; where: CompiledFilter | null; sort: CompiledSort[]; expand: string[] }
   | { ok: false; errors: QueryError[] }
 
 const TEXT_OPERATORS: readonly FilterOperator[] = ['contains', 'not_contains', 'starts_with']
@@ -290,12 +302,17 @@ function sortKeyOf(attribute: Attribute): CompiledSort['key'] {
 }
 
 /**
- * Checks `where` and `sort` against the attributes of the queried folder and resolves them to
- * `item_index` columns. Returns every problem found, each naming the attribute and operator.
+ * Checks `where`, `sort` and `expand` against the attributes of the queried folder and
+ * resolves filters and sorts to `item_index` columns. `expand` must name relation attributes.
+ * Returns every problem found, each naming the attribute and operator.
  */
 export function compileItemQuery(
   attributes: readonly Attribute[],
-  query: { where: Filter | null; sort: z.output<typeof sortSchema> },
+  query: {
+    where: Filter | null
+    sort: z.output<typeof sortSchema>
+    expand?: readonly string[] | undefined
+  },
 ): CompileItemQueryResult {
   const byId = new Map(attributes.map((a) => [a.id, a]))
   const errors: QueryError[] = []
@@ -320,7 +337,25 @@ export function compileItemQuery(
       key: sortKeyOf(attribute),
     })
   }
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, where, sort }
+
+  const expand: string[] = []
+  for (const [i, attributeId] of (query.expand ?? []).entries()) {
+    const attribute = byId.get(attributeId)
+    if (!attribute) {
+      errors.push({
+        path: `expand.${String(i)}`,
+        message: `Attribute "${attributeId}" is not an attribute of this folder`,
+      })
+    } else if (attribute.type !== 'relation') {
+      errors.push({
+        path: `expand.${String(i)}`,
+        message: `Attribute "${attributeId}" is a ${attribute.type} attribute; only relations can be expanded`,
+      })
+    } else {
+      expand.push(attributeId)
+    }
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, where, sort, expand }
 }
 
 /** One `item_index` row's typed value. `ord` numbers the rows of a multi-valued attribute. */

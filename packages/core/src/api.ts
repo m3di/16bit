@@ -8,7 +8,7 @@ import {
   timestampSchema,
   workspaceSchema,
 } from './entities.ts'
-import { boundedFilterSchema, sortSchema } from './query.ts'
+import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
 import { agentHubRoleSchema } from './roles.ts'
 
 // Request and response shapes of the HTTP API (v1), shared by `apps/api` and `apps/web`.
@@ -64,19 +64,66 @@ export type HubDescription = z.infer<typeof hubDescriptionSchema>
 /**
  * `POST /v1/workspaces/:workspaceId/query`. The query shape in docs/ARCHITECTURE.md, M1 subset:
  * items of one folder, filtered and sorted on indexed attributes (D20), with a required limit
- * and cursor paging. With no `sort`, items come newest update first. `where` and `sort` are
- * checked against the folder's attributes with `compileItemQuery`.
+ * and cursor paging. With no `sort`, items come newest update first. `where`, `sort` and
+ * `expand` are checked against the folder's attributes with `compileItemQuery`.
  */
 export const itemQuerySchema = z.strictObject({
   from: idSchema,
   where: boundedFilterSchema.nullable().default(null),
   sort: sortSchema.default([]),
+  expand: expandSchema.default([]),
   limit: z.int().min(1).max(MAX_PAGE_LIMIT),
   cursor: cursorSchema.nullable().default(null),
 })
 export type ItemQuery = z.input<typeof itemQuerySchema>
 
 export const itemPageSchema = pageSchema(itemSchema)
+
+/**
+ * A linked item as the caller sees it. `none` means it exists but the caller cannot read it
+ * (no grant on its hub, D27): its values are never sent (docs/ROLES.md, relations across hubs).
+ */
+export const linkedItemSchema = z.discriminatedUnion('access', [
+  z.strictObject({ access: z.literal('read'), item: itemSchema }),
+  z.strictObject({ access: z.literal('none') }),
+])
+export type LinkedItem = z.infer<typeof linkedItemSchema>
+
+/** Most linked items one `POST /query` response carries in `linked`. */
+export const MAX_LINKED_ITEMS = 1000
+
+/**
+ * The response of `POST /query`. With a non-empty `expand`, `linked` holds the items that page
+ * items link to through the expanded attributes, keyed by item ID, by ID order, up to
+ * `MAX_LINKED_ITEMS`. If `linkedTruncated` is false, an ID in an expanded relation value with no
+ * entry in `linked` no longer exists. If it is true, such an ID may also have been cut off:
+ * ask again with a lower `limit`.
+ */
+export const itemQueryResultSchema = itemPageSchema.extend({
+  linked: z.record(idSchema, linkedItemSchema).optional(),
+  linkedTruncated: z.boolean().optional(),
+})
+export type ItemQueryResult = z.infer<typeof itemQueryResultSchema>
+
+/**
+ * One entry of `GET /v1/workspaces/:workspaceId/items/:itemId/backlinks`: `item` links to this
+ * item through its relation attribute `attributeId`. Only items the caller can read are listed.
+ */
+export const backlinkSchema = z.strictObject({ attributeId: idSchema, item: itemSchema })
+export type Backlink = z.infer<typeof backlinkSchema>
+
+/** Most linking items `hidden` counts. */
+export const MAX_HIDDEN_BACKLINKS = 1000
+
+/**
+ * Backlinks by linking item ID, then attribute ID. Takes `pageQuerySchema`. `hidden` counts the
+ * links from items the caller cannot read, over all pages, up to `MAX_HIDDEN_BACKLINKS`. Their
+ * IDs are never sent, so a hub the caller cannot see stays a 404 (docs/ROLES.md).
+ */
+export const backlinkPageSchema = pageSchema(backlinkSchema).extend({
+  hidden: z.int().min(0).max(MAX_HIDDEN_BACKLINKS),
+})
+export type BacklinkPage = z.infer<typeof backlinkPageSchema>
 
 /** Values as sent by a client, before they are checked against the folder's attributes. */
 export const itemValuesInputSchema = z.record(idSchema, z.unknown())

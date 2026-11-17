@@ -18,6 +18,7 @@ const TABLES = [
   'invite',
   'item',
   'item_index',
+  'link',
   'principal',
   'revision',
   'session',
@@ -108,6 +109,7 @@ describe('migrations', () => {
       '0003_auth_access',
       '0004_auth_functions',
       '0005_agent_key_lookup',
+      '0006_link',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -327,6 +329,14 @@ describe('schema constraints', () => {
         db,
       ),
     ).rejects.toThrow(/principal_kind_check/)
+  })
+
+  it('accepts every M1 attribute type (0006)', async () => {
+    for (const type of ['multi_select', 'url', 'actor', 'auto_id', 'rich_text', 'relation']) {
+      await sql`INSERT INTO attribute (workspace_id, id, hub_id, name, type) VALUES ('w1', ${type}, 'h1', 'A', ${type})`.execute(
+        db,
+      )
+    }
   })
 
   it('rejects a duplicate revision seq in a workspace', async () => {
@@ -593,5 +603,73 @@ describe('0002_item_index', () => {
         db,
       ),
     ).rejects.toThrow(/item_index_pkey/)
+  })
+})
+
+describe('0006_link', () => {
+  beforeEach(async () => {
+    await migrateToLatest(db)
+    await seedHub()
+    await sql`
+      INSERT INTO attribute (workspace_id, id, hub_id, name, type, config)
+        VALUES ('w1', 'rel', 'h1', 'Rel', 'relation', '{"targetHubId":"h1"}');
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, updated_by) VALUES
+        ('w1', 'a', 'h1', 'f1', 1, 'p1'), ('w1', 'b', 'h1', 'f1', 2, 'p1'),
+        ('w1', 'c', 'h1', 'f1', 3, 'p1');
+      INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES
+        ('w1', 'a', 'rel', 'b'), ('w1', 'b', 'rel', 'c'), ('w1', 'c', 'rel', 'a');
+    `.execute(db)
+  })
+
+  const links = async () =>
+    (
+      await db.selectFrom('link').select(['from_item', 'to_item']).orderBy('from_item').execute()
+    ).map((r) => `${r.from_item}>${r.to_item}`)
+
+  it('removes links from and to an item when it is deleted', async () => {
+    await sql`DELETE FROM item WHERE id = 'b'`.execute(db)
+    expect(await links()).toEqual(['c>a'])
+  })
+
+  it('removes links with their attribute', async () => {
+    await sql`DELETE FROM attribute WHERE id = 'rel'`.execute(db)
+    expect(await links()).toEqual([])
+  })
+
+  it('rejects a link to an item that does not exist or is in another workspace', async () => {
+    await db.insertInto('workspace').values({ id: 'w2', name: 'Two' }).execute()
+    await expect(
+      sql`INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES ('w1', 'a', 'rel', 'zz')`.execute(
+        db,
+      ),
+    ).rejects.toThrow(/link_workspace_id_to_item_fkey/)
+    await expect(
+      sql`INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES ('w2', 'a', 'rel', 'b')`.execute(
+        db,
+      ),
+    ).rejects.toThrow(/link_workspace_id_from_item_fkey/)
+  })
+
+  it('rejects the same link twice', async () => {
+    await expect(
+      sql`INSERT INTO link (workspace_id, from_item, attribute_id, to_item) VALUES ('w1', 'a', 'rel', 'b')`.execute(
+        db,
+      ),
+    ).rejects.toThrow(/link_pkey/)
+  })
+
+  it('migrates down only once no attribute uses an M1 type', async () => {
+    const migrator = new Migrator({
+      db,
+      provider: { getMigrations: () => Promise.resolve(migrations) },
+    })
+    const blocked = await migrator.migrateTo('0005_agent_key_lookup')
+    expect(blocked.error).toBeDefined()
+    expect(await tables()).toContain('link')
+
+    await sql`DELETE FROM attribute WHERE id = 'rel'`.execute(db)
+    const { error } = await migrator.migrateTo('0005_agent_key_lookup')
+    expect(error).toBeUndefined()
+    expect(await tables()).not.toContain('link')
   })
 })

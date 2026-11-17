@@ -28,6 +28,30 @@ describe('indexEntries', () => {
   })
 })
 
+describe('compileItemQuery expand', () => {
+  const rel = attr('rel', 'relation', { targetHubId: 'h' }, false)
+  const compile = (expand: string[]) =>
+    compileItemQuery([title, rel], { where: null, sort: [], expand })
+
+  it('accepts relation attributes of the folder, indexed or not', () => {
+    expect(compile(['rel'])).toEqual({ ok: true, where: null, sort: [], expand: ['rel'] })
+    expect(compileItemQuery([rel], { where: null, sort: [] })).toMatchObject({ expand: [] })
+  })
+
+  it('refuses other attributes, naming each', () => {
+    expect(compile(['title', 'gone'])).toEqual({
+      ok: false,
+      errors: [
+        {
+          path: 'expand.0',
+          message: 'Attribute "title" is a text attribute; only relations can be expanded',
+        },
+        { path: 'expand.1', message: 'Attribute "gone" is not an attribute of this folder' },
+      ],
+    })
+  })
+})
+
 describe('compileItemQuery', () => {
   const compile = (where: unknown, sort: unknown = []) =>
     compileItemQuery([stage, due, title, notes], {
@@ -64,6 +88,7 @@ describe('compileItemQuery', () => {
         },
         { attributeId: 'title', column: 'txt', direction: 'asc', key: { by: 'lower' } },
       ],
+      expand: [],
     })
   })
 

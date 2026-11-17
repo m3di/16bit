@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  backlinkPageSchema,
+  MAX_HIDDEN_BACKLINKS,
   conflictErrorSchema,
   createItemSchema,
   deleteItemQuerySchema,
+  itemQueryResultSchema,
   itemQuerySchema,
   pageQuerySchema,
   patchItemSchema,
@@ -42,6 +45,7 @@ describe('api contracts', () => {
       from: 'f1',
       where: null,
       sort: [],
+      expand: [],
       limit: 50,
       cursor: null,
     })
@@ -54,5 +58,44 @@ describe('api contracts', () => {
     expect(createItemSchema.safeParse({ folderId: 'f1', id: 'bad id' }).success).toBe(false)
     expect(deleteItemQuerySchema.parse({ version: '3' })).toEqual({ version: 3 })
     expect(deleteItemQuerySchema.safeParse({}).success).toBe(false)
+  })
+
+  it('bounds expand and keeps linked items without values when they cannot be read', () => {
+    const query = (expand: unknown) => itemQuerySchema.safeParse({ from: 'f1', limit: 5, expand })
+    expect(query(['r1', 'r2', 'r3']).success).toBe(true)
+    expect(query(['r1', 'r2', 'r3', 'r4']).success).toBe(false)
+    expect(query(['r1', 'r1']).success).toBe(false)
+
+    const page = { items: [item], nextCursor: null }
+    expect(itemQueryResultSchema.parse(page)).toEqual(page)
+    const linked = { i2: { access: 'read', item }, i3: { access: 'none' } }
+    const expanded = itemQueryResultSchema.parse({ ...page, linked, linkedTruncated: false })
+    expect(expanded.linked).toEqual(linked)
+    expect(expanded.linkedTruncated).toBe(false)
+    // A hidden item never carries its values.
+    expect(
+      itemQueryResultSchema.safeParse({ ...page, linked: { i3: { access: 'none', item } } })
+        .success,
+    ).toBe(false)
+  })
+
+  it('lists readable backlinks only and counts the hidden ones', () => {
+    const body = { items: [{ attributeId: 'rel', item }], nextCursor: null, hidden: 2 }
+    expect(backlinkPageSchema.parse(body)).toEqual(body)
+    // A hidden linking item is never named.
+    expect(
+      backlinkPageSchema.safeParse({
+        ...body,
+        items: [{ access: 'none', itemId: 'i9', attributeId: 'rel' }],
+      }).success,
+    ).toBe(false)
+    expect(backlinkPageSchema.safeParse({ items: [], nextCursor: null }).success).toBe(false)
+    expect(
+      backlinkPageSchema.safeParse({
+        items: [],
+        nextCursor: null,
+        hidden: MAX_HIDDEN_BACKLINKS + 1,
+      }).success,
+    ).toBe(false)
   })
 })

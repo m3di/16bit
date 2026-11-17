@@ -1,3 +1,4 @@
+import type { AttributeTypeName, ItemValues } from '@16bit/core'
 import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely'
 import { Migrator } from 'kysely/migration'
 import pg from 'pg'
@@ -109,7 +110,7 @@ export interface AttributeTable {
   id: string
   hub_id: string
   name: string
-  type: 'text' | 'number' | 'boolean' | 'date' | 'select'
+  type: AttributeTypeName
   config: Json<Record<string, unknown>>
   indexed: Generated<boolean>
 }
@@ -129,7 +130,7 @@ export interface ItemTable {
   hub_id: string
   folder_id: string
   seq_id: number
-  values: Json<Record<string, string | number | boolean | null>>
+  values: Json<ItemValues>
   version: Generated<number>
   updated_at: Timestamp
   updated_by: string
@@ -144,6 +145,14 @@ export interface ItemIndexTable {
   num: number | null
   txt: string | null
   ts: ColumnType<Date | null, Date | string | null, Date | string | null>
+}
+
+/** One row per item a relation value links to (D7). Kept in step with item.values. */
+export interface LinkTable {
+  workspace_id: string
+  from_item: string
+  attribute_id: string
+  to_item: string
 }
 
 export interface RevisionTable {
@@ -167,6 +176,7 @@ export interface Database {
   folder_attribute: FolderAttributeTable
   item: ItemTable
   item_index: ItemIndexTable
+  link: LinkTable
   revision: RevisionTable
   invite: InviteTable
   agent_key: AgentKeyTable
