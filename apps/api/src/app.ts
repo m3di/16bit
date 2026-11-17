@@ -32,7 +32,7 @@ import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
 import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
-import { createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
+import { backlinks, createItem, deleteItem, getItem, patchItem, queryItems } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toWorkspace } from './mappers.ts'
 import {
   changeMemberRole,
@@ -52,6 +52,10 @@ export interface AppOptions {
   devPrincipalId: string
   /** Cap on folders and on attributes in a hub description. Folder attributes get 10 times it. */
   maxHubEntries?: number
+  /** Cap on linked items in one query response. Defaults to `MAX_LINKED_ITEMS`; lowered in tests. */
+  maxLinkedItems?: number
+  /** Cap on the `hidden` count of backlinks. Defaults to `MAX_HIDDEN_BACKLINKS`; lowered in tests. */
+  maxHiddenBacklinks?: number
   /** Directory of the built web app. When set, the API also serves the dashboard (D34). */
   webRoot?: string
   /**
@@ -85,6 +89,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
+  const { maxLinkedItems, maxHiddenBacklinks } = options
   const app = Fastify({ logger: false })
   const auth = {
     db,
@@ -326,7 +331,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
             const query = parse(itemQuerySchema, request.body)
             const hubId = await folderHub(db, workspaceId, query.from)
             await checkHub(db, workspaceId, request.principal, hubId, 'hub.read', 'Folder')
-            return queryItems(db, workspaceId, query)
+            return queryItems(db, workspaceId, request.principal, query, { maxLinkedItems })
           })
 
           ws.post('/items', async (request, reply) => {
@@ -343,6 +348,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
             const item = await getItem(db, workspaceId, itemId)
             await checkHub(db, workspaceId, request.principal, item.hubId, 'hub.read', 'Item')
             return item
+          })
+
+          ws.get('/items/:itemId/backlinks', async (request) => {
+            const { workspaceId, itemId } = parse(itemParams, request.params)
+            const page = parse(pageQuerySchema, request.query)
+            return backlinks(db, workspaceId, request.principal, itemId, page, maxHiddenBacklinks)
           })
 
           ws.patch('/items/:itemId', async (request) => {

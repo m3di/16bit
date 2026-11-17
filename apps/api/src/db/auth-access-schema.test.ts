@@ -55,7 +55,8 @@ describe('upgrading a database already migrated with 0001', () => {
       '0003_auth_access',
       '0004_auth_functions',
       '0005_agent_key_lookup',
-      '0006_principal_removed',
+      '0006_link',
+      '0007_principal_removed',
     ])
 
     const principals = await db

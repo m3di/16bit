@@ -36,7 +36,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
 | Delete a hub | ✓ | ✓ | — | — | — | — |
-| Remove a member (revokes their grants in this workspace; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
+| Remove a member (revokes their grants in this workspace and expires the unused invites they created; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
 | Rename or delete the workspace | ✓ | — | — | — | — | — |
 
 ¹ An admin cannot change, remove or create an owner, and cannot set, change or revoke an owner's hub grants. There is always at least one owner.
@@ -69,6 +69,8 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 ## Relations across hubs
 
 A relation attribute can point outside its hub only when that attribute allows it (D11). Even then, a principal sees a linked item only if they could read it directly: otherwise the link shows as "no access", never its values.
+
+Backlinks list only items you can read; others are counted, never named.
 
 ## Passwords
 
