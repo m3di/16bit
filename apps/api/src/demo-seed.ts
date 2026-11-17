@@ -29,7 +29,9 @@ import { createItem } from './items.ts'
 // owner is set back to `owner` if its row exists with a lower role, a seeded person's
 // principal without an account (from before #51) is linked to the person's account, and a
 // seeded attribute marked `indexed` here but not in the database (from before #73) is switched
-// on and its item_index rows are filled from the stored values. Grants
+// on and its item_index rows are filled from the stored values. A seeded attribute missing from
+// the database (such as `launch-design`, added in #91) is inserted and added to every folder of
+// its hub, after the columns already there; existing items keep their values. Grants
 // are only added where the principal has none; the agent key only on the first run.
 
 /** `indexed`: filled into item_index, so the attribute can be filtered and sorted (D6, D20). */
@@ -185,6 +187,15 @@ function launchAttributes(): AttributeSeed[] {
       name: 'Depends on',
       type: 'relation',
       config: { targetHubId: 'launch', crossHub: false, multiple: true },
+    },
+    // Crosses into Design (D11), so "no access" links can be shown and tested (#91): Mina, editor
+    // of Launch with no grant on Design, sees "no access"; Leo, viewer of Design, sees the item.
+    // Seeded items leave it empty.
+    {
+      id: 'launch-design',
+      name: 'Design refs',
+      type: 'relation',
+      config: { targetHubId: 'design', crossHub: true, multiple: true },
     },
   ]
 }
@@ -850,6 +861,8 @@ async function seedItems(
     // Values are drawn for every item, skipped or not, so a partial run continues identically.
     const values: Record<string, unknown> = {}
     for (const { attribute, required } of definitions) {
+      // Cross-hub relations are left empty, without a draw, so the other values stay as before.
+      if (attribute.type === 'relation' && attribute.config.targetHubId !== hub.id) continue
       let value = valueFor(attribute, index, rand, context)
       if (attribute.type === 'relation' && Array.isArray(value)) {
         const targets = value.filter((target: string) => live.has(target))

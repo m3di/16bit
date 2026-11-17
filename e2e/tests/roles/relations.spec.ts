@@ -15,7 +15,7 @@ import {
 
 const TITLE = 'launch-title'
 const DEPENDS = 'launch-depends'
-/** Proposed in #91: a Launch relation into Design that allows crossing hubs. */
+/** Seeded in #91: a Launch relation into Design that allows crossing hubs. */
 const DESIGN_REFS = 'launch-design'
 
 async function read(client: Client, id: string, expand: string) {
@@ -39,9 +39,6 @@ test('an agent key expands a relation inside its hub', async ({ as, agentKey }) 
 })
 
 test.describe('links into a hub the reader has no grant on', () => {
-  // Needs a seeded cross-hub relation attribute; M1 has no attribute API (#91).
-  test.fixme(true, 'Needs the cross-hub relation attribute seeded in #91')
-
   test('an agent key expanding a link into another hub gets "no access" (D28)', async ({
     as,
     agentKey,

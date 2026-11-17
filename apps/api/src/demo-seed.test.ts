@@ -6,6 +6,8 @@ import {
   hubPageSchema,
   indexEntries,
   itemQueryResultSchema,
+  itemReadSchema,
+  itemSchema,
   meSchema,
   validateItemValues,
   workspacePageSchema,
@@ -373,6 +375,8 @@ describe('demo seed', () => {
       .where('hub_id', '=', 'launch')
       .execute()
     for (const { id, type } of attributes) {
+      // The cross-hub relation is left empty by the seed (#91); see its own test.
+      if (id === 'launch-design') continue
       const set = items.filter((i) => (i.values as Record<string, unknown>)[id] != null)
       expect(set.length, `${type} values`).toBeGreaterThan(0)
     }
@@ -480,6 +484,106 @@ describe('demo seed', () => {
     }
     expect(await run(['seed'])).toContain('refusing to run with NODE_ENV=production')
   }, 60_000)
+
+  it('adds a cross-hub relation into Design to Launch, empty, in every Launch folder (#91)', async () => {
+    const attribute = await db
+      .selectFrom('attribute')
+      .select(['hub_id', 'name', 'type', 'config', 'indexed'])
+      .where('workspace_id', '=', 'demo')
+      .where('id', '=', 'launch-design')
+      .executeTakeFirstOrThrow()
+    expect(attribute).toEqual({
+      hub_id: 'launch',
+      name: 'Design refs',
+      type: 'relation',
+      config: { targetHubId: 'design', crossHub: true, multiple: true },
+      indexed: false,
+    })
+    expect(await launchDesignColumns()).toEqual([
+      { folder_id: 'launch', position: 11 },
+      { folder_id: 'launch-checklist', position: 11 },
+    ])
+    const filled = await db
+      .selectFrom('item')
+      .select('id')
+      .where('workspace_id', '=', 'demo')
+      .where('hub_id', '=', 'launch')
+      .where(sql<boolean>`${sql.ref('values')} ? 'launch-design'`)
+      .execute()
+    expect(filled).toEqual([])
+  })
+
+  it('adds the cross-hub relation to a database seeded before #91, leaving items alone', async () => {
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .deleteFrom('folder_attribute')
+        .where('workspace_id', '=', 'demo')
+        .where('attribute_id', '=', 'launch-design')
+        .execute()
+      await trx
+        .deleteFrom('attribute')
+        .where('workspace_id', '=', 'demo')
+        .where('id', '=', 'launch-design')
+        .execute()
+    })
+    const items = () =>
+      db
+        .selectFrom('item')
+        .select(['id', 'version', 'values'])
+        .where('workspace_id', '=', 'demo')
+        .where('hub_id', '=', 'launch')
+        .orderBy('id')
+        .execute()
+    const before = await items()
+    const counts = await tableCounts()
+
+    const result = await applySeed(db)
+    expect(result.itemsCreated).toBe(0)
+    expect(await launchDesignColumns()).toHaveLength(2)
+    expect(await items()).toEqual(before)
+    expect(await tableCounts()).toEqual({
+      ...counts,
+      attribute: (counts['attribute'] ?? 0) + 1,
+      folder_attribute: (counts['folder_attribute'] ?? 0) + 2,
+    })
+  }, 60_000)
+
+  it('shows a Design link to Mina as "no access" and to Leo as the item (#91)', async () => {
+    const create = async (folderId: string, values: Record<string, unknown>) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/workspaces/demo/items',
+        headers: auth,
+        payload: { folderId, values },
+      })
+      expect(res.statusCode, res.body).toBe(201)
+      return itemSchema.parse(res.json())
+    }
+    const design = await create('design', { 'design-title': 'Seed test design ref' })
+    const from = await create('launch', {
+      'launch-title': 'Links into Design',
+      'launch-design': [design.id],
+    })
+    const read = async (email: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/workspaces/demo/items/${from.id}?expand=launch-design`,
+        headers: await signIn(email),
+      })
+      expect(res.statusCode, res.body).toBe(200)
+      return res
+    }
+    // Mina: editor of Launch, no grant on Design.
+    const mina = await read('mina@example.com')
+    expect(itemReadSchema.parse(mina.json()).linked?.[design.id]).toEqual({ access: 'none' })
+    expect(mina.body).not.toContain('Seed test design ref')
+    // Leo: viewer of Design.
+    const leo = itemReadSchema.parse((await read('leo@example.com')).json())
+    expect(leo.linked?.[design.id]).toMatchObject({
+      access: 'read',
+      item: { values: { 'design-title': 'Seed test design ref' } },
+    })
+  })
 
   // Must stay the last test: it leaves the hub's next_seq ahead of its item count.
   it('fills in a workspace that is only partly seeded', async () => {
@@ -591,6 +695,16 @@ describe('demo seed', () => {
     expect(await tableCounts()).toEqual(counts)
   }, 60_000)
 })
+
+async function launchDesignColumns() {
+  return db
+    .selectFrom('folder_attribute')
+    .select(['folder_id', 'position'])
+    .where('workspace_id', '=', 'demo')
+    .where('attribute_id', '=', 'launch-design')
+    .orderBy('folder_id')
+    .execute()
+}
 
 async function indexRows(workspaceId: string, attributeIds: string[]) {
   return db
