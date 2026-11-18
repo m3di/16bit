@@ -195,8 +195,10 @@ types.setTypeParser(pg.types.builtins.INT8, Number)
 /**
  * A pool whose `end()` resolves only once every client's socket has closed (#103). pg-pool's own
  * `end()` resolves as soon as it has asked its idle clients to end, before their sockets close,
- * so a server-side termination in that window (`DROP DATABASE ... WITH (FORCE)` in tests, a
- * restart in production) reached a client with no one listening and crashed the process.
+ * so a server-side termination in that window (`DROP DATABASE ... WITH (FORCE)` in tests) reached
+ * a client with no one listening and crashed the process. This covers shutdown only. A pooled
+ * client terminated at any other time (a Postgres restart, `pg_terminate_backend`, a network drop)
+ * is reported as the pool's `error` event, which `createDb` listens to (#107).
  */
 export class ClosingPool extends pg.Pool {
   readonly #open = new Set<pg.PoolClient>()
@@ -217,10 +219,26 @@ export class ClosingPool extends pg.Pool {
   }
 }
 
-export function createDb(connectionString: string): Kysely<Database> {
-  return new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: new ClosingPool({ connectionString, max: 10, types }) }),
-  })
+function logPoolError(error: Error): void {
+  const code = (error as { code?: unknown }).code
+  console.error(
+    `db: pooled connection lost${typeof code === 'string' ? ` (${code})` : ''}, discarded: ${error.message}`,
+  )
+}
+
+/**
+ * The pool emits `error` when Postgres drops a connection it holds (a restart,
+ * `pg_terminate_backend`, a network drop). pg-pool has already discarded that client, and the next
+ * query opens a new one; without a listener the event would crash the process (#107). A query in
+ * flight on a dropped connection still rejects as usual.
+ */
+export function createDb(
+  connectionString: string,
+  options: { onPoolError?: (error: Error) => void } = {},
+): Kysely<Database> {
+  const pool = new ClosingPool({ connectionString, max: 10, types })
+  pool.on('error', options.onPoolError ?? logPoolError)
+  return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) })
 }
 
 /** Applies every pending migration. Throws if one fails; earlier ones stay applied. */
