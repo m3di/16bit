@@ -14,6 +14,7 @@ import {
   newOptionId,
   nextOptionColor,
   optionErrors,
+  itemCount,
   usageText,
 } from './settings.ts'
 import StateBlock from './StateBlock.vue'
@@ -178,8 +179,8 @@ const pendingMessage = computed(() => {
               :aria-expanded="openColor === o.id ? 'true' : 'false'"
               :aria-controls="`${id}-${o.id}-colour`"
               :aria-label="`Colour for option ${i + 1}: ${colourNames(o.color)}`"
-              class="mt-2 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-chip border-0 p-0"
-              :class="!o.color && 'border border-dashed border-line3 bg-transparent'"
+              class="mt-2 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-chip p-0"
+              :class="o.color ? 'border-0' : 'border border-dashed border-line3 bg-transparent'"
               :style="o.color ? { background: paletteVar(o.color) } : undefined"
               @click="openColor = openColor === o.id ? null : o.id"
             />
@@ -197,7 +198,7 @@ const pendingMessage = computed(() => {
             <span
               v-if="usage[o.id] !== undefined"
               class="mt-2 shrink-0 text-secondary whitespace-nowrap text-ink3"
-              >{{ usage[o.id] === 1 ? '1 item' : `${usage[o.id]} items` }}</span
+              >{{ itemCount(usage[o.id] ?? 0) }}</span
             >
             <span class="mt-0.5 shrink-0">
               <RowActionsMenu

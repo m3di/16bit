@@ -52,6 +52,15 @@ test('a dialog opened by ID shows not found in place of its body', async ({ page
   await expect(dialog).toBeHidden()
 })
 
+test('a confirm for something not available shows no form', async ({ page }) => {
+  await light(page).getByRole('button', { name: 'Confirm not found' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Delete hub?' })
+  await expect(dialog.getByText('This hub is not available')).toBeVisible()
+  await expect(dialog.getByRole('textbox')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+})
+
 test('a plain confirm focuses Cancel first', async ({ page }) => {
   await light(page).getByRole('button', { name: 'Remove Kofi' }).click()
   const dialog = page.getByRole('dialog', { name: 'Remove Kofi from the workspace?' })
@@ -73,6 +82,11 @@ test('a named confirm waits for the exact name, then reports a failure', async (
   await name.fill('Engineering')
   await expect(confirm).toBeEnabled()
   await page.keyboard.press('Enter')
+  // While the action runs, nothing closes the dialog: the reader must see how it ends.
+  await expect(dialog.getByRole('button', { name: 'Working' })).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeVisible()
   await expect(dialog.getByRole('alert')).toContainText('still holds 412 items')
   await expect(dialog).toBeVisible()
 })
@@ -154,17 +168,21 @@ test('the attribute type picker is a labelled radio group with hints', async ({ 
 test('the options editor adds, confirms a used removal, and moves focus on', async ({ page }) => {
   const kit = light(page)
   const list = kit.getByRole('list', { name: 'Stage options, light' })
-  await expect(list.getByRole('listitem')).toHaveCount(4)
+  await expect(list.getByRole('listitem')).toHaveCount(5)
+
+  // An option with no colour still shows its colour button, as a dashed outline.
+  const uncoloured = list.getByRole('button', { name: 'Colour for option 5: No colour' })
+  expect(await uncoloured.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('1px')
 
   await kit.getByRole('button', { name: 'Add option' }).first().click()
-  await expect(list.getByRole('textbox', { name: 'Name of option 5' })).toBeFocused()
+  await expect(list.getByRole('textbox', { name: 'Name of option 6' })).toBeFocused()
   await page.keyboard.type('Blocked')
 
   // Done is unused: it goes at once, and focus moves to the option that took its place.
   await list.getByRole('button', { name: 'Actions for option 4, Done' }).click()
   await kit.getByRole('menuitem', { name: 'Remove option' }).click()
-  await expect(list.getByRole('listitem')).toHaveCount(4)
-  await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toHaveValue('Blocked')
+  await expect(list.getByRole('listitem')).toHaveCount(5)
+  await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toHaveValue("Won't do")
   await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toBeFocused()
 
   // Backlog is used by 372 items: removing it asks first (D51).
@@ -173,7 +191,10 @@ test('the options editor adds, confirms a used removal, and moves focus on', asy
   const confirm = page.getByRole('dialog', { name: 'Remove Backlog?' })
   await expect(confirm).toHaveAccessibleDescription(/372 items use this option/)
   await confirm.getByRole('button', { name: 'Remove option' }).click()
-  await expect(list.getByRole('listitem')).toHaveCount(3)
+  await expect(confirm).toBeHidden()
+  await expect(list.getByRole('listitem')).toHaveCount(4)
+  // Focus lands on the option that took its place, not on the removed row's menu button.
+  await expect(list.getByRole('textbox', { name: 'Name of option 1' })).toBeFocused()
 
   // The colour opens as a disclosure under its row.
   const colour = list.getByRole('button', { name: /^Colour for option 1:/ })

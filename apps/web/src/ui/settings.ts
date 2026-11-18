@@ -101,8 +101,15 @@ export function optionErrors(options: readonly SelectOption[]): Record<string, s
   return errors
 }
 
+const formatCount = (count: number) => new Intl.NumberFormat('en').format(count)
+
+/** "1,280 items", as shown beside an option. */
+export function itemCount(count: number): string {
+  return count === 1 ? '1 item' : `${formatCount(count)} items`
+}
+
 /** "12 items use this option" in plain words, for the confirm step before removing it (D51). */
 export function usageText(count: number): string {
   if (count === 1) return '1 item uses this option'
-  return `${new Intl.NumberFormat('en').format(count)} items use this option`
+  return `${formatCount(count)} items use this option`
 }

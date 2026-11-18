@@ -4,7 +4,7 @@ import BaseButton from './BaseButton.vue'
 import BaseDialog from './BaseDialog.vue'
 import BaseInput from './BaseInput.vue'
 import FormNotice from './FormNotice.vue'
-import { confirmTextMatches } from './settings.ts'
+import { confirmTextMatches, type SettingsState } from './settings.ts'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -17,6 +17,9 @@ const {
   safe,
   busy,
   error = '',
+  state = 'ready',
+  stateTitle = '',
+  stateMessage = '',
 } = defineProps<{
   title: string
   /** What happens, in plain words: "412 items lose this value. This cannot be undone." */
@@ -35,6 +38,15 @@ const {
   busy?: boolean
   /** Why the action failed. The dialog stays open so the reader can retry or cancel. */
   error?: string
+  /**
+   * What the confirm needs before it can be offered, such as the item count of a hub to
+   * delete (D52). Anything but `ready` shows a StateBlock instead of the form, so there is
+   * nothing to confirm: loading, error, no-permission, and not-found for a thing opened by ID.
+   * Empty is a ready state for a confirm (nothing affected is still a question to answer).
+   */
+  state?: Exclude<SettingsState, 'empty'>
+  stateTitle?: string
+  stateMessage?: string
 }>()
 
 const emit = defineEmits<{ confirm: [] }>()
@@ -53,7 +65,15 @@ function submit() {
 </script>
 
 <template>
-  <BaseDialog v-model:open="open" :title="title" :description="message">
+  <BaseDialog
+    v-model:open="open"
+    :title="title"
+    :description="state === 'ready' ? message : ''"
+    :state="state"
+    :state-title="stateTitle"
+    :state-message="stateMessage"
+    :persistent="busy"
+  >
     <!-- A form, so Enter in the name field confirms once the name matches. -->
     <form
       class="flex flex-col gap-4"

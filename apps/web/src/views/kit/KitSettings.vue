@@ -68,15 +68,17 @@ const options = ref<SelectOption[]>([
   { id: 'o2', label: 'In progress', color: 'blue' },
   { id: 'o3', label: 'In review', color: 'amber' },
   { id: 'o4', label: 'Done', color: 'green' },
+  { id: 'o5', label: "Won't do" },
 ])
-const usage = { o1: 372, o2: 18, o3: 6, o4: 0 }
+const usage = { o1: 372, o2: 18, o3: 6, o4: 0, o5: 1280 }
+const confirmState = ref<null | 'loading' | 'not-found'>(null)
 
 function onDeleteHub() {
   confirmBusy.value = true
   setTimeout(() => {
     confirmBusy.value = false
     confirmError.value = 'Engineering still holds 412 items. Move or delete them first.'
-  }, 600)
+  }, 1500)
 }
 </script>
 
@@ -258,6 +260,22 @@ function onDeleteHub() {
         :busy="confirmBusy"
         :error="confirmError"
         @confirm="onDeleteHub"
+      />
+      <div class="flex flex-wrap gap-2">
+        <BaseButton @click="confirmState = 'loading'">Confirm loading</BaseButton>
+        <BaseButton @click="confirmState = 'not-found'">Confirm not found</BaseButton>
+      </div>
+      <ConfirmDialog
+        :open="confirmState !== null"
+        title="Delete hub?"
+        confirm-label="Delete hub"
+        require-text="Engineering"
+        :state="confirmState ?? 'loading'"
+        :state-title="confirmState === 'not-found' ? 'This hub is not available' : ''"
+        :state-message="
+          confirmState === 'not-found' ? 'It may not exist, or it may not be shared with you.' : ''
+        "
+        @update:open="confirmState = null"
       />
       <p class="m-0 text-caption text-ink3" role="status">
         {{ lastAction || 'The named confirm fails on purpose, to show its error.' }}

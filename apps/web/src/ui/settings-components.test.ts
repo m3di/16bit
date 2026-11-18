@@ -210,6 +210,13 @@ describe('BaseDialog', () => {
     },
   )
 
+  it('can be made to refuse closing', async () => {
+    const open = await render(BaseDialog, { open: true, title: 'Saving' })
+    expect(open).toMatch(/aria-label="Close"(?! disabled)/)
+    const held = await render(BaseDialog, { open: true, title: 'Saving', persistent: true })
+    expect(held).toMatch(/aria-label="Close" disabled/)
+  })
+
   it('renders nothing inside while closed', async () => {
     const html = await render(BaseDialog, { title: 'New folder' }, { default: () => 'Body' })
     expect(html).not.toContain('Body')
@@ -239,6 +246,37 @@ describe('ConfirmDialog', () => {
     expect(html).toMatch(/<button type="button"[^>]*autofocus>(<!--\[-->)?Cancel/)
     expect(html).toMatch(/<button type="submit" (?!disabled)[^>]*>(<!--\[-->)?Remove/)
     expect(html).toContain('text-danger')
+  })
+
+  it.each([
+    ['loading', 'role="status"'],
+    ['error', 'role="alert"'],
+    ['no-permission', 'You do not have access'],
+    ['not-found', 'This hub is not available'],
+  ])('shows the %s state instead of the form', async (state, expected) => {
+    const html = await render(ConfirmDialog, {
+      open: true,
+      title: 'Delete hub?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete hub',
+      requireText: 'Engineering',
+      state,
+      stateTitle: state === 'not-found' ? 'This hub is not available' : '',
+    })
+    expect(html).toContain(expected)
+    expect(html).not.toContain('<form')
+    expect(html).not.toContain('This cannot be undone.')
+  })
+
+  it('cannot be closed while busy', async () => {
+    const html = await render(ConfirmDialog, {
+      open: true,
+      title: 'Delete Engineering?',
+      confirmLabel: 'Delete hub',
+      busy: true,
+    })
+    expect(html).toMatch(/<button type="button" aria-label="Close" disabled/)
+    expect(html).toContain('aria-busy="true"')
   })
 
   it('shows why the action failed as an alert', async () => {
@@ -305,6 +343,22 @@ describe('OptionsEditor', () => {
     // The clash is shown on the later option.
     expect(count(html, 'Another option has this name.')).toBe(1)
     expect(html).toContain('Add option')
+  })
+
+  it('outlines the colour button of an option with no colour, so it is never invisible', async () => {
+    const html = await render(OptionsEditor, { modelValue: options })
+    const button = (label: string) =>
+      new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`).exec(html)?.[0] ?? ''
+    const none = button('Colour for option 3: No colour')
+    expect(none).toMatch(/class="[^"]*\bborder border-dashed border-line3\b/)
+    expect(none).not.toContain('border-0')
+    expect(button('Colour for option 2: Green')).toContain('border-0')
+  })
+
+  it('formats counts as the confirm does', async () => {
+    const html = await render(OptionsEditor, { modelValue: options, usage: { o1: 1280, o2: 1 } })
+    expect(html).toContain('1,280 items')
+    expect(html).toContain('1 item<')
   })
 
   it('has an empty state that still offers Add option', async () => {

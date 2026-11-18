@@ -12,6 +12,7 @@ const {
   stateTitle = '',
   stateMessage = '',
   width = 'md',
+  persistent,
 } = defineProps<{
   /** The dialog's heading and accessible name. */
   title: string
@@ -25,6 +26,11 @@ const {
   stateMessage?: string
   /** md: 440px at most. lg: 640px at most. Never wider than the screen. */
   width?: 'md' | 'lg'
+  /**
+   * The dialog must stay open, such as while its action runs: Escape, the Close button, and the
+   * backdrop do nothing, so the reader sees how the action ends.
+   */
+  persistent?: boolean
 }>()
 
 const emit = defineEmits<{ close: [] }>()
@@ -60,21 +66,41 @@ watch(
 )
 
 function onClose() {
+  // The browser can close a modal on Escape without a cancelable `cancel` event (repeated
+  // Escape with no user activation). A dialog that must stay open opens again.
+  if (open.value && persistent) {
+    dialog.value?.showModal()
+    return
+  }
   open.value = false
   emit('close')
-  returnFocus?.focus()
+  // Return focus only if nothing else took it: the opener may be gone (a removed row), and
+  // the parent may already have moved focus somewhere better.
+  const active = document.activeElement
+  const unclaimed = !active || active === document.body || dialog.value?.contains(active)
+  if (unclaimed && returnFocus?.isConnected) returnFocus.focus()
   returnFocus = null
+}
+
+function dismiss() {
+  if (!persistent) open.value = false
 }
 
 function onCancel(event: Event) {
   // Escape closes through the model, so the parent's state stays the source of truth.
   event.preventDefault()
-  open.value = false
+  dismiss()
 }
 
-// A click on the backdrop (the dialog element itself, outside its box) closes it.
+// A click on the backdrop (the dialog element itself, outside its box) closes it, but only when
+// the press started there too: selecting text in a field and letting go outside does not.
+let pressedBackdrop = false
+function onPointerdown(event: PointerEvent) {
+  pressedBackdrop = event.target === dialog.value
+}
 function onClick(event: MouseEvent) {
-  if (event.target === dialog.value) open.value = false
+  if (pressedBackdrop && event.target === dialog.value) dismiss()
+  pressedBackdrop = false
 }
 
 onBeforeUnmount(() => {
@@ -96,6 +122,7 @@ const maxWidth = computed(() => (width === 'lg' ? 'max-w-[640px]' : 'max-w-[440p
     ]"
     @close="onClose"
     @cancel="onCancel"
+    @pointerdown="onPointerdown"
     @click="onClick"
   >
     <div v-if="open" class="flex flex-col gap-4 p-5">
@@ -107,8 +134,9 @@ const maxWidth = computed(() => (width === 'lg' ? 'max-w-[640px]' : 'max-w-[440p
         <button
           type="button"
           aria-label="Close"
-          class="-mt-1 -mr-1 inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent text-ink3 hover:bg-selected hover:text-ink"
-          @click="open = false"
+          :disabled="persistent"
+          class="-mt-1 -mr-1 inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent text-ink3 hover:bg-selected hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+          @click="dismiss"
         >
           <svg aria-hidden="true" focusable="false" viewBox="0 0 10 10" class="size-2.5">
             <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2" fill="none" />

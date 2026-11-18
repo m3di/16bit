@@ -1,10 +1,17 @@
-import { ATTRIBUTE_TYPE_NAMES, PALETTE_COLORS, type SelectOption } from '@16bit/core'
+import {
+  ATTRIBUTE_TYPE_NAMES,
+  PALETTE_COLORS,
+  selectConfigSchema,
+  type SelectOption,
+} from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { rovingIndex } from './roving.ts'
 import {
   ATTRIBUTE_TYPE_INFO,
   ATTRIBUTE_TYPE_ORDER,
   confirmTextMatches,
+  itemCount,
+  MAX_OPTIONS,
   menuOpenFocus,
   moveOption,
   newOptionId,
@@ -102,6 +109,19 @@ describe('options', () => {
       optionErrors([opt('1', 'Done'), opt('2', ' done '), opt('3', '  '), opt('4', 'Doing')]),
     ).toEqual({ '2': 'Another option has this name.', '3': 'Name the option.' })
     expect(optionErrors([])).toEqual({})
+  })
+
+  it('MAX_OPTIONS is the limit core enforces', () => {
+    const list = (n: number) =>
+      Array.from({ length: n }, (_, i) => opt(`o${String(i)}`, `O${String(i)}`))
+    expect(selectConfigSchema.safeParse({ options: list(MAX_OPTIONS) }).success).toBe(true)
+    expect(selectConfigSchema.safeParse({ options: list(MAX_OPTIONS + 1) }).success).toBe(false)
+  })
+
+  it('itemCount formats like the confirm', () => {
+    expect(itemCount(0)).toBe('0 items')
+    expect(itemCount(1)).toBe('1 item')
+    expect(itemCount(1280)).toBe('1,280 items')
   })
 
   it('usageText counts items in words', () => {
