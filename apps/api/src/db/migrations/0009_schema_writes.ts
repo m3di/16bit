@@ -19,13 +19,33 @@ import { sql, type Kysely } from 'kysely'
 //   deleted hub's ID, or its grant holders would read that history. Hub IDs can come from the
 //   client (`POST /hubs` takes an optional `id`).
 // - An explicit `GRANT USAGE ON SCHEMA public`: the API role relied on PUBLIC's default, which a
-//   hardened or recreated schema doesn't have.
+//   hardened or recreated schema doesn't have. `down` revokes it again, even if an operator had
+//   granted it by hand before this migration; such an installation must grant it again.
 //
 // Errors that delete_hub raises, for the API to map:
 //   16B03  hub missing, or hidden from the caller            -> 404
-//   16B04  hub holds folders or items                        -> 409
-//   16B05  a relation attribute in another hub targets it    -> 409
+//   16B04  hub holds folders or items                        -> 409 not_empty
+//   16B05  a relation attribute in another hub targets it    -> 409 in_use
+//   16B06  the hub's version is not the one given            -> 409 conflict
 //   42501  role too low, no grant, or an admin while an owner holds a grant -> 403
+//
+// Lock order for schema writes, next to item writes (apps/api/src/items.ts: item rows, hub row,
+// folder row, workspace row) and access changes (apps/api/src/members.ts):
+//
+//   1. the caller's own grant FOR SHARE, as item writes do; a cross-hub relation insert also
+//      locks the caller's grant on the target hub here, before the insert (attribute_target_lock
+//      takes the target hub row, which delete_hub(target) takes after that hub's grants);
+//   2. moving or deleting a folder: the hub row FOR NO KEY UPDATE, before the folder row. Item
+//      create and delete take the hub row and then the folder row (next_seq, item_count), so a
+//      move or delete that took the folder row first could deadlock with them. A folder delete
+//      checks for items while it holds the hub row: an item write in that hub has then either
+//      committed or waits for the hub row, so the delete never waits on an item row;
+//   3. the folder, attribute or folder_attribute rows it changes, then the workspace row if it
+//      logs anything.
+//
+// folder_parent_check also takes the hub row, as a backstop for cycles, but it fires after the
+// folder row is locked, so it does not keep the order above: the caller must take the hub row
+// first.
 
 const ROLE = 'sixteenbit_app'
 
@@ -66,11 +86,17 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     -- Data rules: they hold for every role, migrations and seeds included.
 
     -- A hub never takes the ID of a deleted one (see deleted_hub). Definer: the API role has no
-    -- access to deleted_hub.
+    -- access to deleted_hub. A hub row with this ID is locked FOR KEY SHARE first: if delete_hub
+    -- is deleting it, this waits until that commits, and the next statement, with a new
+    -- snapshot, sees its deleted_hub row. Without the lock, the insert would pass this check,
+    -- wait on the primary key, and succeed once the delete committed.
     CREATE FUNCTION hub_id_check() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
     AS $$
     BEGIN
+      PERFORM 1 FROM folder h
+      WHERE h.workspace_id = NEW.workspace_id AND h.id = NEW.id
+      FOR KEY SHARE;
       IF EXISTS (SELECT 1 FROM deleted_hub d
                  WHERE d.workspace_id = NEW.workspace_id AND d.id = NEW.id) THEN
         RAISE EXCEPTION 'a deleted hub had this ID' USING ERRCODE = '23505';
@@ -118,8 +144,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       FOR EACH ROW EXECUTE FUNCTION attribute_title_type_check();
 
     -- Folders form a tree: a folder never moves under itself or one of its descendants. Moves
-    -- in one hub take the hub row first (FOR NO KEY UPDATE, as item writes do when they bump
-    -- next_seq), so two concurrent moves can't make a cycle that neither saw.
+    -- in one hub are serialised on the hub row (FOR NO KEY UPDATE), so two concurrent moves
+    -- can't make a cycle that neither saw. The caller takes that lock before the UPDATE (lock
+    -- order at the top); here it is only a backstop, already held on the API path.
     CREATE FUNCTION folder_parent_check() RETURNS trigger
     LANGUAGE plpgsql SET search_path = public, pg_temp
     AS $$
@@ -196,7 +223,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     -- under folder_update; and so, unlike the guards, it can't tell the owner from the API
     -- role, and holds for both. A config without a target is left to attributeSchema and to
     -- attribute_insert, which refuses it for the API. attribute_insert decides whether the
-    -- caller may target the hub.
+    -- caller may target the hub. BEFORE triggers run before the policy's WITH CHECK, so a
+    -- missing hub raises the policy's own 42501: a hub the caller can't see and a hub that
+    -- doesn't exist answer the same (docs/ROLES.md, nothing hidden can be probed).
     CREATE FUNCTION attribute_target_lock() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
     AS $$
@@ -207,7 +236,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
         AND h.parent_id IS NULL
       FOR KEY SHARE;
       IF NOT FOUND THEN
-        RAISE EXCEPTION 'the relation target hub does not exist' USING ERRCODE = '23503';
+        RAISE EXCEPTION 'new row violates row-level security policy for table "attribute"'
+          USING ERRCODE = '42501';
       END IF;
       RETURN NEW;
     END
@@ -222,12 +252,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     --   2. the hub's grants FOR UPDATE, then its agent keys. Item and schema writers hold
     --      their grant FOR SHARE, so they finish first or wait and then find no hub;
     --   3. the hub row FOR UPDATE. Every check reads after it, so a folder, item, grant or
-    --      relation attribute added before it is seen, and none can be added after it;
+    --      relation attribute added before it is seen, and none can be added after it. The
+    --      version check (D8) is here too, so a rename that committed first is a conflict;
     --   4. the workspace row (next_access_seq), then access_log.
     -- It revokes the hub's agent keys (the rows stay), deletes every grant on the hub, its
     -- folder_attribute rows, then its attributes (D52), then the hub, and records the ID in
     -- deleted_hub. Logged: key.revoke per key it revoked, grant.revoke per grant, hub.delete.
-    CREATE FUNCTION delete_hub(p_hub_id text) RETURNS void
+    CREATE FUNCTION delete_hub(p_hub_id text, p_version bigint) RETURNS void
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
     AS $$
     #variable_conflict use_column
@@ -236,6 +267,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       v_actor   text := rls_principal();
       v_role    text;
       v_name    text;
+      v_version bigint;
       v_keys    text[];
       v_grants  jsonb;
       v_count   int;
@@ -258,7 +290,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       ORDER BY k.principal_id
       FOR UPDATE OF k;
 
-      SELECT h.name INTO v_name FROM folder h
+      SELECT h.name, h.version INTO v_name, v_version FROM folder h
       WHERE h.workspace_id = v_ws AND h.id = p_hub_id AND h.parent_id IS NULL
       FOR UPDATE;
       -- Hidden as everywhere else: owners and admins see every hub row, others only the hubs
@@ -284,6 +316,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
              AND p.workspace_role = 'owner' AND p.removed_at IS NULL) THEN
         RAISE EXCEPTION 'an admin cannot delete a hub an owner holds a grant on'
           USING ERRCODE = '42501';
+      END IF;
+      IF v_version IS DISTINCT FROM p_version THEN
+        RAISE EXCEPTION 'the hub has changed' USING ERRCODE = '16B06';
       END IF;
       IF EXISTS (SELECT 1 FROM folder f
                  WHERE f.workspace_id = v_ws AND f.hub_id = p_hub_id AND f.id <> p_hub_id)
@@ -345,8 +380,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     $$;
   `.execute(db)
 
-  await sql.raw(`REVOKE ALL ON FUNCTION delete_hub(text) FROM PUBLIC`).execute(db)
-  await sql.raw(`GRANT EXECUTE ON FUNCTION delete_hub(text) TO ${ROLE}`).execute(db)
+  await sql.raw(`REVOKE ALL ON FUNCTION delete_hub(text, bigint) FROM PUBLIC`).execute(db)
+  await sql.raw(`GRANT EXECUTE ON FUNCTION delete_hub(text, bigint) TO ${ROLE}`).execute(db)
   // Trigger functions are never called directly, but PUBLIC's EXECUTE is the default.
   for (const fn of [
     'hub_id_check()',
@@ -375,9 +410,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // created by folder_create_hub (0008) and deleted only through delete_hub(). A folder with
   // items, subfolders or attributes attached can't be deleted: foreign keys refuse it.
   await sql`
+    -- A new folder starts at the defaults: INSERT covers every column, and the counters belong
+    -- to item writes.
     CREATE POLICY folder_insert ON folder FOR INSERT
       WITH CHECK (workspace_id = rls_workspace() AND parent_id IS NOT NULL
-                  AND hub_id = ANY ((SELECT rls_hubs(4))::text[]));
+                  AND hub_id = ANY ((SELECT rls_hubs(4))::text[])
+                  AND item_count = 0 AND next_seq = 1 AND version = 0);
     CREATE POLICY folder_delete ON folder FOR DELETE
       USING (workspace_id = rls_workspace() AND parent_id IS NOT NULL
              AND hub_id = ANY ((SELECT rls_hubs(4))::text[]));
@@ -412,8 +450,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
 
 /**
  * Refuses once a hub has been deleted: the revision foreign key it restores would not hold, and
- * dropping deleted_hub would let a new hub take that ID. Leaves USAGE on the schema to PUBLIC's
- * default, as before.
+ * dropping deleted_hub would let a new hub take that ID. Revokes USAGE on the schema from the
+ * API role, leaving it to PUBLIC's default as before 0009, even if an operator had granted it by
+ * hand: such an installation must grant it again.
  */
 export async function down(db: Kysely<unknown>): Promise<void> {
   await sql`
@@ -438,7 +477,7 @@ export async function down(db: Kysely<unknown>): Promise<void> {
     REVOKE UPDATE (name, color, parent_id, title_attribute_id, version) ON folder
       FROM sixteenbit_app;
 
-    DROP FUNCTION delete_hub(text);
+    DROP FUNCTION delete_hub(text, bigint);
     DROP TRIGGER attribute_target_lock ON attribute;
     DROP TRIGGER attribute_guard ON attribute;
     DROP TRIGGER folder_guard ON folder;

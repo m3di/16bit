@@ -141,7 +141,7 @@ describe('schema privileges', () => {
 
   it('lets only the API role execute delete_hub', async () => {
     const { rows } = await sql<{ app: boolean; pub: boolean }>`
-      SELECT has_function_privilege('sixteenbit_app', 'delete_hub(text)', 'EXECUTE') AS app,
+      SELECT has_function_privilege('sixteenbit_app', 'delete_hub(text, bigint)', 'EXECUTE') AS app,
              EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
                      WHERE p.proname = 'delete_hub' AND a.grantee = 0) AS pub
     `.execute(db)
@@ -226,6 +226,21 @@ describe('folders', () => {
   it('are created by a hub admin, under a parent in the hub', async () => {
     expect(await attempt(w1('ha'), (trx) => create(trx))).toBe('ok')
     expect(await attempt(w1('ha'), (trx) => create(trx, 'f2'))).toBe('ok')
+    // Counters and version start at their defaults (folder_insert).
+    for (const [itemCount, nextSeq, version] of [
+      [5, 1, 0],
+      [0, 9, 0],
+      [0, 1, 3],
+    ]) {
+      expect(
+        await attempt(w1('ha'), (trx) =>
+          sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix,
+                                  item_count, next_seq, version)
+              VALUES ('w1', 'new', 'h1', 'h1', 'New', 'blue', 'N',
+                      ${itemCount}, ${nextSeq}, ${version})`.execute(trx),
+        ),
+      ).toBe(DENIED)
+    }
     for (const p of LOWER) expect(await attempt(w1(p), (trx) => create(trx))).toBe(DENIED)
     // Not in a hub they don't administer, and a hub row only through folder_create_hub.
     expect(await attempt(w1('ha'), (trx) => create(trx, 'h2', 'h2'))).toBe(DENIED)
@@ -310,7 +325,9 @@ describe('attributes', () => {
     expect(await attempt(w1('ha'), create({ targetHubId: 'h2', crossHub: true }))).toBe(DENIED)
     expect(await attempt(w1('own'), create({ targetHubId: 'h2', crossHub: true }))).toBe('ok')
     expect(await attempt(w1('own'), create({ targetHubId: 'h2', crossHub: false }))).toBe(DENIED)
-    expect(await attempt(w1('own'), create({ targetHubId: 'nope', crossHub: true }))).toBe(FK)
+    // A missing hub answers like a hidden one, so hub IDs can't be probed (docs/ROLES.md).
+    expect(await attempt(w1('own'), create({ targetHubId: 'nope', crossHub: true }))).toBe(DENIED)
+    expect(await attempt(w1('ha'), create({ targetHubId: 'nope', crossHub: true }))).toBe(DENIED)
     expect(await attempt(w1('own'), create({ crossHub: true }))).toBe(DENIED)
   })
 
@@ -417,8 +434,11 @@ describe('delete_hub (D52)', () => {
     return id
   }
 
-  const deleteHub = (id: string) => (trx: Transaction<Database>) =>
-    sql`SELECT delete_hub(${id})`.execute(trx).then(() => undefined)
+  // Hubs start at version 0.
+  const deleteHub =
+    (id: string, version = 0) =>
+    (trx: Transaction<Database>) =>
+      sql`SELECT delete_hub(${id}, ${version})`.execute(trx).then(() => undefined)
 
   const exists = async (id: string) =>
     (await db
@@ -510,6 +530,20 @@ describe('delete_hub (D52)', () => {
   it('deletes for an admin with a grant while no owner holds one', async () => {
     const id = await hub({ adm: 'viewer' })
     expect(await attempt(w1('adm'), deleteHub(id))).toBe('ok')
+  })
+
+  it('refuses a stale version (D8), checked after the hub row is locked', async () => {
+    const id = await hub({ own: 'hub_admin' })
+    // A rename, as the API does it, bumps the version.
+    await commit(w1('own'), (trx) =>
+      sql`UPDATE folder SET name = 'Renamed', version = version + 1
+          WHERE workspace_id = 'w1' AND id = ${id}`.execute(trx),
+    )
+    expect(await attempt(w1('own'), deleteHub(id, 0))).toBe('16B06')
+    expect(await attempt(w1('own'), deleteHub(id, 1))).toBe('ok')
+    // Hidden and forbidden come first, so a version can't be probed either.
+    expect(await attempt(w1('out'), deleteHub(id, 0))).toBe('16B03')
+    expect(await attempt(w1('adm'), deleteHub(id, 0))).toBe(DENIED)
   })
 
   it('refuses an admin while an owner holds a grant (footnote 1)', async () => {
@@ -612,5 +646,83 @@ describe('delete_hub (D52)', () => {
     release()
     await writer
     expect(await deleting).toBe('16B04')
+  })
+
+  it('never lets a hub insert racing delete_hub take the deleted ID', async () => {
+    const id = await hub({ own: 'hub_admin' })
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let deleted!: () => void
+    const deletedUncommitted = new Promise<void>((resolve) => (deleted = resolve))
+
+    const deleting = commit(w1('own'), async (trx) => {
+      await deleteHub(id)(trx)
+      deleted()
+      await held
+    })
+    await deletedUncommitted
+    // As the owner of the tables, so only hub_id_check stands in the way.
+    const reuse =
+      sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
+                      VALUES ('w1', ${id}, ${id}, NULL, 'Again', 'blue', 'D')`
+        .execute(db)
+        .then(
+          () => 'ok',
+          (error: unknown) => String((error as { code?: unknown }).code),
+        )
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    release()
+    await deleting
+    expect(await reuse).toBe(UNIQUE)
+  })
+})
+
+describe('lock order: moving a folder against item writes', () => {
+  it('moves a folder while an item is created in it, both as the API does them, without a deadlock', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let hubTaken!: () => void
+    const hubLocked = new Promise<void>((resolve) => (hubTaken = resolve))
+
+    // Item create (apps/api/src/items.ts): grant FOR SHARE, the hub row (next_seq), then the
+    // hub's and folder's item_count, then the item.
+    const create = commit(w1('mem'), async (trx) => {
+      await sql`SELECT 1 FROM hub_grant WHERE workspace_id = 'w1' AND hub_id = 'h1'
+                  AND principal_id = 'mem' FOR SHARE`.execute(trx)
+      const { rows } = await sql<{ seq: number }>`
+        UPDATE folder SET next_seq = next_seq + 1 WHERE workspace_id = 'w1' AND id = 'h1'
+        RETURNING next_seq - 1 AS seq`.execute(trx)
+      hubTaken()
+      await held
+      await sql`UPDATE folder SET item_count = item_count + 1
+                WHERE workspace_id = 'w1' AND id = 'h1'`.execute(trx)
+      await sql`UPDATE folder SET item_count = item_count + 1
+                WHERE workspace_id = 'w1' AND id = 'f2'`.execute(trx)
+      await sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, updated_by)
+                VALUES ('w1', 'moving-item', 'h1', 'f2', ${rows[0]?.seq ?? 0}, 'mem')`.execute(trx)
+    })
+    await hubLocked
+
+    // Move (lock order in 0009): grant FOR SHARE, the hub row FOR NO KEY UPDATE, then the
+    // folder. It waits at the hub row, never holding f2 while the create needs it.
+    const move = commit(w1('ha'), async (trx) => {
+      await sql`SELECT 1 FROM hub_grant WHERE workspace_id = 'w1' AND hub_id = 'h1'
+                  AND principal_id = 'ha' FOR SHARE`.execute(trx)
+      await sql`SELECT 1 FROM folder WHERE workspace_id = 'w1' AND id = 'h1'
+                FOR NO KEY UPDATE`.execute(trx)
+      await sql`UPDATE folder SET parent_id = 'h1', version = version + 1
+                WHERE workspace_id = 'w1' AND id = 'f2'`.execute(trx)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    release()
+    await Promise.all([create, move])
+
+    const f2 = await db
+      .selectFrom('folder')
+      .select(['parent_id', 'item_count'])
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'f2')
+      .executeTakeFirstOrThrow()
+    expect(f2).toEqual({ parent_id: 'h1', item_count: 1 })
   })
 })
