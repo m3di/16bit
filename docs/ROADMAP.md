@@ -31,7 +31,7 @@ Authentication and sessions for people, agent keys scoped to hubs, workspace and
 
 ## M2: dashboard and settings
 
-The settings surface: workspace members and roles, hub settings (general, access, folders, attributes). The item page. Design system components completed, with all four states.
+The settings surface: workspace members, roles and invites, hub settings (general, access, agent keys, folders, attributes). Creating hubs, folders, attributes and items from the UI. The item page, titled by the hub's title attribute (D50). Design system components completed, with all their states. Root view editing waits for M4 (D53).
 
 *Exit:* a new hub can be created, given attributes and folders, and populated, entirely from the UI.
 
