@@ -22,16 +22,17 @@ import { hubRoleSchema } from './roles.ts'
 //
 // Versions (D8 for schema): a hub or folder write sends the folder's `version`; so does any
 // change to the attributes a folder shows (one `PUT` replaces the whole list). An attribute
-// write sends the attribute's `version`. A stale version is a 409 `conflict` whose `current`
-// is the hub, folder (with its attributes) or attribute as it is now.
+// write sends the attribute's `version`. Both start at 0. A stale version is a 409 `conflict`
+// whose `current` is the thing as it is now: the hub, the folder, the folder with its
+// attributes (for the `PUT` of a folder's attributes only), or the attribute.
 
 /** A name for a hub, folder or attribute. Trimmed; the stored shapes take 1 to 200 characters. */
 export const schemaNameSchema = z.string().trim().min(1).max(200)
 
 /** The version the client last saw. Folders start at 0 (`folderSchema`). */
 const folderVersionSchema = z.int().min(0)
-/** Attributes start at 1, like items. */
-const attributeVersionSchema = z.int().min(1)
+/** Attributes start at 0, like folders (`attribute.version`, #111). */
+const attributeVersionSchema = z.int().min(0)
 
 const atLeastOneChange =
   (keys: readonly string[]) =>
@@ -173,7 +174,7 @@ export type UpdateAttribute = z.infer<typeof updateAttributeSchema>
  * hub's title attribute the hub's `titleAttributeId` becomes `null` (D50).
  */
 export const deleteAttributeQuerySchema = z.strictObject({
-  version: z.coerce.number().int().min(1),
+  version: z.coerce.number().int().min(0),
   confirm: z.coerce.number().int().min(0).optional(),
 })
 export type DeleteAttributeQuery = z.infer<typeof deleteAttributeQuerySchema>

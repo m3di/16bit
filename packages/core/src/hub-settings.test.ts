@@ -182,8 +182,18 @@ describe('attributes', () => {
     ).toBe(false)
     expect(updateAttributeSchema.safeParse({ version: 1, indexed: true }).success).toBe(false)
     expect(updateAttributeSchema.safeParse({ version: 1 }).success).toBe(false)
-    expect(updateAttributeSchema.safeParse({ version: 0, name: 'S' }).success).toBe(false)
+    // Attributes start at version 0, like folders.
+    expect(updateAttributeSchema.safeParse({ version: 0, name: 'S' }).success).toBe(true)
+    expect(updateAttributeSchema.safeParse({ version: -1, name: 'S' }).success).toBe(false)
     expect(updateAttributeSchema.safeParse({ name: 'S' }).success).toBe(false)
+  })
+
+  it('refuses duplicate option IDs in an update', () => {
+    const options = [
+      { id: 'a', label: 'A' },
+      { id: 'a', label: 'B' },
+    ]
+    expect(updateAttributeSchema.safeParse({ version: 1, options }).success).toBe(false)
   })
 
   it('takes a non-negative confirm count', () => {
@@ -199,6 +209,8 @@ describe('attributes', () => {
       confirm: 7,
     })
     expect(deleteAttributeQuerySchema.parse({ version: '2' })).toEqual({ version: 2 })
+    expect(deleteAttributeQuerySchema.parse({ version: '0' })).toEqual({ version: 0 })
+    expect(deleteAttributeQuerySchema.safeParse({ version: '-1' }).success).toBe(false)
     expect(deleteAttributeQuerySchema.safeParse({ version: '2', confirm: 'yes' }).success).toBe(
       false,
     )
@@ -247,14 +259,6 @@ describe('attributes', () => {
         ok: false,
         message: 'A date attribute has no options',
       })
-    })
-
-    it('refuses duplicate option IDs', () => {
-      const options = [
-        { id: 'a', label: 'A' },
-        { id: 'a', label: 'B' },
-      ]
-      expect(updateAttributeSchema.safeParse({ version: 1, options }).success).toBe(false)
     })
   })
 })
