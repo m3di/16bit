@@ -195,8 +195,10 @@ types.setTypeParser(pg.types.builtins.INT8, Number)
 /**
  * A pool whose `end()` resolves only once every client's socket has closed (#103). pg-pool's own
  * `end()` resolves as soon as it has asked its idle clients to end, before their sockets close,
- * so a server-side termination in that window (`DROP DATABASE ... WITH (FORCE)` in tests, a
- * restart in production) reached a client with no one listening and crashed the process.
+ * so a server-side termination in that window (`DROP DATABASE ... WITH (FORCE)` in tests) reached
+ * a client with no one listening and crashed the process. This covers shutdown only. A pooled
+ * client terminated at any other time (a Postgres restart, `pg_terminate_backend`, a network drop)
+ * is reported as the pool's `error` event, which `createDb` listens to (#107).
  */
 export class ClosingPool extends pg.Pool {
   readonly #open = new Set<pg.PoolClient>()
@@ -205,6 +207,10 @@ export class ClosingPool extends pg.Pool {
     super(config)
     this.on('connect', (client) => {
       this.#open.add(client)
+      // A checked-out client has no pg-pool listener, so a socket error mid-query (ECONNRESET)
+      // would be uncaught. The query already rejects with it and the pool discards the client on
+      // release; idle drops are logged by the pool's own `error` listener in createDb (#107).
+      client.on('error', () => {})
       client.once('end', () => this.#open.delete(client))
     })
   }
@@ -217,10 +223,24 @@ export class ClosingPool extends pg.Pool {
   }
 }
 
+function logPoolError(error: Error): void {
+  const code = (error as { code?: unknown }).code
+  console.error(
+    `db: pooled connection lost${typeof code === 'string' ? ` (${code})` : ''}, discarded: ${error.message}`,
+  )
+}
+
+/**
+ * The pool emits `error` when Postgres drops a connection it holds (a restart,
+ * `pg_terminate_backend`, a network drop). pg-pool has already discarded that client, and the next
+ * query opens a new one; without a listener the event would crash the process (#107). A query in
+ * flight on a dropped connection still rejects as usual. After Postgres terminates a query in
+ * flight, the next query can still fail once on the dying connection before the pool drops it.
+ */
 export function createDb(connectionString: string): Kysely<Database> {
-  return new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: new ClosingPool({ connectionString, max: 10, types }) }),
-  })
+  const pool = new ClosingPool({ connectionString, max: 10, types })
+  pool.on('error', logPoolError)
+  return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) })
 }
 
 /** Applies every pending migration. Throws if one fails; earlier ones stay applied. */
