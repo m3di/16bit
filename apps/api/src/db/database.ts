@@ -234,7 +234,8 @@ function logPoolError(error: Error): void {
  * The pool emits `error` when Postgres drops a connection it holds (a restart,
  * `pg_terminate_backend`, a network drop). pg-pool has already discarded that client, and the next
  * query opens a new one; without a listener the event would crash the process (#107). A query in
- * flight on a dropped connection still rejects as usual.
+ * flight on a dropped connection still rejects as usual. After Postgres terminates a query in
+ * flight, the next query can still fail once on the dying connection before the pool drops it.
  */
 export function createDb(connectionString: string): Kysely<Database> {
   const pool = new ClosingPool({ connectionString, max: 10, types })

@@ -76,6 +76,8 @@ describe('createDb then drop', () => {
 // listener in createDb (idle drops) or the per-client listener in ClosingPool (socket errors
 // mid-query).
 describe('createDb when Postgres drops a pooled connection', () => {
+  // Generous, for a loaded parallel run; a passing wait returns as soon as it holds.
+  const POLL = { timeout: 5000 }
   let log: MockInstance<typeof console.error>
 
   beforeEach(() => {
@@ -118,7 +120,7 @@ describe('createDb when Postgres drops a pooled connection', () => {
           [pid],
         )
         expect(rows[0]?.query).toContain('pg_sleep')
-      })
+      }, POLL)
     } finally {
       await admin.end()
     }
@@ -133,7 +135,7 @@ describe('createDb when Postgres drops a pooled connection', () => {
 
       await vi.waitFor(() => {
         expect(log).toHaveBeenCalledTimes(1)
-      })
+      }, POLL)
       expect(String(log.mock.calls[0]?.[0])).toMatch(/pooled connection lost \(57P01\)/)
       expect(await backendPid(db)).not.toBe(pid)
     } finally {
@@ -152,7 +154,11 @@ describe('createDb when Postgres drops a pooled connection', () => {
       await terminate(pid)
 
       await outcome
-      expect(await backendPid(db)).not.toBe(pid)
+      // The 57P01 reaches the query before the socket closes, so the dead client can go back to
+      // the pool as idle and fail the very next query once. Wait for the pool to recover.
+      await vi.waitFor(async () => {
+        expect(await backendPid(db)).not.toBe(pid)
+      }, POLL)
       // Postgres sends 57P01, which rejects the query, then closes the socket. If the socket
       // closes after Kysely has released the client, pg-pool's idle listener reports it on the
       // pool and it is logged once; if it closes before, the client is discarded unlogged.
