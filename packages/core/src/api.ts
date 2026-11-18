@@ -306,7 +306,10 @@ export const API_ERROR_CODES = [
   'invalid_request',
   /** Adds `errors: ValueError[]` from `validateItemValues`. */
   'invalid_values',
-  /** Stale `version`. Adds `current: Item`, the item as it is now. */
+  /**
+   * Stale `version`. Adds `current`, the thing as it is now: an `Item` for item writes; for
+   * schema writes see the conflict shapes in hub-settings.ts.
+   */
   'conflict',
   /** `POST /items` with an `id` that is already used in the workspace. */
   'id_taken',
@@ -314,6 +317,15 @@ export const API_ERROR_CODES = [
   'email_taken',
   /** Accepting an invite into a workspace the account already belongs to. */
   'already_member',
+  /** Deleting a folder or hub that still holds items or folders (D52). */
+  'not_empty',
+  /** Deleting a hub that a relation attribute in another hub targets (D52). */
+  'in_use',
+  /**
+   * Removing an option or attribute that items use, without `confirm` or with a count that is
+   * no longer right. Adds `affected: number`, the count now (D51).
+   */
+  'confirm_required',
   /** Too many attempts. The `Retry-After` header says when to try again, in seconds. */
   'rate_limited',
   'internal',

@@ -51,11 +51,21 @@ export interface ActionScopes {
 
   // Hub actions. Visibility of the hub itself.
   'hub.see': HubScope
-  'hub.delete': HubScope
+  /**
+   * Delete an empty hub (D52): owners and admins holding a grant on it. `ownerHoldsGrant`: a
+   * workspace owner holds a grant on the hub, which refuses an admin (footnote ¹). That the hub
+   * is empty and no other hub's relation targets it is checked by the server.
+   */
+  'hub.delete': HubScope & { ownerHoldsGrant: boolean }
   'hub.rename': HubScope
   /** Set or change `target`'s grant on this hub. */
   'grant.set': HubScope & { target: Subject; role: HubRole }
   'grant.revoke': HubScope & { target: Subject }
+  /**
+   * List who holds a grant on this hub, names and hub roles only: the hub's hub admins, and
+   * owners and admins with or without a grant (they see every hub's name anyway).
+   */
+  'grant.list': HubScope
   /** `role` is the hub role the new key gets: at most the creator's effective hub role. */
   'key.create': HubScope & { role: HubRole }
   /** List the hub's agent keys: whoever may create keys on the hub. */
@@ -67,6 +77,12 @@ export interface ActionScopes {
   'item.write': HubScope
   'comment.create': HubScope
   'hub.manageSchema': HubScope
+  /**
+   * Point a new relation attribute at this hub from another one (crossHub, D11). Needs at
+   * least viewer access here; the source hub needs `hub.manageSchema` as well. Relations into
+   * their own hub need no check. The target is fixed once created (D51).
+   */
+  'relation.target': HubScope
 }
 
 export type Action = keyof ActionScopes
@@ -85,6 +101,7 @@ export const ACTIONS = [
   'hub.rename',
   'grant.set',
   'grant.revoke',
+  'grant.list',
   'key.create',
   'key.list',
   'key.revoke',
@@ -92,6 +109,7 @@ export const ACTIONS = [
   'item.write',
   'comment.create',
   'hub.manageSchema',
+  'relation.target',
 ] as const satisfies readonly Action[]
 
 /**
@@ -211,13 +229,18 @@ function decide(actor: Subject, action: Action, scope: ActionScopes[Action]): De
   switch (action) {
     case 'hub.see':
       return 'allow'
-    case 'hub.delete':
-      return allowIf(isOwnerOrAdmin(actor))
+    case 'hub.delete': {
+      const d = scope as ActionScopes['hub.delete']
+      if (!isOwnerOrAdmin(actor) || hubRole === null) return 'forbidden'
+      return allowIf(!(role === 'admin' && d.ownerHoldsGrant))
+    }
     case 'hub.rename':
       return allowIf(hubAdmin)
     case 'grant.set':
     case 'grant.revoke':
       return changeGrant(actor, scope as ActionScopes['grant.set'])
+    case 'grant.list':
+      return allowIf(hubAdmin || isOwnerOrAdmin(actor))
     case 'key.create': {
       const k = scope as ActionScopes['key.create']
       if (k.role === 'hub_admin') return 'forbidden'
@@ -243,6 +266,8 @@ function decide(actor: Subject, action: Action, scope: ActionScopes[Action]): De
       return allowIf(atLeast(hubRole, 'commenter'))
     case 'hub.manageSchema':
       return allowIf(hubAdmin)
+    case 'relation.target':
+      return 'allow'
   }
   // Adding an action without a rule fails to compile here instead of silently denying.
   const unhandled: never = action
