@@ -207,6 +207,10 @@ export class ClosingPool extends pg.Pool {
     super(config)
     this.on('connect', (client) => {
       this.#open.add(client)
+      // A checked-out client has no pg-pool listener, so a socket error mid-query (ECONNRESET)
+      // would be uncaught. The query already rejects with it and the pool discards the client on
+      // release; idle drops are logged by the pool's own `error` listener in createDb (#107).
+      client.on('error', () => {})
       client.once('end', () => this.#open.delete(client))
     })
   }
@@ -232,12 +236,9 @@ function logPoolError(error: Error): void {
  * query opens a new one; without a listener the event would crash the process (#107). A query in
  * flight on a dropped connection still rejects as usual.
  */
-export function createDb(
-  connectionString: string,
-  options: { onPoolError?: (error: Error) => void } = {},
-): Kysely<Database> {
+export function createDb(connectionString: string): Kysely<Database> {
   const pool = new ClosingPool({ connectionString, max: 10, types })
-  pool.on('error', options.onPoolError ?? logPoolError)
+  pool.on('error', logPoolError)
   return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) })
 }
 
