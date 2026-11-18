@@ -19,10 +19,11 @@ The initial plan for M2. Each entry becomes a GitHub issue during planning; afte
 - **Depends on:** nothing (it can run alongside M2-01)
 - **Gate:** needs-human (migration, row-level security)
 - **Acceptance:** a new migration adds:
-  - `title_attribute_id` on `folder`, allowed only on hub rows, pointing at a `text` attribute of the same hub (composite foreign key for the hub, a trigger for the type and the hub-row rule), cleared when that attribute is removed (D50);
-  - a `version` column on `attribute`, so schema writes carry a version check like items;
+  - `title_attribute_id` on `folder`, allowed only on hub rows (a `CHECK`), pointing at a `text` attribute of the same hub (composite foreign key for the hub, a trigger for the type), cleared when that attribute is removed (D50);
+  - a `version` column on `attribute`, so attribute writes carry a version check like items; changes to a folder's attributes (attach, detach, reorder, `required`) check and bump `folder.version`;
   - the privileges the API role lacks today: insert, update and delete on `attribute` and `folder_attribute`, update of the editable `folder` columns, and delete on `folder` (`0008` grants only some of these);
-  - row-level security for schema writes: only an effective hub admin writes `folder`, `attribute` and `folder_attribute` in a hub; deleting a hub needs owner or admin and a grant on it (D52);
+  - row-level security for schema writes: only an effective hub admin writes `attribute` and `folder_attribute` in a hub. Editors already update `folder` rows (item counters), so changes to a folder's name, colour, parent and `title_attribute_id`, and creating or deleting folders, are checked by a guard trigger like `workspace_guard`;
+  - a `SECURITY DEFINER` `delete_hub()` function with `search_path` pinned that applies D52: owner or admin with a grant, refused for an admin when an owner holds a grant, refused if not empty or targeted by another hub's relation; it revokes the hub's keys, deletes its grants and attributes, and logs to `access_log`;
   - an explicit `GRANT USAGE ON SCHEMA public` to the API role, which today relies on Postgres's default and breaks on a hardened or recreated schema.
 
   Tests apply it to an empty database and one migrated to `0008`, and show each policy refusing a lower role.
@@ -31,7 +32,7 @@ The initial plan for M2. Each entry becomes a GitHub issue during planning; afte
 - **Role:** backend
 - **Depends on:** M2-01, M2-02
 - **Gate:** needs-human (authentication and access rules: grant listing, hub delete)
-- **Acceptance:** routes for every M2-01 shape, checked with `can()` (`docs/ROLES.md`: hub admin manages folders and attributes, owner and admin delete hubs). Deleting a non-empty folder or hub is a 409 (D52); deleting an empty hub removes its attributes, grants and agent keys, logs the grant and key removals in `access_log`, and is a 409 while another hub's relation attribute targets it. Moving a folder under itself or one of its descendants is a 400. Creating a cross-hub relation needs at least viewer access on the target hub. `GET /hubs/:hubId/grants` lists grants for hub admins of the hub and for owners and admins with or without a grant. Removing an option or attribute strips its values from items in the same transaction, writes a revision per changed item, and updates `item_index` and `link`. Schema changes carry a version check like items. `GET /hubs/:hubId` returns the title attribute. Integration tests per route, role and failure, including the affected-count mismatch.
+- **Acceptance:** routes for every M2-01 shape, checked with `can()` (`docs/ROLES.md`: hub admin manages folders and attributes, owner and admin delete hubs). Deleting a non-empty folder or hub is a 409 (D52); deleting an empty hub calls `delete_hub()`, which revokes its agent keys and removes its grants and attributes (logged in `access_log`); it is a 409 while another hub's relation attribute targets it, and a 403 for an admin when an owner holds a grant on it. Moving a folder under itself or one of its descendants is a 400. Creating a cross-hub relation needs at least viewer access on the target hub. `GET /hubs/:hubId/grants` lists grants for hub admins of the hub and for owners and admins with or without a grant. Removing an option or attribute strips its values from items in the same transaction, writes a revision per changed item, and updates `item_index` and `link`. Schema changes carry a version check like items. `GET /hubs/:hubId` returns the title attribute. Integration tests per route, role and failure, including the affected-count mismatch.
 
 ## M2-04 Invites and self-grant API gaps
 - **Role:** backend
@@ -51,7 +52,7 @@ The initial plan for M2. Each entry becomes a GitHub issue during planning; afte
 ## M2-07 Hub settings: general, access and agent keys
 - **Role:** frontend
 - **Depends on:** M2-03, M2-05
-- **Acceptance:** hub admins rename the hub, set its colour and title attribute (D50), grant, change and revoke hub access, and create, list and revoke agent keys (secret shown once). Owners and admins delete an empty hub (D52). The dashboard's "no access" hub card offers owners and admins a self-grant, which is logged. The web app titles items with the title attribute everywhere it used the first text attribute. Component tests per role.
+- **Acceptance:** hub admins rename the hub, set its colour and title attribute (D50), grant, change and revoke hub access, and create, list and revoke agent keys (secret shown once). Owners and admins delete an empty hub they hold a grant on (D52). The dashboard's "no access" hub card offers owners and admins a self-grant, which is logged. The web app titles items with the title attribute everywhere it used the first text attribute. Component tests per role.
 
 ## M2-08 Hub settings: folders and attributes
 - **Role:** frontend
