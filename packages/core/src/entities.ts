@@ -64,29 +64,29 @@ const attributeBase = {
   indexed: z.boolean(),
 }
 
+/**
+ * One strict object per attribute type: `base` plus `type` and its typed `config`. Shared by
+ * the stored attribute and the create request, so a type's config is declared once.
+ */
+export function attributeVariants<B extends z.core.$ZodLooseShape>(base: B) {
+  return [
+    z.strictObject({ ...base, type: z.literal('text'), config: textConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('number'), config: numberConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('boolean'), config: booleanConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('date'), config: dateConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('select'), config: selectConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('multi_select'), config: multiSelectConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('url'), config: urlConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('actor'), config: actorConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('auto_id'), config: autoIdConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('rich_text'), config: richTextConfigSchema }),
+    z.strictObject({ ...base, type: z.literal('relation'), config: relationConfigSchema }),
+  ] as const
+}
+
 /** Attributes belong to a hub (D10). `config` is typed by `type`. */
 export const attributeSchema = z
-  .discriminatedUnion('type', [
-    z.strictObject({ ...attributeBase, type: z.literal('text'), config: textConfigSchema }),
-    z.strictObject({ ...attributeBase, type: z.literal('number'), config: numberConfigSchema }),
-    z.strictObject({ ...attributeBase, type: z.literal('boolean'), config: booleanConfigSchema }),
-    z.strictObject({ ...attributeBase, type: z.literal('date'), config: dateConfigSchema }),
-    z.strictObject({ ...attributeBase, type: z.literal('select'), config: selectConfigSchema }),
-    z.strictObject({
-      ...attributeBase,
-      type: z.literal('multi_select'),
-      config: multiSelectConfigSchema,
-    }),
-    z.strictObject({ ...attributeBase, type: z.literal('url'), config: urlConfigSchema }),
-    z.strictObject({ ...attributeBase, type: z.literal('actor'), config: actorConfigSchema }),
-    z.strictObject({ ...attributeBase, type: z.literal('auto_id'), config: autoIdConfigSchema }),
-    z.strictObject({
-      ...attributeBase,
-      type: z.literal('rich_text'),
-      config: richTextConfigSchema,
-    }),
-    z.strictObject({ ...attributeBase, type: z.literal('relation'), config: relationConfigSchema }),
-  ])
+  .discriminatedUnion('type', attributeVariants(attributeBase))
   .superRefine((attribute, ctx) => {
     // Relations stay inside their hub unless the attribute allows otherwise (D11).
     if (

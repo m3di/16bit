@@ -115,13 +115,28 @@ describe('workspace actions (ROLES.md "Workspace actions")', () => {
     ],
     ['billing', (a) => check(a, 'billing.manage'), [Y, F, F, F, Y, F]],
     [
-      'delete a hub, without a grant',
-      (a) => check(a, 'hub.delete', { hubGrant: null }),
+      'delete an empty hub they hold no grant on (D52)',
+      (a) => check(a, 'hub.delete', { hubGrant: null, ownerHoldsGrant: false }),
+      [F, F, N, N, N, N],
+    ],
+    [
+      'delete an empty hub they hold a grant on (D52)',
+      (a) => check(a, 'hub.delete', { hubGrant: 'viewer', ownerHoldsGrant: false }),
+      [Y, Y, F, F, F, F],
+    ],
+    [
+      'delete an empty hub an owner holds a grant on (¹)',
+      (a) => check(a, 'hub.delete', { hubGrant: 'hub_admin', ownerHoldsGrant: true }),
+      [Y, F, F, F, F, F],
+    ],
+    [
+      'list who holds a grant on a hub they hold no grant on',
+      (a) => check(a, 'grant.list', { hubGrant: null }),
       [Y, Y, N, N, N, N],
     ],
     [
-      'delete a hub, with a grant',
-      (a) => check(a, 'hub.delete', { hubGrant: 'hub_admin' }),
+      'list who holds a grant on a hub they hold a non-admin grant on',
+      (a) => check(a, 'grant.list', { hubGrant: 'editor' }),
       [Y, Y, F, F, F, F],
     ],
     [
@@ -227,6 +242,11 @@ describe('hub actions (ROLES.md "Hub actions")', () => {
       [Y, F, F, F],
     ],
     [
+      'list who holds a grant on this hub',
+      (g) => check(actor, 'grant.list', { hubGrant: g }),
+      [Y, F, F, F],
+    ],
+    [
       'list agent keys for this hub',
       (g) => check(actor, 'key.list', { hubGrant: g }),
       [Y, F, F, F],
@@ -268,7 +288,13 @@ describe('hub actions (ROLES.md "Hub actions")', () => {
 })
 
 describe('hidden resources are not found, not forbidden (D27, D45)', () => {
-  const inside = ['hub.read', 'item.write', 'comment.create', 'hub.manageSchema'] as const
+  const inside = [
+    'hub.read',
+    'item.write',
+    'comment.create',
+    'hub.manageSchema',
+    'relation.target',
+  ] as const
   const everyone = [
     user('owner'),
     user('admin'),
@@ -289,7 +315,8 @@ describe('hidden resources are not found, not forbidden (D27, D45)', () => {
   it('hub-level actions on a hub the principal cannot see are not found', () => {
     for (const a of [user('member'), user('viewer'), user('finance'), agent]) {
       expect(check(a, 'hub.rename', { hubGrant: null })).toBe(N)
-      expect(check(a, 'hub.delete', { hubGrant: null })).toBe(N)
+      expect(check(a, 'hub.delete', { hubGrant: null, ownerHoldsGrant: false })).toBe(N)
+      expect(check(a, 'grant.list', { hubGrant: null })).toBe(N)
       expect(check(a, 'key.revoke', { hubGrant: null })).toBe(N)
     }
   })
@@ -540,7 +567,12 @@ describe('agent keys (ROLES.md "Agent keys", D28, D47)', () => {
     ['create keys', (g) => check(agent, 'key.create', { hubGrant: g, role: 'viewer' }), [F, F, F]],
     ['list keys', (g) => check(agent, 'key.list', { hubGrant: g }), [F, F, F]],
     ['revoke keys', (g) => check(agent, 'key.revoke', { hubGrant: g }), [F, F, F]],
-    ['delete the hub', (g) => check(agent, 'hub.delete', { hubGrant: g }), [F, F, F]],
+    [
+      'delete the hub',
+      (g) => check(agent, 'hub.delete', { hubGrant: g, ownerHoldsGrant: false }),
+      [F, F, F],
+    ],
+    ['list grants', (g) => check(agent, 'grant.list', { hubGrant: g }), [F, F, F]],
   ]
   for (const [name, run, expected] of rows) {
     it(`an agent may ${name}`, () => {
@@ -555,6 +587,20 @@ describe('agent keys (ROLES.md "Agent keys", D28, D47)', () => {
       check(agent, 'grant.set', { hubGrant: 'hub_admin', target: other('member'), role: 'viewer' }),
     ).toBe(F)
     expect(check(agent, 'key.create', { hubGrant: 'hub_admin', role: 'viewer' })).toBe(F)
+  })
+})
+
+describe('relations across hubs (ROLES.md "Relations across hubs")', () => {
+  // The scope is the actor's grant on the target hub; the source hub is checked separately
+  // with hub.manageSchema.
+  it('needs at least viewer access on the target hub, for every workspace role', () => {
+    for (const r of ['owner', 'admin', 'member', 'viewer', 'finance'] as const) {
+      expect(
+        HUB_ROLES.map((g) => check(user(r), 'relation.target', { hubGrant: g })),
+        r,
+      ).toEqual([Y, Y, Y, Y])
+      expect(check(user(r), 'relation.target', { hubGrant: null }), r).toBe(N)
+    }
   })
 })
 
@@ -573,6 +619,8 @@ describe('typed calls', () => {
     can(user('owner'), 'workspace.read', { hubGrant: null })
     // @ts-expect-error: key.create needs the key's role.
     can(user('owner'), 'key.create', { hubGrant: 'editor' })
+    // @ts-expect-error: hub.delete needs ownerHoldsGrant.
+    can(user('owner'), 'hub.delete', { hubGrant: 'editor' })
     // @ts-expect-error: member.changeRole needs ownerCount.
     can(user('owner'), 'member.changeRole', { target: other('member'), role: 'viewer' })
   })
@@ -586,7 +634,13 @@ describe('schemas', () => {
   })
 
   it('every action is decided for every principal without throwing', () => {
-    const scope = { hubGrant: 'editor', target: other('member'), role: 'viewer', ownerCount: 1 }
+    const scope = {
+      hubGrant: 'editor',
+      target: other('member'),
+      role: 'viewer',
+      ownerCount: 1,
+      ownerHoldsGrant: false,
+    }
     for (const a of [user('owner'), user('member'), agent]) {
       for (const action of ACTIONS) {
         expect([Y, F, N]).toContain(check(a, action, scope as never))
