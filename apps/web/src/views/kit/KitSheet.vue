@@ -16,6 +16,7 @@ import {
   paletteVar,
   type TableColumn,
 } from '../../ui/index.ts'
+import KitSettings from './KitSettings.vue'
 import KitValues from './KitValues.vue'
 
 const { theme } = defineProps<{ theme: 'light' | 'dark' }>()
@@ -307,5 +308,7 @@ function onSort(key: string) {
     </section>
 
     <KitValues />
+
+    <KitSettings :theme="theme" />
   </div>
 </template>

@@ -36,3 +36,24 @@ export { chipsFor, type Chip, type ChipOption } from './chips.ts'
 export { displayUrl } from './url.ts'
 export { shortId } from './actor.ts'
 export { isRichTextEmpty, normalizeRichText, richTextToPlain, type RichDoc } from './rich-text.ts'
+// M2: settings.
+export { default as AttributeTypePicker } from './AttributeTypePicker.vue'
+export { default as BaseDialog } from './BaseDialog.vue'
+export { default as ConfirmDialog } from './ConfirmDialog.vue'
+export { default as OptionsEditor } from './OptionsEditor.vue'
+export { default as PalettePicker } from './PalettePicker.vue'
+export { default as RowActionsMenu, type RowAction } from './RowActionsMenu.vue'
+export { default as SettingsLayout, type SettingsNavEntry } from './SettingsLayout.vue'
+export { default as SettingsSection } from './SettingsSection.vue'
+export { default as TabList, type Tab } from './TabList.vue'
+export { default as ToggleSwitch } from './ToggleSwitch.vue'
+export {
+  ATTRIBUTE_TYPE_INFO,
+  ATTRIBUTE_TYPE_ORDER,
+  MAX_OPTIONS,
+  confirmTextMatches,
+  moveOption,
+  newOptionId,
+  optionErrors,
+  type SettingsState,
+} from './settings.ts'
