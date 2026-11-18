@@ -107,12 +107,26 @@ export async function listMembers(
 }
 
 /**
- * Locks every current owner, then the target, and returns the owner count and the target.
- * With the owners locked, two owners demoting or removing each other run one after the other
- * and the second sees the first's change, so the last owner always stays. NO KEY UPDATE, not
- * UPDATE, so an owner's own writes (which reference their row) are never blocked (#92).
+ * Locks every current owner, then the target, and returns the owner count, the actor as they
+ * are now, and the target. With the owners locked, two owners demoting or removing each other
+ * run one after the other and the second sees the first's change, so the last owner always
+ * stays. NO KEY UPDATE, not UPDATE, so an owner's own writes (which reference their row) are
+ * never blocked (#92).
+ *
+ * The actor's role is read again once the owners are locked (#127). The caller's role was
+ * resolved before this transaction, and a demotion or removal of the actor may have committed
+ * while the owner lock waited for it. RLS then answers from the new role: the principal_update
+ * policy, which FOR NO KEY UPDATE must pass, hides the target from an actor who is no longer an
+ * owner or admin, and that read as 404. Every member change takes the owner rows first, so none
+ * can change the actor's role between this read and the commit. Unlocked on purpose: an extra
+ * lock on the actor would sit outside the lock order at the top of this file.
  */
-async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: string) {
+async function lockForMemberChange(
+  trx: Trx,
+  workspaceId: string,
+  actor: Subject,
+  targetId: string,
+) {
   const owners = await trx
     .selectFrom('principal')
     .select('id')
@@ -123,6 +137,16 @@ async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: stri
     .orderBy('id')
     .forNoKeyUpdate()
     .execute()
+  const current = await trx
+    .selectFrom('principal')
+    .select('workspace_role')
+    .where('workspace_id', '=', workspaceId)
+    .where('id', '=', actor.id)
+    .where('removed_at', 'is', null)
+    .executeTakeFirst()
+  if (!current) throw new HttpError('forbidden', 'Your role does not allow this action')
+  const now: Subject = { ...actor, workspaceRole: current.workspace_role }
+  requireMemberManager(now)
   const target = await trx
     .selectFrom('principal')
     .select(['workspace_id', 'id', 'kind', 'name', 'workspace_role', 'account_id'])
@@ -131,7 +155,7 @@ async function lockForMemberChange(trx: Trx, workspaceId: string, targetId: stri
     .where('removed_at', 'is', null)
     .forNoKeyUpdate()
     .executeTakeFirst()
-  return { ownerCount: owners.length, target }
+  return { ownerCount: owners.length, actor: now, target }
 }
 
 /**
@@ -153,11 +177,12 @@ export async function changeMemberRole(
 ): Promise<Principal> {
   requireMemberManager(actor)
   return inTransaction(db, async (trx) => {
-    const { ownerCount, target } = await lockForMemberChange(trx, workspaceId, targetId)
+    const locked = await lockForMemberChange(trx, workspaceId, actor, targetId)
+    const { ownerCount, target } = locked
     if (!target) throw notFound('Member')
     const current = toPrincipal(target)
     enforce(
-      can(actor, 'member.changeRole', { target: toSubject(current), role, ownerCount }),
+      can(locked.actor, 'member.changeRole', { target: toSubject(current), role, ownerCount }),
       'Member',
     )
     if (current.workspaceRole === role) return current
@@ -200,10 +225,11 @@ export async function removeMember(
 ): Promise<void> {
   requireMemberManager(actor)
   await inTransaction(db, async (trx) => {
-    const { ownerCount, target } = await lockForMemberChange(trx, workspaceId, targetId)
+    const locked = await lockForMemberChange(trx, workspaceId, actor, targetId)
+    const { ownerCount, target } = locked
     if (!target) throw notFound('Member')
     enforce(
-      can(actor, 'member.remove', { target: toSubject(toPrincipal(target)), ownerCount }),
+      can(locked.actor, 'member.remove', { target: toSubject(toPrincipal(target)), ownerCount }),
       'Member',
     )
 
