@@ -58,6 +58,7 @@ describe('upgrading a database already migrated with 0001', () => {
       '0006_link',
       '0007_principal_removed',
       '0008_row_level_security',
+      '0009_schema_writes',
     ])
 
     const principals = await db

@@ -12,6 +12,7 @@ const TABLES = [
   'account',
   'agent_key',
   'attribute',
+  'deleted_hub',
   'folder',
   'folder_attribute',
   'hub_grant',
@@ -112,6 +113,7 @@ describe('migrations', () => {
       '0006_link',
       '0007_principal_removed',
       '0008_row_level_security',
+      '0009_schema_writes',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -757,5 +759,53 @@ describe('0008_row_level_security', () => {
       WHERE relnamespace = 'public'::regnamespace AND relrowsecurity
     `.execute(db)
     expect(rls[0]?.n).toBe(0)
+  })
+})
+
+describe('0009_schema_writes', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+
+  it('applies to a database migrated to 0008 with data, and migrates back down', async () => {
+    expect((await migrator().migrateTo('0008_row_level_security')).error).toBeUndefined()
+    await seedHub()
+    await sql`
+      INSERT INTO attribute (workspace_id, id, hub_id, name, type) VALUES ('w1', 't', 'h1', 'T', 'text');
+      INSERT INTO folder_attribute (workspace_id, hub_id, folder_id, attribute_id, position)
+        VALUES ('w1', 'h1', 'f1', 't', 0);
+      INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor)
+        VALUES ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1');
+    `.execute(db)
+
+    expect(await migrateToLatest(db)).toEqual(['0009_schema_writes'])
+    expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
+      { id: 't', version: 0 },
+    ])
+    const hubs = await db
+      .selectFrom('folder')
+      .select(['id', 'title_attribute_id'])
+      .orderBy('id')
+      .execute()
+    expect(hubs.every((h) => h.title_attribute_id === null)).toBe(true)
+    await db.updateTable('folder').set({ title_attribute_id: 't' }).where('id', '=', 'h1').execute()
+
+    expect((await migrator().migrateTo('0008_row_level_security')).error).toBeUndefined()
+    expect(await tables()).not.toContain('deleted_hub')
+    // The revision foreign key is back.
+    await expect(
+      sql`INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor)
+          VALUES ('w1', 2, 'i2', 'nope', 1, '{"op":"create"}', 'p1')`.execute(db),
+    ).rejects.toThrow(/revision_hub_fkey/)
+  })
+
+  it('migrates down only while no hub has been deleted', async () => {
+    await migrateToLatest(db)
+    await seedHub()
+    await db
+      .insertInto('deleted_hub')
+      .values({ workspace_id: 'w1', id: 'gone', deleted_by: 'p1' })
+      .execute()
+    const { error } = await migrator().migrateTo('0008_row_level_security')
+    expect(String(error)).toMatch(/hubs have been deleted/)
   })
 })

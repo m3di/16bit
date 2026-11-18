@@ -105,6 +105,7 @@ export interface FolderTable {
   item_count: Generated<number>
   version: Generated<number>
   next_seq: Generated<number>
+  title_attribute_id: Generated<string | null>
 }
 
 export interface AttributeTable {
@@ -115,6 +116,7 @@ export interface AttributeTable {
   type: AttributeTypeName
   config: Json<Record<string, unknown>>
   indexed: Generated<boolean>
+  version: Generated<number>
 }
 
 export interface FolderAttributeTable {
@@ -170,6 +172,14 @@ export interface RevisionTable {
   at: Timestamp
 }
 
+/** IDs of deleted hubs (D52, #111). Written by delete_hub() only; the API role can't read it. */
+export interface DeletedHubTable {
+  workspace_id: string
+  id: string
+  deleted_at: Generated<Timestamp>
+  deleted_by: string
+}
+
 export interface Database {
   account: AccountTable
   session: SessionTable
@@ -186,6 +196,7 @@ export interface Database {
   agent_key: AgentKeyTable
   hub_grant: HubGrantTable
   access_log: AccessLogTable
+  deleted_hub: DeletedHubTable
 }
 
 // bigint (int8) columns hold versions, counters, and sequence numbers, all far below 2^53.
