@@ -1,6 +1,6 @@
 # Roles and permissions
 
-The role matrix for M1. It applies D25 to D28. The API enforces it through one function in `packages/core`, and row-level security in Postgres enforces it again underneath. A change to this file is a gated change.
+The role matrix. It applies D25 to D28. The API enforces it through one function in `packages/core`, and row-level security in Postgres enforces it again underneath. A change to this file is a gated change.
 
 ## Principals
 
@@ -12,7 +12,7 @@ Both kinds are principals and go through the same checks (D25).
 ## Two layers
 
 1. The **workspace role** sets *what* someone can do in the workspace.
-2. A **hub grant** sets *where*. Without a grant on a hub, a principal sees nothing inside it: no folders, attributes or items (D27). Owners and admins see the names of all hubs in the hub list; everyone else sees only the hubs they hold a grant on. **The grant rule binds owners and admins too:** they can grant themselves access to any hub (recorded in `access_log`, D48), but until they do, everything inside the hub returns 404 to them. The hub list marks such hubs as "no access". In M1, self-granting is done through the API only; the dashboard offer comes with settings in M2.
+2. A **hub grant** sets *where*. Without a grant on a hub, a principal sees nothing inside it: no folders, attributes or items (D27). Owners and admins see the names of all hubs in the hub list; everyone else sees only the hubs they hold a grant on. **The grant rule binds owners and admins too:** they can grant themselves access to any hub (recorded in `access_log`, D48), but until they do, everything inside the hub returns 404 to them. The hub list marks such hubs as "no access". From M2, owners and admins can self-grant from the dashboard's "no access" hub card as well as through the API.
 
 A person's **effective hub role** is their hub grant, capped by their workspace role:
 
@@ -31,15 +31,16 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Invite members and change their roles | ✓ | ✓ ¹ | — | — | — | — |
 | Create a hub (the creator becomes its hub admin) | ✓ | ✓ | — | — | — | — |
 | Grant or revoke access on any hub | ✓ | ✓ ¹ | — | — | — | — |
+| List who holds a grant on any hub (names and hub roles only, nothing inside the hub) | ✓ | ✓ | — | — | — | — |
 | Create agent keys on a hub they hold a grant on, up to their own hub role ² | ✓ | ✓ | — | — | — | — |
 | List the agent keys of a hub they hold a grant on (same people as create) | ✓ | ✓ | — | — | — | — |
 | Revoke any agent key in the workspace | ✓ | ✓ | — | — | — | — |
 | Billing (no billing exists yet) | ✓ | — | — | — | ✓ | — |
-| Delete a hub | ✓ | ✓ | — | — | — | — |
+| Delete an empty hub they hold a grant on (D52) | ✓ | ✓ | — | — | — | — |
 | Remove a member (revokes their grants in this workspace and expires the unused invites they created; agent keys they created stay until revoked) | ✓ | ✓ ¹ | — | — | — | — |
 | Rename or delete the workspace | ✓ | — | — | — | — | — |
 
-¹ An admin cannot change, remove or create an owner, and cannot set, change or revoke an owner's hub grants. There is always at least one owner.
+¹ An admin cannot change, remove or create an owner, and cannot set, change or revoke an owner's hub grants. An admin also cannot delete a hub an owner holds a grant on (D52). There is always at least one owner.
 
 ² Owners and admins must hold a grant on a hub (self-granting if needed, D45) before creating keys for it, so no key is made for a hub its creator can't see. Revoking needs no grant: it reveals nothing inside the hub.
 
@@ -51,6 +52,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 | Create, edit and delete items | ✓ | ✓ | — | — |
 | Comment (when comments exist) | ✓ | ✓ | ✓ | — |
 | Rename the hub, manage folders and attributes | ✓ | — | — | — |
+| List who holds a grant on this hub | ✓ | — | — | — |
 | Grant or revoke access on this hub | ✓ ³ | — | — | — |
 | Create and revoke agent keys for this hub | ✓ | — | — | — |
 | List the agent keys of this hub | ✓ | — | — | — |
@@ -68,7 +70,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 
 ## Relations across hubs
 
-A relation attribute can point outside its hub only when that attribute allows it (D11). Even then, a principal sees a linked item only if they could read it directly: otherwise the link shows as "no access", never its values.
+A relation attribute can point outside its hub only when that attribute allows it (D11). Creating one that targets another hub needs at least viewer access on the target hub, and the target is fixed once created (D51). Even then, a principal sees a linked item only if they could read it directly: otherwise the link shows as "no access", never its values.
 
 Backlinks list only items you can read; others are counted, never named.
 
@@ -76,9 +78,9 @@ Backlinks list only items you can read; others are counted, never named.
 
 There is no password reset in the API. The installation operator resets a password with a CLI command (D42).
 
-## Not in M1
+## Not yet
 
-- Folder grants that narrow a hub grant (D27). The model allows them; they come with the settings work in M2.
+- Folder grants that narrow a hub grant (D27). The model allows them; they wait until after M2 (D54).
 - Billing.
 - Passing a session or key from one principal to another.
 

@@ -21,7 +21,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 
 ## Current milestone
 
-**M1, data API and access: complete, waiting for the maintainer's feedback** (see `docs/reports/M1.md`). Do not start M2 until the maintainer has looked. M0 and M1 reports are in `docs/reports/`.
+**M2, dashboard and settings** (`docs/ROADMAP.md`, plan in `team/backlog-M2.md`). M0 and M1 reports are in `docs/reports/`.
 
 ## Rules that always apply
 
