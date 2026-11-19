@@ -290,6 +290,71 @@ async function accessLog() {
     .execute()
 }
 
+// Removing a member expires their pending invites (#130). The removal holds the invite row from
+// that UPDATE until it commits; a redeem waiting on that row then re-checks `expires_at > now()`
+// with its own transaction's start time.
+describe('a redeem racing the removal of the invite’s creator (#130)', () => {
+  it('finds no invite when its transaction started first and it waited for the removal', async () => {
+    await db
+      .insertInto('invite')
+      .values({
+        workspace_id: 'w1',
+        id: 'inv-130',
+        token_hash: 'hash-130',
+        workspace_role: 'member',
+        created_by: 'adm',
+        expires_at: sql<Date>`now() + interval '7 days'`,
+      })
+      .execute()
+    await db
+      .insertInto('account')
+      .values({
+        id: 'acct-130',
+        email: 'acct-130@test.invalid',
+        password_hash: `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'A'.repeat(43)}`,
+        name: 'New',
+      })
+      .execute()
+    const { open } = await openGate('access_log')
+    try {
+      let go!: () => void
+      const started = new Promise<void>((resolve) => (go = resolve))
+      // What POST /v1/auth/invites/:token does for a signed-in account.
+      const a = run('gk', async (trx) => {
+        await started
+        await sql`SELECT * FROM redeem_invite('hash-130', 'acct-130')`.execute(trx)
+      })
+      await a.pid // A's transaction, and so its now(), has started.
+      const b = run('own', (trx) => removeMember(trx, 'w1', own, 'adm'))
+      await untilBlocked(b) // At the gate, holding the expired invite.
+      go()
+      await untilBlocked(a) // On the invite row.
+      await open()
+      const [removed, redeemed] = await Promise.all([b.done, a.done])
+      expect(removed).toEqual({ ok: true })
+      expect(redeemed.ok).toBe(false)
+      if (!redeemed.ok) expect((redeemed.error as { code?: unknown }).code).toBe('16B01')
+    } finally {
+      await open()
+    }
+    // The log names the invite as expired, and it is: unused, and nobody joined with it.
+    expect(await removalDetail()).toMatchObject({ expiredInvites: ['inv-130'] })
+    const invite = await db
+      .selectFrom('invite')
+      .select(['used_at', sql<boolean>`expires_at = created_at`.as('ended')])
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'inv-130')
+      .executeTakeFirstOrThrow()
+    expect(invite).toEqual({ used_at: null, ended: true })
+    const joined = await db
+      .selectFrom('principal')
+      .select('id')
+      .where('account_id', '=', 'acct-130')
+      .execute()
+    expect(joined).toEqual([])
+  })
+})
+
 describe('concurrent access changes (#92)', () => {
   it('an owner revokes a key while another owner changes a member role', async () => {
     const keyId = await newKey()

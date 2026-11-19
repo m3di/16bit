@@ -248,9 +248,12 @@ export async function removeMember(
       .execute()
     // After the UPDATE above, which waited for every in-flight invite insert by the target
     // (their foreign key holds the target FOR KEY SHARE), so this statement sees them all.
+    // Ended at created_at, not now(): a redeem waiting on the invite row compares expires_at
+    // with its own transaction's start, which can be earlier than ours but never earlier than
+    // the invite's creation, since the token only exists from then (#130).
     const invites = await trx
       .updateTable('invite')
-      .set({ expires_at: sql`now()` })
+      .set({ expires_at: sql`created_at` })
       .where('workspace_id', '=', workspaceId)
       .where('created_by', '=', targetId)
       .where('used_at', 'is', null)
