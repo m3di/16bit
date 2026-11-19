@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Item } from '@16bit/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ShellUser from '../../session/ShellUser.vue'
 import { useSession } from '../../session/session.ts'
@@ -15,7 +15,14 @@ import { useItems } from '../hub/useItems.ts'
 import { usePrincipals } from '../hub/usePrincipals.ts'
 import ItemBody from './ItemBody.vue'
 import ItemState from './ItemState.vue'
-import { expandFor, folderLink, itemPageLink, pageState } from './item-page.ts'
+import {
+  afterExpandRead,
+  expandFor,
+  folderLink,
+  itemPageLink,
+  malformedItemId,
+  pageState,
+} from './item-page.ts'
 import { useBacklinks } from './useBacklinks.ts'
 
 const { workspaceId, itemId } = defineProps<{ workspaceId: string; itemId: string }>()
@@ -64,6 +71,12 @@ const shown = ref(false)
 async function locate() {
   shown.value = false
   located.value = { state: 'loading' }
+  // An ID the API would refuse with a 400 can never load, so it is not found, not an error.
+  const malformed = malformedItemId(itemId)
+  if (malformed) {
+    located.value = malformed
+    return
+  }
   const result = await items.openItem(itemId)
   located.value = result
   if (result.state === 'ready') directory.ensure([result.data.hubId])
@@ -73,7 +86,11 @@ watch(
   async (d) => {
     if (!d || shown.value || located.value.state !== 'ready') return
     const expand = expandFor(folderColumns(d, located.value.data.folderId))
-    if (expand.length > 0) await items.readItem(itemId, expand)
+    if (expand.length > 0) {
+      // Deleted or hidden since the first read: show that, not the first copy as if live.
+      located.value = afterExpandRead(located.value, await items.readItem(itemId, expand))
+      if (located.value.state !== 'ready') return
+    }
     shown.value = true
     void backlinks.load()
   },
@@ -130,6 +147,12 @@ async function confirmDelete() {
     deleteError.value = result.message
   }
 }
+// After a refused delete the page turns read-only and the Delete button that opened the dialog
+// is gone, so focus would drop to the page when the dialog closes. It goes to the note instead.
+const body = useTemplateRef<InstanceType<typeof ItemBody>>('body')
+function dialogClosed() {
+  if (readOnly.value) body.value?.focusReadOnly()
+}
 const deleteLabel = computed(() => {
   const item = items.view(itemId)
   return item && description.value ? displayId(description.value, item) : 'this item'
@@ -155,6 +178,7 @@ const deleteLabel = computed(() => {
       <ItemState :page="page" @retry="retry">
         <template #default="{ item, hub }">
           <ItemBody
+            ref="body"
             :workspace-id="workspaceId"
             :item="item"
             :hub="hub"
@@ -181,6 +205,7 @@ const deleteLabel = computed(() => {
       :busy="deleting"
       :error="deleteError"
       @confirm="confirmDelete"
+      @close="dialogClosed"
     />
   </AppShell>
 </template>

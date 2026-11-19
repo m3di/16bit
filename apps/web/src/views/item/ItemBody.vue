@@ -6,7 +6,7 @@ import {
   type Item,
   type ItemValues,
 } from '@16bit/core'
-import { computed, ref, useId } from 'vue'
+import { computed, ref, useId, useTemplateRef } from 'vue'
 import { RouterLink } from 'vue-router'
 import { BaseButton, FormNotice } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -58,6 +58,10 @@ const detailsId = useId()
 const title = computed(() => itemTitle(item, hub))
 const label = computed(() => displayId(hub, item))
 const folder = computed(() => itemFolder(hub, item))
+
+// The page moves focus here when the Delete button it came from is gone (a refused delete).
+const readOnlyNote = useTemplateRef<HTMLElement>('readOnlyNote')
+defineExpose({ focusReadOnly: () => readOnlyNote.value?.focus() })
 
 const errors = ref<Record<string, string>>({})
 
@@ -112,7 +116,13 @@ function commit(attributeId: string, value: ItemValues[string]) {
           {{ label }}
         </h1>
       </div>
-      <p v-if="readOnly" class="m-0 text-secondary text-ink3" data-read-only>
+      <p
+        v-if="readOnly"
+        ref="readOnlyNote"
+        tabindex="-1"
+        class="m-0 text-secondary text-ink3"
+        data-read-only
+      >
         You can view this item but not change it.
       </p>
       <BaseButton v-else danger data-delete-item @click="emit('delete')">Delete item</BaseButton>

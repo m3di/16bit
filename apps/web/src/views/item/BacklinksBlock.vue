@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Backlink } from '@16bit/core'
 import { computed, useId, watchEffect } from 'vue'
-import { BaseButton, RelationChip, StateBlock } from '../../ui/index.ts'
+import { BaseButton, FormNotice, RelationChip, StateBlock } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import { useValueContext } from '../hub/context.ts'
 import { readableTarget } from '../hub/relations.ts'
@@ -77,9 +77,9 @@ const note = computed(() => (list.state === 'ready' ? hiddenNote(list.data.hidde
         </li>
       </ul>
       <p v-if="note" class="m-0 text-secondary text-ink3" data-backlinks-hidden>{{ note }}</p>
-      <p v-if="list.data.moreError" class="m-0 text-secondary text-danger">
+      <FormNotice v-if="list.data.moreError" data-backlinks-more-error>
         More links could not be loaded. {{ list.data.moreError.message }}
-      </p>
+      </FormNotice>
       <div v-if="list.data.nextCursor">
         <BaseButton size="sm" :disabled="list.data.more" @click="$emit('more')">{{
           list.data.more ? 'Loading…' : 'Show more'
