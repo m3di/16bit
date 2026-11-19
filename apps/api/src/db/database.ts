@@ -180,6 +180,14 @@ export interface DeletedHubTable {
   deleted_by: string
 }
 
+export interface DeletedAttributeTable {
+  workspace_id: string
+  id: string
+  hub_id: string
+  deleted_at: Generated<Timestamp>
+  deleted_by: string | null
+}
+
 export interface Database {
   account: AccountTable
   session: SessionTable
@@ -197,6 +205,7 @@ export interface Database {
   hub_grant: HubGrantTable
   access_log: AccessLogTable
   deleted_hub: DeletedHubTable
+  deleted_attribute: DeletedAttributeTable
 }
 
 // bigint (int8) columns hold versions, counters, and sequence numbers, all far below 2^53.

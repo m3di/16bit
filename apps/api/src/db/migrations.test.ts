@@ -12,6 +12,7 @@ const TABLES = [
   'account',
   'agent_key',
   'attribute',
+  'deleted_attribute',
   'deleted_hub',
   'folder',
   'folder_attribute',
@@ -115,6 +116,7 @@ describe('migrations', () => {
       '0008_row_level_security',
       '0009_schema_writes',
       '0010_invite_update_owner',
+      '0011_deleted_attribute',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -674,6 +676,8 @@ describe('0006_link', () => {
     expect(await tables()).toContain('link')
 
     await sql`DELETE FROM attribute WHERE id = 'rel'`.execute(db)
+    // The tombstone (#133) would hold 0011 back; that is tested under 0011.
+    await sql`DELETE FROM deleted_attribute`.execute(db)
     const { error } = await migrator.migrateTo('0005_agent_key_lookup')
     expect(error).toBeUndefined()
     expect(await tables()).not.toContain('link')
@@ -778,7 +782,11 @@ describe('0009_schema_writes', () => {
         VALUES ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1');
     `.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0009_schema_writes', '0010_invite_update_owner'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0009_schema_writes',
+      '0010_invite_update_owner',
+      '0011_deleted_attribute',
+    ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
     ])
@@ -825,9 +833,63 @@ describe('0010_invite_update_owner', () => {
   it('applies after 0009 and migrates back down to the 0008 policy', async () => {
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
     const before = await policy()
-    expect(await migrateToLatest(db)).toEqual(['0010_invite_update_owner'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0010_invite_update_owner',
+      '0011_deleted_attribute',
+    ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
     expect(await policy()).toBe(before)
+  })
+})
+
+describe('0011_deleted_attribute', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+
+  it('backfills the attributes revisions name that no longer exist, and migrates back down', async () => {
+    expect((await migrator().migrateTo('0010_invite_update_owner')).error).toBeUndefined()
+    await seedHub()
+    // `live` still exists; `gone` (in two revisions) and `old` were deleted before 0011. The
+    // delete revision and a patch without values name no attribute.
+    await sql`
+      INSERT INTO attribute (workspace_id, id, hub_id, name, type)
+        VALUES ('w1', 'live', 'h1', 'Live', 'text'), ('w1', 'gone', 'h1', 'Gone', 'text'),
+               ('w1', 'old', 'h2', 'Old', 'number');
+      INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES
+        ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{"live":"a","gone":"b"}}', 'p1'),
+        ('w1', 2, 'i1', 'h1', 2, '{"op":"update","values":{"gone":null}}', 'p1'),
+        ('w1', 3, 'i2', 'h2', 1, '{"op":"create","folderId":"h2","values":{"old":1}}', 'p1'),
+        ('w1', 4, 'i2', 'h2', 2, '{"op":"delete"}', 'p1');
+      DELETE FROM attribute WHERE id IN ('gone', 'old');
+    `.execute(db)
+
+    expect(await migrateToLatest(db)).toEqual(['0011_deleted_attribute'])
+    const backfilled = await db
+      .selectFrom('deleted_attribute')
+      .select(['workspace_id', 'id', 'hub_id', 'deleted_by'])
+      .orderBy('id')
+      .execute()
+    expect(backfilled).toEqual([
+      { workspace_id: 'w1', id: 'gone', hub_id: 'h1', deleted_by: null },
+      { workspace_id: 'w1', id: 'old', hub_id: 'h2', deleted_by: null },
+    ])
+    await expect(
+      sql`INSERT INTO attribute (workspace_id, id, hub_id, name, type)
+          VALUES ('w1', 'old', 'h1', 'Again', 'text')`.execute(db),
+    ).rejects.toMatchObject({ code: '23505' })
+
+    // Down refuses while a tombstone exists.
+    const blocked = await migrator().migrateTo('0010_invite_update_owner')
+    expect(String(blocked.error)).toMatch(/attributes have been deleted/)
+    expect(await tables()).toContain('deleted_attribute')
+
+    await sql`DELETE FROM deleted_attribute`.execute(db)
+    expect((await migrator().migrateTo('0010_invite_update_owner')).error).toBeUndefined()
+    expect(await tables()).not.toContain('deleted_attribute')
+    // The triggers are gone with it: an attribute deletes and its ID comes back.
+    await sql`DELETE FROM attribute WHERE id = 'live'`.execute(db)
+    await sql`INSERT INTO attribute (workspace_id, id, hub_id, name, type)
+              VALUES ('w1', 'live', 'h1', 'Live', 'number')`.execute(db)
   })
 })

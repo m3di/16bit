@@ -525,6 +525,12 @@ describe('demo seed', () => {
         .where('workspace_id', '=', 'demo')
         .where('id', '=', 'launch-design')
         .execute()
+      // Before #91 the attribute never existed, so it was never deleted either (#133).
+      await trx
+        .deleteFrom('deleted_attribute')
+        .where('workspace_id', '=', 'demo')
+        .where('id', '=', 'launch-design')
+        .execute()
     })
     const items = () =>
       db
@@ -693,6 +699,75 @@ describe('demo seed', () => {
     const counts = await tableCounts()
     await applySeed(db)
     expect(await tableCounts()).toEqual(counts)
+  }, 60_000)
+
+  it('does not bring back an attribute deleted through the API, and new items leave it out (#133)', async () => {
+    // An item in the hub folder itself that has a value for the attribute.
+    const stored = await db
+      .selectFrom('item')
+      .select(['id', 'values'])
+      .where('workspace_id', '=', 'acme')
+      .where('folder_id', '=', 'operations')
+      .where(sql<boolean>`${sql.ref('values')} ? 'ops-recurring'`)
+      .orderBy('id')
+      .limit(1)
+      .executeTakeFirstOrThrow()
+
+    // As the API deletes it: detached from every folder, then deleted, by a hub admin.
+    await db.transaction().execute(async (trx) => {
+      await sql`SELECT set_config('app.workspace_id', 'acme', true),
+                       set_config('app.principal_id', ${ACTOR}, true)`.execute(trx)
+      await trx
+        .deleteFrom('folder_attribute')
+        .where('workspace_id', '=', 'acme')
+        .where('attribute_id', '=', 'ops-recurring')
+        .execute()
+      await trx
+        .deleteFrom('attribute')
+        .where('workspace_id', '=', 'acme')
+        .where('id', '=', 'ops-recurring')
+        .execute()
+      // And that item, so the next run creates it again.
+      await trx
+        .deleteFrom('revision')
+        .where('workspace_id', '=', 'acme')
+        .where('item_id', '=', stored.id)
+        .execute()
+      await trx
+        .deleteFrom('item')
+        .where('workspace_id', '=', 'acme')
+        .where('id', '=', stored.id)
+        .execute()
+      await trx
+        .updateTable('folder')
+        .set({ item_count: sql`item_count - 1` })
+        .where('workspace_id', '=', 'acme')
+        .where('id', '=', 'operations')
+        .execute()
+    })
+
+    const result = await applySeed(db)
+    expect(result.itemsCreated).toBe(1)
+    const attribute = await db
+      .selectFrom('attribute')
+      .select('id')
+      .where('workspace_id', '=', 'acme')
+      .where('id', '=', 'ops-recurring')
+      .executeTakeFirst()
+    expect(attribute).toBeUndefined()
+    const again = await db
+      .selectFrom('item')
+      .select('values')
+      .where('workspace_id', '=', 'acme')
+      .where('id', '=', stored.id)
+      .executeTakeFirstOrThrow()
+    // The other values are drawn as before.
+    const rest = Object.fromEntries(
+      Object.entries(stored.values as Record<string, unknown>).filter(
+        ([key]) => key !== 'ops-recurring',
+      ),
+    )
+    expect(again.values).toEqual(rest)
   }, 60_000)
 })
 
