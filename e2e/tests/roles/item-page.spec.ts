@@ -197,14 +197,90 @@ test('a hidden or missing item reads as not available', async ({ as, pageAs }) =
   const item = await owner.createItem(h.hubId, { [h.title]: name })
 
   const page = await pageAs('leo')
-  for (const id of [item.id, crypto.randomUUID()]) {
+  // A malformed ID (#145) can never load, so it is not available too, with no retry.
+  for (const id of [item.id, crypto.randomUUID(), encodeURIComponent('not an id!')]) {
     await page.goto(itemPath(id))
     await expect(page.getByText('This item is not available')).toBeVisible()
     await expect(
       page.getByText('It may not exist, or it may not be shared with you.'),
     ).toBeVisible()
     await expect(page.getByText(name)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0)
   }
+})
+
+test('an item gone between its two reads reads as not available (#145)', async ({ as, pageAs }) => {
+  const owner = as('owner')
+  const h = await buildHub(owner)
+  const name = uniqueTitle('vanishing')
+  const item = await owner.createItem(h.hubId, { [h.title]: name })
+
+  const page = await pageAs('owner')
+  // The first read finds it; it is deleted before the read with expand answers.
+  const expandRead = (url: URL) =>
+    url.pathname.endsWith(`/items/${item.id}`) && url.searchParams.has('expand')
+  await page.route(expandRead, async (route) => {
+    await expectStatus(await owner.delete(`/items/${item.id}?version=1`), 204)
+    await route.continue()
+  })
+  await page.goto(itemPath(item.id))
+  await expect(page.getByText('This item is not available')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name })).toHaveCount(0)
+})
+
+test('a deleted linked item drops out of the relation (#145)', async ({ as, pageAs }) => {
+  const owner = as('owner')
+  const h = await buildHub(owner)
+  const kept = await owner.createItem('design', { [DESIGN_TITLE]: uniqueTitle('kept') })
+  const goneTitle = uniqueTitle('deleted')
+  const gone = await owner.createItem('design', { [DESIGN_TITLE]: goneTitle })
+  const item = await owner.createItem(h.hubId, {
+    [h.title]: uniqueTitle('links'),
+    [h.refs]: [kept.id, gone.id],
+  })
+  await expectStatus(await owner.delete(`/items/${gone.id}?version=${String(gone.version)}`), 204)
+
+  const page = await pageAs('owner')
+  await page.goto(itemPath(item.id))
+  const refs = page.getByRole('list', { name: 'Refs' })
+  await expect(refs.getByRole('link', { name: kept.values[DESIGN_TITLE] as string })).toBeVisible()
+  await expect(refs.locator(`[data-linked="${gone.id}"]`)).toHaveCount(0)
+  await expect(page.getByText(goneTitle)).toHaveCount(0)
+})
+
+test('after a refused delete, closing the dialog puts focus on the read-only note (#145)', async ({
+  as,
+  pageAs,
+}) => {
+  const owner = as('owner')
+  const h = await buildHub(owner)
+  const item = await owner.createItem(h.hubId, { [h.title]: uniqueTitle('refused') })
+
+  const page = await pageAs('owner')
+  // The owner's role changes on the server while the page is open: the delete gets a 403.
+  await page.route(
+    (url) => url.pathname.endsWith(`/items/${item.id}`),
+    (route) =>
+      route.request().method() === 'DELETE'
+        ? route.fulfill({
+            status: 403,
+            json: { error: 'forbidden', message: 'You cannot change items in this hub.' },
+          })
+        : route.continue(),
+  )
+  await page.goto(itemPath(item.id))
+  await page.getByRole('button', { name: 'Delete item' }).focus()
+  await page.keyboard.press('Enter')
+  const dialog = page.getByRole('dialog', { name: `Delete ITP-${String(item.seqId)}?` })
+  await dialog.getByRole('button', { name: 'Delete item' }).click()
+  await expect(dialog.getByRole('alert')).toContainText('was not deleted')
+  // The page turned read-only behind the dialog, so the button that opened it is gone.
+  await expect(page.locator('[data-delete-item]')).toHaveCount(0)
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('[data-read-only]')).toBeFocused()
+  await expectStatus(await owner.get(`/items/${item.id}`), 200)
 })
 
 test('an editor deletes an item after confirming; a stale version is refused', async ({

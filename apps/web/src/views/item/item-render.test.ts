@@ -158,6 +158,8 @@ describe('ItemBody', () => {
   it('is read-only without Delete for a reader who cannot change items', async () => {
     const html = await body({ readOnly: true })
     expect(html).toContain('data-read-only')
+    // Focus moves to the note after a refused delete removes the button (#145).
+    expect(html).toMatch(/<p[^>]*tabindex="-1"[^>]*data-read-only/)
     expect(html).not.toContain('data-delete-item')
     expect(html).toContain('You can view this but not change it.')
     expect(html).toMatch(/<input[^>]*disabled/)
@@ -207,6 +209,17 @@ describe('BacklinksBlock', () => {
 
   it('offers more when there is another page', async () => {
     expect(await links(readyLinks([], 0, 'c1'))).toContain('Show more')
+  })
+
+  it('announces when more links could not be loaded, keeping the ones it has (#145)', async () => {
+    const list = readyLinks([{ attributeId: 'title', item: item('a', 3) }], 0, 'c1')
+    if (list.state === 'ready') {
+      list.data.moreError = new ApiRequestError('internal', 'Down', 500)
+    }
+    const html = await links(list)
+    expect(html).toMatch(/role="alert"[^>]*>[\s\S]*More links could not be loaded\.[\s\S]*Down/)
+    expect(html).toContain('data-backlink="a"')
+    expect(html).toContain('Show more')
   })
 
   it('shows loading and error states', async () => {
