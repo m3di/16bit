@@ -221,6 +221,9 @@ describe('GET /v1/workspaces/:workspaceId/invites', () => {
     expect((await list('own', '?cursor=not-a-cursor')).statusCode).toBe(400)
     const wrongShape = Buffer.from(JSON.stringify(['yesterday', 'x'])).toString('base64url')
     expect((await list('own', `?cursor=${wrongShape}`)).statusCode).toBe(400)
+    // Date.parse accepts it, Postgres would not: a 400, not a 500.
+    const notIso = Buffer.from(JSON.stringify(['hello 2020', 'x'])).toString('base64url')
+    expect((await list('own', `?cursor=${notIso}`)).statusCode).toBe(400)
   })
 })
 

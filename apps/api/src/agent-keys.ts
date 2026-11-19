@@ -175,7 +175,8 @@ export async function createAgentKey(
   })
 }
 
-const keyCursorSchema = z.tuple([z.string().min(1).max(64), z.string().min(1).max(64)])
+// Always written as ISO with `Z`. Date.parse would accept strings Postgres rejects (a 500).
+const keyCursorSchema = z.tuple([z.iso.datetime(), z.string().min(1).max(64)])
 
 /** A hub's keys, newest first, revoked and expired ones included. */
 export async function listAgentKeys(
@@ -198,7 +199,6 @@ export async function listAgentKeys(
     .where('g.hub_id', '=', hubId)
   if (cursor) {
     const [at, id] = decodeCursor(keyCursorSchema, cursor)
-    if (Number.isNaN(Date.parse(at))) throw new HttpError('invalid_request', 'Invalid cursor')
     q = q.where(sql<boolean>`(k.created_at, k.principal_id) < (${at}::timestamptz, ${id})`)
   }
   const rows = await q

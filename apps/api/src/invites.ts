@@ -32,7 +32,8 @@ const toInvite = (
   expiresAt: row.expires_at.toISOString(),
 })
 
-const inviteCursorSchema = z.tuple([z.string().min(1).max(64), z.string().min(1).max(64)])
+// Always written as ISO with `Z`. Date.parse would accept strings Postgres rejects (a 500).
+const inviteCursorSchema = z.tuple([z.iso.datetime(), z.string().min(1).max(64)])
 
 /** Pending invites (not used, not expired, not revoked), newest first. */
 export async function listInvites(
@@ -56,7 +57,6 @@ export async function listInvites(
     .where('expires_at', '>', sql<Date>`now()`)
   if (cursor) {
     const [at, id] = decodeCursor(inviteCursorSchema, cursor)
-    if (Number.isNaN(Date.parse(at))) throw new HttpError('invalid_request', 'Invalid cursor')
     q = q.where(sql<boolean>`(created_at, id) < (${at}::timestamptz, ${id})`)
   }
   const rows = await q
@@ -88,7 +88,8 @@ export async function revokeInvite(
   actor: Subject,
   inviteId: string,
 ): Promise<void> {
-  // Before any row is read or locked: members, viewers, finance and agents stop here.
+  // Before any row is read or locked: members, viewers, finance and agents stop here. Whoever
+  // may list invites may manage them; the invite's own role is checked once it is read.
   enforce(can(actor, 'invite.list'), 'Invite')
   await inTransaction(db, async (trx) => {
     const self = await trx
