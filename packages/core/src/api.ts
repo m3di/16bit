@@ -3,6 +3,7 @@ import {
   attributeSchema,
   folderAttributeSchema,
   folderSchema,
+  hubSchema,
   idSchema,
   itemSchema,
   principalSchema,
@@ -113,7 +114,8 @@ export type SetHubGrant = z.infer<typeof setHubGrantSchema>
 
 /** `GET /v1/workspaces/:workspaceId/hubs/:hubId`: a hub with its folders and attributes. */
 export const hubDescriptionSchema = z.strictObject({
-  hub: folderSchema,
+  /** The hub, with its title attribute (D50). */
+  hub: hubSchema,
   /**
    * The caller's effective role in this hub: their grant capped by their workspace role
    * (docs/ROLES.md), as in the hub list. Lets a client show read-only states before a 403.

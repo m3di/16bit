@@ -16,7 +16,7 @@ import { hubExists, ownGrant } from './access.ts'
 import { appendAccessLog } from './access-log.ts'
 import type { Database } from './db/database.ts'
 import { inTransaction } from './db/scope.ts'
-import { decodeCursor, encodeCursor, enforce, HttpError, notFound } from './http.ts'
+import { decodeCursor, encodeCursor, enforce, HttpError, notFound, sqlState } from './http.ts'
 import { toFolder } from './mappers.ts'
 
 // Members, hub grants and hub creation (#43, docs/ROLES.md). Every change is an access change,
@@ -392,6 +392,11 @@ export async function createHub(
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .returningAll()
       .executeTakeFirst()
+      // hub_id_check (migration 0009): a deleted hub had this ID (D52).
+      .catch((error: unknown) => {
+        if (sqlState(error) === '23505') return undefined
+        throw error
+      })
     if (!row) throw new HttpError('id_taken', 'This folder ID is already used')
     await trx
       .insertInto('hub_grant')

@@ -3,7 +3,16 @@ import { attributeSchema, type Attribute } from './entities.ts'
 import { boundedFilterSchema, compileItemQuery, indexEntries, sortSchema } from './query.ts'
 
 const attr = (id: string, type: string, config: object = {}, indexed = true): Attribute =>
-  attributeSchema.parse({ workspaceId: 'w', id, hubId: 'h', name: id, type, config, indexed })
+  attributeSchema.parse({
+    workspaceId: 'w',
+    id,
+    hubId: 'h',
+    name: id,
+    type,
+    config,
+    indexed,
+    version: 0,
+  })
 
 const stage = attr('stage', 'select', {
   options: [

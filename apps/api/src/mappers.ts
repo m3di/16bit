@@ -3,6 +3,7 @@ import {
   type Attribute,
   type Folder,
   type FolderAttribute,
+  type Hub,
   type Item,
   type PaletteColor,
   type Workspace,
@@ -37,6 +38,12 @@ export const toFolder = (row: Selectable<FolderTable>): Folder => ({
   version: row.version,
 })
 
+/** A hub row with its title attribute (D50). Only for rows with no parent. */
+export const toHub = (row: Selectable<FolderTable>): Hub => {
+  if (row.parent_id !== null) throw new Error(`folder ${row.id} is not a hub`)
+  return { ...toFolder(row), parentId: null, titleAttributeId: row.title_attribute_id }
+}
+
 /** Parsed, so `config` is typed by `type` and gets its defaults. */
 export const toAttribute = (row: Selectable<AttributeTable>): Attribute =>
   attributeSchema.parse({
@@ -47,6 +54,7 @@ export const toAttribute = (row: Selectable<AttributeTable>): Attribute =>
     type: row.type,
     config: row.config,
     indexed: row.indexed,
+    version: row.version,
   })
 
 export const toFolderAttribute = (row: Selectable<FolderAttributeTable>): FolderAttribute => ({

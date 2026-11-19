@@ -2,7 +2,11 @@ import {
   can,
   changeMemberRoleSchema,
   createAgentKeySchema,
+  createAttributeSchema,
+  createFolderSchema,
   createHubSchema,
+  deleteAttributeQuerySchema,
+  deleteFolderQuerySchema,
   createItemSchema,
   deleteItemQuerySchema,
   getItemQuerySchema,
@@ -10,7 +14,11 @@ import {
   itemQuerySchema,
   pageQuerySchema,
   patchItemSchema,
+  setFolderAttributesSchema,
   setHubGrantSchema,
+  updateAttributeSchema,
+  updateFolderSchema,
+  updateHubSchema,
   effectiveHubRole,
   type HubDescription,
   type HubListEntry,
@@ -44,7 +52,7 @@ import {
   patchItem,
   queryItems,
 } from './items.ts'
-import { toAttribute, toFolder, toFolderAttribute } from './mappers.ts'
+import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
 import {
   changeMemberRole,
   createHub,
@@ -54,6 +62,18 @@ import {
   revokeHubGrant,
   setHubGrant,
 } from './members.ts'
+import {
+  createAttribute,
+  createFolder,
+  deleteAttribute,
+  deleteFolder,
+  deleteHub,
+  listHubGrants,
+  setFolderAttributes,
+  updateAttribute,
+  updateFolder,
+  updateHub,
+} from './schema-writes.ts'
 import { isAppRoute, registerWeb, sendAppShell } from './web.ts'
 
 export interface AppOptions {
@@ -89,6 +109,8 @@ const itemParams = z.object({ workspaceId: idSchema, itemId: idSchema })
 const keyParams = z.object({ workspaceId: idSchema, keyId: idSchema })
 const memberParams = z.object({ workspaceId: idSchema, principalId: idSchema })
 const grantParams = z.object({ workspaceId: idSchema, hubId: idSchema, principalId: idSchema })
+const folderParams = z.object({ workspaceId: idSchema, folderId: idSchema })
+const attributeParams = z.object({ workspaceId: idSchema, attributeId: idSchema })
 
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
@@ -343,7 +365,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
               // Each list is fetched with one extra row, which only says whether it was cut off.
               const subfolders = folders.slice(1)
               return {
-                hub: toFolder(hub),
+                hub: toHub(hub),
                 hubRole,
                 folders: subfolders.slice(0, maxHubEntries).map(toFolder),
                 attributes: attributes.slice(0, maxHubEntries).map(toAttribute),
@@ -444,6 +466,93 @@ export function buildApp(options: AppOptions): FastifyInstance {
             return scoped(request, (trx) =>
               revokeAgentKey(trx, workspaceId, request.principal, keyId),
             )
+          })
+
+          // Schema writes for hub settings (#112, schema-writes.ts).
+
+          ws.patch('/hubs/:hubId', async (request) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const body = parse(updateHubSchema, request.body)
+            return scoped(request, (trx) =>
+              updateHub(trx, workspaceId, request.principal, hubId, body),
+            )
+          })
+
+          ws.delete('/hubs/:hubId', async (request, reply) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const { version } = parse(deleteFolderQuerySchema, request.query)
+            await scoped(request, (trx) =>
+              deleteHub(trx, workspaceId, request.principal, hubId, version),
+            )
+            return reply.status(204).send()
+          })
+
+          ws.get('/hubs/:hubId/grants', async (request) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const query = parse(pageQuerySchema, request.query)
+            return scoped(request, (trx) =>
+              listHubGrants(trx, workspaceId, request.principal, hubId, query),
+            )
+          })
+
+          ws.post('/hubs/:hubId/folders', async (request, reply) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const body = parse(createFolderSchema, request.body)
+            const folder = await scoped(request, (trx) =>
+              createFolder(trx, workspaceId, request.principal, hubId, body),
+            )
+            return reply.status(201).send(folder)
+          })
+
+          ws.patch('/folders/:folderId', async (request) => {
+            const { workspaceId, folderId } = parse(folderParams, request.params)
+            const body = parse(updateFolderSchema, request.body)
+            return scoped(request, (trx) =>
+              updateFolder(trx, workspaceId, request.principal, folderId, body),
+            )
+          })
+
+          ws.delete('/folders/:folderId', async (request, reply) => {
+            const { workspaceId, folderId } = parse(folderParams, request.params)
+            const { version } = parse(deleteFolderQuerySchema, request.query)
+            await scoped(request, (trx) =>
+              deleteFolder(trx, workspaceId, request.principal, folderId, version),
+            )
+            return reply.status(204).send()
+          })
+
+          ws.put('/folders/:folderId/attributes', async (request) => {
+            const { workspaceId, folderId } = parse(folderParams, request.params)
+            const body = parse(setFolderAttributesSchema, request.body)
+            return scoped(request, (trx) =>
+              setFolderAttributes(trx, workspaceId, request.principal, folderId, body),
+            )
+          })
+
+          ws.post('/hubs/:hubId/attributes', async (request, reply) => {
+            const { workspaceId, hubId } = parse(hubParams, request.params)
+            const body = parse(createAttributeSchema, request.body)
+            const attribute = await scoped(request, (trx) =>
+              createAttribute(trx, workspaceId, request.principal, hubId, body),
+            )
+            return reply.status(201).send(attribute)
+          })
+
+          ws.patch('/attributes/:attributeId', async (request) => {
+            const { workspaceId, attributeId } = parse(attributeParams, request.params)
+            const body = parse(updateAttributeSchema, request.body)
+            return scoped(request, (trx) =>
+              updateAttribute(trx, workspaceId, request.principal, attributeId, body),
+            )
+          })
+
+          ws.delete('/attributes/:attributeId', async (request, reply) => {
+            const { workspaceId, attributeId } = parse(attributeParams, request.params)
+            const query = parse(deleteAttributeQuerySchema, request.query)
+            await scoped(request, (trx) =>
+              deleteAttribute(trx, workspaceId, request.principal, attributeId, query),
+            )
+            return reply.status(204).send()
           })
 
           wsDone()
