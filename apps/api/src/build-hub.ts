@@ -8,6 +8,7 @@ import { ensureHubAdmin } from './access-log.ts'
 import { DEV_OWNER, ensureDevAccounts, linkDevAccount } from './dev-accounts.ts'
 import { HttpError } from './http.ts'
 import { createItem, patchItem } from './items.ts'
+import { seedHubTitle } from './seed-hub-title.ts'
 
 // `pnpm seed:build-hub`: imports this repository's GitHub issues into a local "Build" hub,
 // one item per issue. Items are written through the same path as the API (validation with
@@ -129,7 +130,9 @@ export function toValues(issue: GhIssue): ItemValues {
 
 /**
  * Creates the workspace, principals, hub, and attributes if missing. Existing rows are kept,
- * except attribute names and configs, which the importer owns and brings up to date. The dev
+ * except attribute names and configs, which the importer owns and brings up to date. `Title` is
+ * the hub's title attribute (D50) unless the hub was edited through the API (seed-hub-title.ts):
+ * a title a hub admin changed or cleared stays. The dev
  * owner (dev-accounts.ts) owns the workspace and can sign in to see the hub.
  */
 export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
@@ -157,7 +160,7 @@ export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .execute()
     if (accountId !== undefined) await linkDevAccount(trx, ws, ownerId, accountId)
-    await trx
+    const created = await trx
       .insertInto('folder')
       .values({
         workspace_id: ws,
@@ -169,7 +172,8 @@ export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
         id_prefix: BUILD_HUB.idPrefix,
       })
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
-      .execute()
+      .returning('id')
+      .executeTakeFirst()
     await trx
       .insertInto('attribute')
       .values(
@@ -203,6 +207,8 @@ export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
       )
       .onConflict((oc) => oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing())
       .execute()
+    // The issue title is the item title (D50), set only on a hub nobody has edited (#120).
+    await seedHubTitle(trx, ws, BUILD_HUB.id, ATTR.title, created !== undefined)
     await ensureHubAdmin(trx, ws, BUILD_HUB.id, ownerId)
   })
 }
