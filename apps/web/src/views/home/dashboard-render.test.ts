@@ -19,6 +19,11 @@ const router = () =>
         name: 'hub',
         component: { render: () => null },
       },
+      {
+        path: '/w/:workspaceId/settings/members',
+        name: 'workspace-members',
+        component: { render: () => null },
+      },
     ],
   })
 
@@ -142,13 +147,23 @@ describe('WorkspaceSection', () => {
     expect(html).toMatch(/<a [^>]*href="\/w\/w\/hubs\/eng"/)
   })
 
+  it('links to the workspace members page, named with the workspace', async () => {
+    const states: WorkspaceEntry['hubs'][] = [{ state: 'ready', data: [] }, { state: 'loading' }]
+    for (const hubs of states) {
+      const html = await render(WorkspaceSection, { entry: entry(hubs) })
+      expect(html).toMatch(
+        /<a [^>]*href="\/w\/w\/settings\/members"[^>]*>Members and roles<span class="sr-only"> of Parcel Tracker<\/span><\/a>/,
+      )
+    }
+  })
+
   it('shows hubs without a grant as "no access" cards next to the others', async () => {
     const html = await render(WorkspaceSection, {
       entry: entry({ state: 'ready', data: [hub, hidden] }),
     })
     expect(html.match(/data-hub-card/g)).toHaveLength(2)
     expect(html.match(/data-no-access/g)).toHaveLength(1)
-    expect(html.match(/<a /g)).toHaveLength(1)
+    expect(html.match(/<a [^>]*href="\/w\/w\/hubs\//g)).toHaveLength(1)
     expect(html).toContain('1,280 items')
     expect(html).toContain('Finance')
     expect(html).toContain('No access')

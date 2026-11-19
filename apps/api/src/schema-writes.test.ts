@@ -1004,6 +1004,25 @@ describe('deleting attributes', () => {
     expect((await person('ha', 'DELETE', '/attributes/notes?version=0')).statusCode).toBe(204)
   })
 
+  it('never gives the ID of a deleted attribute to a new one, in any hub or type (#133)', async () => {
+    expect((await person('ha', 'DELETE', '/attributes/notes?version=0')).statusCode).toBe(204)
+    for (const [hub, type] of [
+      ['build', 'text'],
+      ['build', 'number'],
+      ['docs', 'boolean'],
+    ] as const) {
+      const again = await person('own', 'POST', `/hubs/${hub}/attributes`, {
+        id: 'notes',
+        name: 'Notes',
+        type,
+        config: {},
+      })
+      expect(again.statusCode, `${hub} ${type}: ${again.body}`).toBe(409)
+      expect(again.json()).toMatchObject({ error: 'id_taken' })
+    }
+    expect(await attributeRow('notes')).toBeUndefined()
+  })
+
   it('refuses lower roles', async () => {
     expect((await person('ed', 'DELETE', '/attributes/notes?version=0')).statusCode).toBe(403)
     expect((await person('out', 'DELETE', '/attributes/notes?version=0')).statusCode).toBe(404)

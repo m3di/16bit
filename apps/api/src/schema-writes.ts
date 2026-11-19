@@ -632,6 +632,11 @@ export async function createAttribute(
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .returningAll()
       .executeTakeFirst()
+      // attribute_id_check (migration 0011): a deleted attribute had this ID (#133).
+      .catch((error: unknown) => {
+        if (sqlState(error) === '23505') return undefined
+        throw error
+      })
     if (!row) throw new HttpError('id_taken', 'This attribute ID is already used')
     return toAttribute(row)
   } catch (error) {
