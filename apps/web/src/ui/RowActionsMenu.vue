@@ -90,6 +90,8 @@ function hide(returnFocus = false) {
 // or resize that leaves the button where it was cannot have moved it: the late scroll event from
 // focusing a button below the fold arrives a frame after Enter opened the menu (issue 157). Then the
 // menu stays, placed again in case the viewport changed size.
+// Not covered: under `scroll-behavior: smooth` the focus scroll is still animating when the menu
+// is placed, so the next frame moves the button and closes the menu. Nothing here sets it today.
 function onViewportChange() {
   const b = button.value?.getBoundingClientRect()
   if (!b || !placedAt || anchorMoved(placedAt, b)) hide()
