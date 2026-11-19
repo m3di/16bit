@@ -541,6 +541,7 @@ describe('0002_item_index', () => {
           ...a,
           workspaceId: 'w1',
           hubId: 'h1',
+          version: 0,
           name: a.id,
         })
         for (const e of indexEntries(attribute, value as string | number | boolean)) {

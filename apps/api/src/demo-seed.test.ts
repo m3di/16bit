@@ -769,6 +769,21 @@ describe('demo seed', () => {
     )
     expect(again.values).toEqual(rest)
   }, 60_000)
+
+  it('does not bring back a hub deleted through the API (#133)', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/v1/workspaces/acme/hubs/legal?version=0',
+      headers: auth,
+    })
+    expect(res.statusCode, res.body).toBe(204)
+
+    const counts = await tableCounts()
+    const result = await applySeed(db)
+    expect(result.itemsCreated).toBe(0)
+    expect(await tableCounts()).toEqual(counts)
+    expect((await hubs('acme')).map((h) => h.id)).not.toContain('legal')
+  }, 60_000)
 })
 
 async function launchDesignColumns() {

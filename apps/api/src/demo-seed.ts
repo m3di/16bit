@@ -32,8 +32,9 @@ import { createItem } from './items.ts'
 // on and its item_index rows are filled from the stored values. A seeded attribute missing from
 // the database (such as `launch-design`, added in #91) is inserted and added to every folder of
 // its hub, after the columns already there; existing items keep their values. A seeded
-// attribute deleted through the API is not brought back: its ID is in `deleted_attribute`
-// (#133), and new items leave it out. Grants are only added where the principal has none; the
+// hub or attribute deleted through the API is not brought back: its ID is in `deleted_hub` or
+// `deleted_attribute` (#133). New items leave a deleted attribute out, and the grants and agent
+// key on a deleted hub are skipped. Grants are only added where the principal has none; the
 // agent key only on the first run.
 
 /** `indexed`: filled into item_index, so the attribute can be filtered and sorted (D6, D20). */
@@ -545,7 +546,13 @@ export interface SeedResult {
 /** The seed's attributes parsed with the core contract, with the seed-only `required` flag. */
 function hubDefinitions(ws: WorkspaceSeed, hub: HubSeed): FolderAttributeDefinition[] {
   return hub.attributes.map(({ required = false, indexed = false, ...a }) => ({
-    attribute: attributeSchema.parse({ ...a, workspaceId: ws.id, hubId: hub.id, indexed }),
+    attribute: attributeSchema.parse({
+      ...a,
+      workspaceId: ws.id,
+      hubId: hub.id,
+      indexed,
+      version: 0,
+    }),
     required,
   }))
 }
@@ -570,6 +577,7 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
 
   for (const ws of workspaces) {
     let gone = new Set<string>()
+    let hubs: HubSeed[] = []
     await db.transaction().execute(async (trx) => {
       await trx
         .insertInto('workspace')
@@ -601,12 +609,26 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
         if (accountId !== undefined) await linkDevAccount(trx, ws.id, p.id, accountId)
       }
 
-      gone = await deletedAttributes(
+      // Hubs and attributes deleted through the API stay deleted (#133). A relation into a
+      // deleted hub is left out too: attribute_target_lock would refuse it.
+      const goneHubs = await tombstoned(
         trx,
+        'deleted_hub',
         ws.id,
-        ws.hubs.flatMap((hub) => definitionsOf(hub).map(({ attribute }) => attribute.id)),
+        ws.hubs.map((hub) => hub.id),
       )
-      for (const hub of ws.hubs) {
+      hubs = ws.hubs.filter((hub) => !goneHubs.has(hub.id))
+      const attributes = hubs.flatMap((hub) => definitionsOf(hub).map((d) => d.attribute))
+      gone = await tombstoned(
+        trx,
+        'deleted_attribute',
+        ws.id,
+        attributes.map((a) => a.id),
+      )
+      for (const a of attributes) {
+        if (a.type === 'relation' && goneHubs.has(a.config.targetHubId)) gone.add(a.id)
+      }
+      for (const hub of hubs) {
         const folders = flatten(hub, null)
         // Parents come before children, so the parent foreign key is satisfied row by row.
         await trx
@@ -665,15 +687,16 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
         await ensureHubAdmin(trx, ws.id, hub.id, devOwner.id)
       }
       for (const [principalId, hubId, hubRole] of ws.grants) {
+        if (goneHubs.has(hubId)) continue
         await seedHubGrant(trx, ws.id, { hubId, principalId, hubRole }, devOwner.id)
       }
-      if (ws.agentKey) {
+      if (ws.agentKey && !goneHubs.has(ws.agentKey.hubId)) {
         const secret = await seedAgentKey(trx, ws.id, ws.agentKey, devOwner.id)
         if (secret !== null) agentKey = { workspaceId: ws.id, ...ws.agentKey, secret }
       }
     })
 
-    for (const hub of ws.hubs) {
+    for (const hub of hubs) {
       itemsCreated += await seedItems(db, ws, hub, definitionsOf(hub), gone)
     }
   }
@@ -826,17 +849,18 @@ async function seedAgentKey(
 }
 
 /**
- * Which of `ids` were deleted attributes (#133). Bounded by the seed definition. Read as the
- * owner: the API role can't read deleted_attribute.
+ * Which of `ids` were deleted hubs or attributes (#133). Bounded by the seed definition. Read
+ * as the owner: the API role can't read the tombstones.
  */
-async function deletedAttributes(
+async function tombstoned(
   trx: Transaction<Database>,
+  table: 'deleted_hub' | 'deleted_attribute',
   workspaceId: string,
   ids: string[],
 ): Promise<Set<string>> {
   if (ids.length === 0) return new Set()
   const rows = await trx
-    .selectFrom('deleted_attribute')
+    .selectFrom(table)
     .select('id')
     .where('workspace_id', '=', workspaceId)
     .where('id', 'in', ids)
