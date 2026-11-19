@@ -190,7 +190,10 @@ describe('the API role', () => {
       ORDER BY relname
     `.execute(db)
     // Every workspace-scoped table, and only those: account and session stay outside (D46).
-    expect(rows.filter((r) => r.relrowsecurity).map((r) => r.relname)).toEqual([...SCOPED].sort())
+    // deleted_hub (#111) has RLS but no grant to the API role, so it is not in SCOPED.
+    expect(rows.filter((r) => r.relrowsecurity).map((r) => r.relname)).toEqual(
+      [...SCOPED, 'deleted_hub'].sort(),
+    )
     expect(rows.filter((r) => !r.relrowsecurity).map((r) => r.relname)).toEqual([
       'account',
       'session',
