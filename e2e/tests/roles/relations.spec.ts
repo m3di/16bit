@@ -111,6 +111,7 @@ test.describe('links into a hub the reader has no grant on', () => {
     const secret = uniqueTitle('secret design')
     // A year no seeded or e2e item uses, so its absence from Mina's page means something.
     const due = '2041-09-17'
+    const dueShown = 'Sep 17, 2041'
     const design = await as('owner').createItem('design', {
       'design-title': secret,
       'design-due': due,
@@ -161,6 +162,9 @@ test.describe('links into a hub the reader has no grant on', () => {
     expect(html).not.toContain(secret)
     expect(html).not.toMatch(designId)
     expect(html).not.toContain(due)
-    await expect(page.locator('body')).not.toContainText('2041')
+    // The due date as the app shows it, and the year on its own in any other format. The year
+    // must stand alone, so a random title suffix such as `e20416bd` cannot match it (#163).
+    await expect(page.getByText(dueShown)).toHaveCount(0)
+    await expect(page.getByText(/\b2041\b/)).toHaveCount(0)
   })
 })
