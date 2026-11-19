@@ -67,6 +67,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('./views/WorkspaceSettingsView.vue'),
     props: (to) => ({ workspaceId: String(to.params['workspaceId'] ?? '') }),
   },
+  {
+    // An item on its own page. Items are read by ID in the workspace, so the hub and folder
+    // come from the item itself.
+    path: '/w/:workspaceId/items/:itemId',
+    name: 'item',
+    component: () => import('./views/ItemView.vue'),
+  },
 ]
 
 // The component kit is a local tool. It is left out of production builds.

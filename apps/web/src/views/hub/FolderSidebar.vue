@@ -10,6 +10,8 @@ defineProps<{
   tree: Load<FolderEntry[]>
   /** The open folder. */
   folderId: string
+  /** `location` on an item's page: the folder is where the item is, not the page itself. */
+  current?: 'page' | 'location'
 }>()
 </script>
 
@@ -31,7 +33,7 @@ defineProps<{
               folderId: folder.id === folder.hubId ? undefined : folder.id,
             },
           }"
-          :aria-current="folder.id === folderId ? 'page' : undefined"
+          :aria-current="folder.id === folderId ? (current ?? 'page') : undefined"
           class="flex min-h-8 items-center gap-2 rounded-control pr-2 text-ink no-underline hover:bg-selected"
           :class="folder.id === folderId && 'bg-selected font-medium'"
           :style="{ paddingLeft: `${String(8 + depth * 12)}px` }"
