@@ -17,6 +17,11 @@ const render = async (workspaces: Load<WorkspaceEntry[]>) => {
         name: 'hub',
         component: { render: () => null },
       },
+      {
+        path: '/w/:workspaceId/settings/members',
+        name: 'workspace-members',
+        component: { render: () => null },
+      },
     ],
   })
   const app = createSSRApp({ render: () => h(WorkspaceList, { workspaces }) }).use(router)

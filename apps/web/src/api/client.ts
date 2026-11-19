@@ -84,9 +84,12 @@ export function getJson<T>(
   return requestJson('GET', path, undefined, schema, fetchFn, options)
 }
 
-/** POSTs or PATCHes `body` as JSON to `path` and checks the response against `schema`. */
+/**
+ * POSTs, PATCHes or DELETEs `body` as JSON to `path` and checks the response against `schema`.
+ * An `undefined` body sends none, as for a DELETE.
+ */
 export function sendJson<T>(
-  method: 'POST' | 'PATCH',
+  method: 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body: unknown,
   schema: Schema<T>,
