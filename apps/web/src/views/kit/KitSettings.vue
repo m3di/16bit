@@ -6,7 +6,9 @@ import {
   BaseButton,
   BaseDialog,
   BaseInput,
+  BaseSelect,
   ConfirmDialog,
+  DataTable,
   OptionsEditor,
   PalettePicker,
   RowActionsMenu,
@@ -18,6 +20,7 @@ import {
   paletteVar,
   type RowAction,
   type SettingsNavEntry,
+  type TableColumn,
 } from '../../ui/index.ts'
 
 const { theme } = defineProps<{ theme: 'light' | 'dark' }>()
@@ -53,6 +56,30 @@ const memberActions: RowAction[] = [
   { key: 'resend', label: 'Resend invite' },
   { key: 'owner', label: 'Make owner', disabled: true, reason: 'Only the owner can do this' },
   { key: 'remove', label: 'Remove from workspace', danger: true },
+]
+
+// Static table: rows are never selected; the role and actions cells hold controls and wrap.
+const staticColumns: TableColumn[] = [
+  { key: 'name', label: 'Name', rowHeader: true, wrap: true },
+  { key: 'role', label: 'Role', wrap: true },
+  { key: 'hubs', label: 'Hubs' },
+  { key: 'actions', label: 'Actions', labelHidden: true, align: 'end', shrink: true },
+]
+const staticRows = ref([
+  { id: 'm1', name: 'Priya', role: 'admin', hubs: 'All hubs', locked: '' },
+  { id: 'm2', name: 'Kofi', role: 'member', hubs: 'Engineering, Roadmap', locked: '' },
+  {
+    id: 'm3',
+    name: 'Sara',
+    role: 'owner',
+    hubs: 'All hubs, including the ones made after today, which is a long list to read',
+    locked: 'The only owner',
+  },
+])
+const memberRoles = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'member', label: 'Member' },
+  { value: 'viewer', label: 'Viewer' },
 ]
 
 const color = ref<PaletteColor | null>('indigo')
@@ -165,6 +192,52 @@ function onDeleteHub() {
           state-message="Only workspace owners and admins manage keys."
         />
       </div>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">Table, static rows</h3>
+      <SettingsSection title="People">
+        <DataTable
+          mode="static"
+          :caption="`People and their roles, ${theme}`"
+          :columns="staticColumns"
+          :rows="staticRows"
+          :min-width="420"
+        >
+          <template #cell="{ row, column }">
+            <template v-if="column.key === 'name'">{{ row.name }}</template>
+            <template v-else-if="column.key === 'role'">
+              <span v-if="row.locked" class="inline-flex flex-wrap items-baseline gap-x-2">
+                <span>Owner</span>
+                <span class="text-secondary text-ink3">{{ row.locked }}</span>
+              </span>
+              <div v-else class="w-36">
+                <BaseSelect
+                  v-model="row.role"
+                  :label="`Role for ${row.name}`"
+                  label-hidden
+                  size="sm"
+                  :options="memberRoles"
+                />
+              </div>
+            </template>
+            <template v-else-if="column.key === 'hubs'">{{ row.hubs }}</template>
+            <RowActionsMenu
+              v-else
+              :label="`Actions for ${row.name}, ${theme}`"
+              :items="row.locked ? [] : memberActions"
+              @select="lastAction = `Chose ${$event} for ${row.name}`"
+            />
+          </template>
+        </DataTable>
+      </SettingsSection>
+      <p class="m-0 text-caption text-ink3">
+        For settings lists whose rows hold their own controls. A click never selects a row, and
+        there is no hover fill. Cells sit flush with the heading, 12px apart, 38px high. Name, Role,
+        and the menu never cut short; Hubs is cut with an ellipsis. Sara's row is read-only, with
+        the reason beside the role and no menu. Loading, empty, and error belong to the section
+        around the table. Below 420px the table scrolls in its own box.
+      </p>
     </section>
 
     <section class="flex flex-col gap-3">

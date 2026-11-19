@@ -4,10 +4,12 @@ import { computed, ref } from 'vue'
 import {
   BaseButton,
   ConfirmDialog,
+  DataTable,
   RowActionsMenu,
   SettingsSection,
   paletteVar,
   type RowAction,
+  type TableColumn,
 } from '../../ui/index.ts'
 import FolderAttributesDialog from './FolderAttributesDialog.vue'
 import FolderDialog from './FolderDialog.vue'
@@ -26,6 +28,15 @@ const emit = defineEmits<{ status: [text: string, focus: boolean] }>()
 
 const tree = computed(() => settingsTree(description))
 const isHub = (f: Folder) => f.id === description.hub.id
+const rows = computed(() => tree.value.map((entry) => ({ id: entry.folder.id, ...entry })))
+const columns = computed((): TableColumn[] => [
+  { key: 'name', label: 'Folder', rowHeader: true, wrap: true },
+  { key: 'items', label: 'Items', align: 'end' },
+  { key: 'attributes', label: 'Attributes', align: 'end' },
+  ...(manages
+    ? [{ key: 'actions', label: 'Actions', labelHidden: true, align: 'end', shrink: true } as const]
+    : []),
+])
 
 // Dialogs, each opened for one folder by ID.
 const editOpen = ref(false)
@@ -119,64 +130,42 @@ async function confirmDelete() {
       <BaseButton data-new-folder @click="startCreate()">New folder</BaseButton>
     </template>
 
-    <div class="relative min-w-0 overflow-x-auto">
-      <table class="w-full min-w-[420px] border-collapse text-left">
-        <caption class="sr-only">
-          The hub and its folders, with the items and attributes in each
-        </caption>
-        <thead>
-          <tr class="border-b border-line">
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Folder</th>
-            <th scope="col" class="h-8 pr-3 text-right text-caption font-normal text-ink3">
-              Items
-            </th>
-            <th scope="col" class="h-8 pr-3 text-right text-caption font-normal text-ink3">
-              Attributes
-            </th>
-            <th v-if="manages" scope="col" class="h-8 w-10 text-caption font-normal text-ink3">
-              <span class="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="entry in tree"
-            :key="entry.folder.id"
-            class="border-b border-line"
-            data-folder-row
-            :data-folder-id="entry.folder.id"
+    <DataTable
+      mode="static"
+      caption="The hub and its folders, with the items and attributes in each"
+      :columns="columns"
+      :rows="rows"
+      :min-width="420"
+      :row-attrs="(row) => ({ 'data-folder-row': true, 'data-folder-id': row.id })"
+    >
+      <template #cell="{ row: entry, column }">
+        <span
+          v-if="column.key === 'name'"
+          class="inline-flex min-w-0 items-center gap-2"
+          :style="{ paddingLeft: `${entry.depth * 16}px` }"
+        >
+          <span
+            aria-hidden="true"
+            class="size-2 shrink-0"
+            :style="{ background: paletteVar(entry.folder.color) }"
+          />
+          <span :class="isHub(entry.folder) && 'font-medium'">{{ entry.folder.name }}</span>
+          <span v-if="isHub(entry.folder)" class="text-secondary text-ink3"
+            >Items directly in the hub</span
           >
-            <th scope="row" class="h-[38px] pr-3 font-normal">
-              <span
-                class="inline-flex min-w-0 items-center gap-2"
-                :style="{ paddingLeft: `${entry.depth * 16}px` }"
-              >
-                <span
-                  aria-hidden="true"
-                  class="size-2 shrink-0"
-                  :style="{ background: paletteVar(entry.folder.color) }"
-                />
-                <span :class="isHub(entry.folder) && 'font-medium'">{{ entry.folder.name }}</span>
-                <span v-if="isHub(entry.folder)" class="text-secondary text-ink3"
-                  >Items directly in the hub</span
-                >
-              </span>
-            </th>
-            <td class="h-[38px] pr-3 text-right tabular-nums">{{ entry.folder.itemCount }}</td>
-            <td class="h-[38px] pr-3 text-right tabular-nums">
-              {{ attributeCount(description, entry.folder.id) }}
-            </td>
-            <td v-if="manages" class="h-[38px] text-right">
-              <RowActionsMenu
-                :label="`Actions for ${entry.folder.name}`"
-                :items="actionsFor(entry.folder)"
-                @select="onAction(entry.folder, $event)"
-              />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+        </span>
+        <template v-else-if="column.key === 'items'">{{ entry.folder.itemCount }}</template>
+        <template v-else-if="column.key === 'attributes'">{{
+          attributeCount(description, entry.folder.id)
+        }}</template>
+        <RowActionsMenu
+          v-else-if="column.key === 'actions'"
+          :label="`Actions for ${entry.folder.name}`"
+          :items="actionsFor(entry.folder)"
+          @select="onAction(entry.folder, $event)"
+        />
+      </template>
+    </DataTable>
     <p v-if="tree.length === 1" class="m-0 text-ink2" data-folders-empty>
       This hub has no folders yet. Items sit directly in the hub until you add one.
     </p>

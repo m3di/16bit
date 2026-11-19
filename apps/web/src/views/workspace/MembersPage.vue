@@ -8,12 +8,14 @@ import {
   BaseButton,
   BaseSelect,
   ConfirmDialog,
+  DataTable,
   FormNotice,
   RowActionsMenu,
   SettingsLayout,
   SettingsSection,
   type RowAction,
   type SettingsState,
+  type TableColumn,
 } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import InviteDialog from './InviteDialog.vue'
@@ -119,6 +121,22 @@ const pendingCount = computed(() =>
   invites.value.state === 'ready' ? invites.value.data.length : null,
 )
 const summary = computed(() => peopleSummary(people.value.length, pendingCount.value))
+
+const peopleColumns = computed((): TableColumn[] => [
+  { key: 'name', label: 'Name', rowHeader: true, wrap: true },
+  { key: 'role', label: 'Role', wrap: true },
+  ...(manages.value
+    ? [{ key: 'actions', label: 'Actions', labelHidden: true, align: 'end', shrink: true } as const]
+    : []),
+])
+
+const INVITE_COLUMNS: TableColumn[] = [
+  { key: 'role', label: 'Role', rowHeader: true },
+  { key: 'createdBy', label: 'Created by', wrap: true },
+  { key: 'created', label: 'Created' },
+  { key: 'expires', label: 'Expires' },
+  { key: 'actions', label: 'Actions', labelHidden: true, align: 'end', wrap: true },
+]
 
 const roleOptions = (p: Principal) =>
   roleChoices(viewer.value, p, owners.value).map((r) => ({ value: r, label: ROLE_LABELS[r] }))
@@ -339,57 +357,46 @@ const inviteSectionState = computed((): SettingsState => {
       <template #actions>
         <span class="text-secondary text-ink3" data-people-summary>{{ summary }}</span>
       </template>
-      <div ref="peopleList" class="relative min-w-0 overflow-x-auto">
-        <table class="w-full border-collapse text-left">
-          <caption class="sr-only">
-            People in this workspace and their roles
-          </caption>
-          <thead>
-            <tr class="border-b border-line">
-              <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Name</th>
-              <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Role</th>
-              <th v-if="manages" scope="col" class="h-8 w-10 text-caption font-normal text-ink3">
-                <span class="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in people" :key="p.id" class="border-b border-line" data-member-row>
-              <th scope="row" class="h-[38px] pr-3 font-normal">
-                <span class="inline-flex min-w-0 items-center gap-2">
-                  <ActorChip :actor="{ id: p.id, name: p.name, kind: 'person' }" />
-                  <span v-if="p.id === selfId" class="text-secondary text-ink3">You</span>
-                </span>
-              </th>
-              <td class="h-[38px] pr-3">
-                <div v-if="roleOptions(p).length > 1" class="w-36" :data-role-select="p.id">
-                  <BaseSelect
-                    :model-value="shownRole(p)"
-                    :label="`Role for ${p.name}`"
-                    label-hidden
-                    size="sm"
-                    :options="roleOptions(p)"
-                    @update:model-value="onRole(p, $event)"
-                    @blur="committer.flush(p.id)"
-                  />
-                </div>
-                <span v-else class="inline-flex flex-wrap items-baseline gap-x-2" data-role-text>
-                  <span>{{ ROLE_LABELS[p.workspaceRole] }}</span>
-                  <span v-if="lockedReason(viewer, p, owners)" class="text-secondary text-ink3">{{
-                    lockedReason(viewer, p, owners)
-                  }}</span>
-                </span>
-              </td>
-              <td v-if="manages" class="h-[38px] text-right">
-                <RowActionsMenu
-                  :label="`Actions for ${p.name}`"
-                  :items="rowActions(p)"
-                  @select="onRowAction(p, $event)"
+      <div ref="peopleList" class="min-w-0">
+        <DataTable
+          mode="static"
+          caption="People in this workspace and their roles"
+          :columns="peopleColumns"
+          :rows="people"
+          :row-attrs="() => ({ 'data-member-row': true })"
+        >
+          <template #cell="{ row: p, column }">
+            <span v-if="column.key === 'name'" class="inline-flex min-w-0 items-center gap-2">
+              <ActorChip :actor="{ id: p.id, name: p.name, kind: 'person' }" />
+              <span v-if="p.id === selfId" class="text-secondary text-ink3">You</span>
+            </span>
+            <template v-else-if="column.key === 'role'">
+              <div v-if="roleOptions(p).length > 1" class="w-36" :data-role-select="p.id">
+                <BaseSelect
+                  :model-value="shownRole(p)"
+                  :label="`Role for ${p.name}`"
+                  label-hidden
+                  size="sm"
+                  :options="roleOptions(p)"
+                  @update:model-value="onRole(p, $event)"
+                  @blur="committer.flush(p.id)"
                 />
-              </td>
-            </tr>
-          </tbody>
-        </table>
+              </div>
+              <span v-else class="inline-flex flex-wrap items-baseline gap-x-2" data-role-text>
+                <span>{{ ROLE_LABELS[p.workspaceRole] }}</span>
+                <span v-if="lockedReason(viewer, p, owners)" class="text-secondary text-ink3">{{
+                  lockedReason(viewer, p, owners)
+                }}</span>
+              </span>
+            </template>
+            <RowActionsMenu
+              v-else-if="column.key === 'actions'"
+              :label="`Actions for ${p.name}`"
+              :items="rowActions(p)"
+              @select="onRowAction(p, $event)"
+            />
+          </template>
+        </DataTable>
       </div>
     </SettingsSection>
 
@@ -418,61 +425,42 @@ const inviteSectionState = computed((): SettingsState => {
       <template v-if="inviteSectionState === 'error'" #state-action>
         <BaseButton size="sm" @click="model.reloadInvites()">Try again</BaseButton>
       </template>
-      <div
-        v-if="invites.state === 'ready'"
-        ref="inviteList"
-        class="relative min-w-0 overflow-x-auto"
-      >
-        <table class="w-full min-w-[480px] border-collapse text-left">
-          <caption class="sr-only">
-            Pending invite links
-          </caption>
-          <thead>
-            <tr class="border-b border-line">
-              <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Role</th>
-              <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Created by</th>
-              <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Created</th>
-              <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Expires</th>
-              <th scope="col" class="h-8 text-caption font-normal text-ink3">
-                <span class="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="invite in invites.data"
-              :key="invite.id"
-              class="border-b border-line"
-              data-invite-row
-              :data-invite-id="invite.id"
-            >
-              <th scope="row" class="h-[38px] pr-3 font-normal">
-                {{ ROLE_LABELS[invite.workspaceRole] }}
-              </th>
-              <td class="h-[38px] pr-3"><ActorChip :actor="creatorOf(invite)" /></td>
-              <td class="h-[38px] pr-3 text-secondary text-ink2">
-                {{ shortDate(invite.createdAt) }}
-              </td>
-              <td class="h-[38px] pr-3 text-secondary text-ink2">
-                {{ shortDate(invite.expiresAt) }}
-              </td>
-              <td class="h-[38px] text-right">
-                <BaseButton
-                  v-if="canRevokeInvite(viewer, invite.workspaceRole)"
-                  size="sm"
-                  danger
-                  data-revoke
-                  @click="revoke(invite)"
-                  >Revoke<span class="sr-only">
-                    the {{ ROLE_LABELS[invite.workspaceRole].toLowerCase() }} invite from
-                    {{ shortDate(invite.createdAt) }}</span
-                  ></BaseButton
-                >
-                <span v-else class="text-secondary text-ink3">Only owners revoke</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div v-if="invites.state === 'ready'" ref="inviteList" class="min-w-0">
+        <DataTable
+          mode="static"
+          caption="Pending invite links"
+          :columns="INVITE_COLUMNS"
+          :rows="invites.data"
+          :min-width="480"
+          :row-attrs="(invite) => ({ 'data-invite-row': true, 'data-invite-id': invite.id })"
+        >
+          <template #cell="{ row: invite, column }">
+            <template v-if="column.key === 'role'">{{
+              ROLE_LABELS[invite.workspaceRole]
+            }}</template>
+            <ActorChip v-else-if="column.key === 'createdBy'" :actor="creatorOf(invite)" />
+            <span v-else-if="column.key === 'created'" class="text-secondary text-ink2">{{
+              shortDate(invite.createdAt)
+            }}</span>
+            <span v-else-if="column.key === 'expires'" class="text-secondary text-ink2">{{
+              shortDate(invite.expiresAt)
+            }}</span>
+            <template v-else-if="column.key === 'actions'">
+              <BaseButton
+                v-if="canRevokeInvite(viewer, invite.workspaceRole)"
+                size="sm"
+                danger
+                data-revoke
+                @click="revoke(invite)"
+                >Revoke<span class="sr-only">
+                  the {{ ROLE_LABELS[invite.workspaceRole].toLowerCase() }} invite from
+                  {{ shortDate(invite.createdAt) }}</span
+                ></BaseButton
+              >
+              <span v-else class="text-secondary text-ink3">Only owners revoke</span>
+            </template>
+          </template>
+        </DataTable>
       </div>
     </SettingsSection>
   </SettingsLayout>

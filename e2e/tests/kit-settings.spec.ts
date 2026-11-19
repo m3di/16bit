@@ -206,3 +206,26 @@ test('the options editor adds, confirms a used removal, and moves focus on', asy
     .check()
   await expect(colour).toHaveAccessibleName('Colour for option 1: Red')
 })
+
+test('a static table never selects a row; its controls work by keyboard', async ({ page }) => {
+  const table = light(page).getByRole('table', { name: 'People and their roles, light' })
+  await expect(table.getByRole('rowheader')).toHaveText(['Priya', 'Kofi', 'Sara'])
+  // A click on a cell that holds no control does nothing to the row.
+  const kofi = table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Kofi' }) })
+  await kofi.getByRole('cell', { name: /Engineering/ }).click()
+  await expect(table.locator('[aria-selected]')).toHaveCount(0)
+  // The role select and the row menu are real controls, reached with Tab.
+  const role = table.getByRole('combobox', { name: 'Role for Kofi' })
+  await role.focus()
+  await page.keyboard.press('Tab')
+  const menu = table.getByRole('button', { name: 'Actions for Kofi, light' })
+  await expect(menu).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('menuitem', { name: 'Change role' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeFocused()
+  // The read-only row shows its reason and offers no menu.
+  const sara = table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Sara' }) })
+  await expect(sara).toContainText('The only owner')
+  await expect(sara.getByRole('button')).toHaveCount(0)
+})
