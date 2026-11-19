@@ -4,9 +4,11 @@ import { computed, nextTick, ref } from 'vue'
 import {
   BaseButton,
   ConfirmDialog,
+  DataTable,
   RowActionsMenu,
   SettingsSection,
   type RowAction,
+  type TableColumn,
 } from '../../ui/index.ts'
 import AttributeDialog from './AttributeDialog.vue'
 import { strippedValuesMessage, typeLabel, usedIn } from './schema.ts'
@@ -24,6 +26,16 @@ const attributes = computed(() =>
   [...description.attributes].sort((a, b) => a.name.localeCompare(b.name)),
 )
 const isTitle = (a: Attribute) => description.hub.titleAttributeId === a.id
+const columns = computed((): TableColumn[] => [
+  { key: 'name', label: 'Name', rowHeader: true, wrap: true },
+  { key: 'type', label: 'Type' },
+  // The whole list of folders, never cut short.
+  { key: 'usedIn', label: 'Used in', wrap: true },
+  { key: 'indexed', label: 'Filter and sort' },
+  ...(manages
+    ? [{ key: 'actions', label: 'Actions', labelHidden: true, align: 'end', shrink: true } as const]
+    : []),
+])
 
 const editOpen = ref(false)
 const editId = ref<string | null>(null)
@@ -134,55 +146,35 @@ async function confirmDelete() {
       <BaseButton data-new-attribute @click="startCreate">New attribute</BaseButton>
     </template>
 
-    <div class="relative min-w-0 overflow-x-auto">
-      <table class="w-full min-w-[480px] border-collapse text-left">
-        <caption class="sr-only">
-          The hub's attributes, their types and the folders that show them
-        </caption>
-        <thead>
-          <tr class="border-b border-line">
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Name</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Type</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Used in</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Filter and sort</th>
-            <th v-if="manages" scope="col" class="h-8 w-10 text-caption font-normal text-ink3">
-              <span class="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="a in attributes"
-            :key="a.id"
-            class="border-b border-line"
-            data-attribute-row
-            :data-attribute-id="a.id"
-          >
-            <th scope="row" class="h-[38px] pr-3 font-normal">
-              <span class="inline-flex flex-wrap items-baseline gap-x-2">
-                <span>{{ a.name }}</span>
-                <span v-if="isTitle(a)" class="text-secondary text-ink3">Title</span>
-              </span>
-            </th>
-            <td class="h-[38px] pr-3 text-ink3">{{ typeLabel(a.type) }}</td>
-            <td class="h-[38px] pr-3">
-              <span v-if="usedIn(description, a.id).length">{{
-                usedIn(description, a.id).join(', ')
-              }}</span>
-              <span v-else class="text-ink3">No folder</span>
-            </td>
-            <td class="h-[38px] pr-3">{{ a.indexed ? 'On' : 'Off' }}</td>
-            <td v-if="manages" class="h-[38px] text-right">
-              <RowActionsMenu
-                :label="`Actions for ${a.name}`"
-                :items="actions"
-                @select="onAction(a, $event)"
-              />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      mode="static"
+      caption="The hub's attributes, their types and the folders that show them"
+      :columns="columns"
+      :rows="attributes"
+      :min-width="480"
+      :row-attrs="(a) => ({ 'data-attribute-row': true, 'data-attribute-id': a.id })"
+    >
+      <template #cell="{ row: a, column }">
+        <span v-if="column.key === 'name'" class="inline-flex flex-wrap items-baseline gap-x-2">
+          <span>{{ a.name }}</span>
+          <span v-if="isTitle(a)" class="text-secondary text-ink3">Title</span>
+        </span>
+        <span v-else-if="column.key === 'type'" class="text-ink3">{{ typeLabel(a.type) }}</span>
+        <template v-else-if="column.key === 'usedIn'">
+          <span v-if="usedIn(description, a.id).length">{{
+            usedIn(description, a.id).join(', ')
+          }}</span>
+          <span v-else class="text-ink3">No folder</span>
+        </template>
+        <template v-else-if="column.key === 'indexed'">{{ a.indexed ? 'On' : 'Off' }}</template>
+        <RowActionsMenu
+          v-else-if="column.key === 'actions'"
+          :label="`Actions for ${a.name}`"
+          :items="actions"
+          @select="onAction(a, $event)"
+        />
+      </template>
+    </DataTable>
   </SettingsSection>
 
   <AttributeDialog
