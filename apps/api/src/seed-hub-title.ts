@@ -8,7 +8,9 @@ import type { Database } from './db/database.ts'
  * A hub seeded before #120 and never edited gets its title, which bumps its version like any
  * write to a row clients have seen. A hub created in this transaction (`created`) gets it as part
  * of its creation and stays at version 0. Does nothing if the attribute is missing (deleted
- * through the API, #133) or not text. Returns whether it set the title.
+ * through the API, #133) or not text.
+ * Edge case: deleting the title attribute in SQL, not through the API, clears the title without a
+ * version bump (FK `ON DELETE SET NULL`, migration 0009), so a re-run names the next text one.
  *
  * Lock order as `PATCH /hubs/:hubId` (migration 0009): the attribute FOR KEY SHARE, then the hub
  * row, so an attribute delete in the same hub can't deadlock with it.
@@ -19,7 +21,7 @@ export async function seedHubTitle(
   hubId: string,
   attributeId: string,
   created: boolean,
-): Promise<boolean> {
+): Promise<void> {
   const attribute = await trx
     .selectFrom('attribute')
     .select('type')
@@ -28,8 +30,8 @@ export async function seedHubTitle(
     .where('id', '=', attributeId)
     .forKeyShare()
     .executeTakeFirst()
-  if (attribute?.type !== 'text') return false
-  const row = await trx
+  if (attribute?.type !== 'text') return
+  await trx
     .updateTable('folder')
     .set({
       title_attribute_id: attributeId,
@@ -40,7 +42,5 @@ export async function seedHubTitle(
     .where('parent_id', 'is', null)
     .where('title_attribute_id', 'is', null)
     .where('version', '=', 0)
-    .returning('id')
-    .executeTakeFirst()
-  return row !== undefined
+    .execute()
 }

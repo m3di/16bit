@@ -16,6 +16,7 @@ import type { Database, PrincipalTable } from './db/database.ts'
 import { DEV_OWNER, ensureDevAccounts, linkDevAccount, type DevPerson } from './dev-accounts.ts'
 import { createItem } from './items.ts'
 import { seedHubTitle } from './seed-hub-title.ts'
+import { tombstoned } from './seed-tombstones.ts'
 
 // `pnpm seed`: two demo workspaces whose hubs cover every size-meter step in docs/DESIGN.md
 // (0, 1 to 9, 10 to 99, 100 to 999, 1,000 or more items), people who can sign in with the
@@ -857,26 +858,6 @@ async function seedAgentKey(
     detail: { hubId: key.hubId, hubRole: key.hubRole, name: name.name, expiresAt: null },
   })
   return secret
-}
-
-/**
- * Which of `ids` were deleted hubs or attributes (#133). Bounded by the seed definition. Read
- * as the owner: the API role can't read the tombstones.
- */
-async function tombstoned(
-  trx: Transaction<Database>,
-  table: 'deleted_hub' | 'deleted_attribute',
-  workspaceId: string,
-  ids: string[],
-): Promise<Set<string>> {
-  if (ids.length === 0) return new Set()
-  const rows = await trx
-    .selectFrom(table)
-    .select('id')
-    .where('workspace_id', '=', workspaceId)
-    .where('id', 'in', ids)
-    .execute()
-  return new Set(rows.map((r) => r.id))
 }
 
 async function seedItems(

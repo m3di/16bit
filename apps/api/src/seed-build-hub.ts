@@ -31,21 +31,25 @@ try {
     console.warn(`seed:build-hub: read the first ${String(ISSUE_LIMIT)} issues only`)
   }
   await migrateToLatest(db)
-  await ensureBuildHub(db)
-  const { created, updated, unchanged, skipped, failed } = await importIssues(db, issues)
-  console.log(
-    `seed:build-hub: ${String(issues.length)} issues, ${String(created)} created, ` +
-      `${String(updated)} updated, ${String(unchanged)} unchanged, ${String(failed.length)} failed; ` +
-      `hub has ${String(await buildHubItemCount(db))} items`,
-  )
-  if (skipped.length > 0) {
-    console.log(`seed:build-hub: deleted locally, not re-imported: #${skipped.join(', #')}`)
-  }
-  console.log(`seed:build-hub: sign in as ${DEV_OWNER.email} to see the hub`)
-  if (failed.length > 0) {
-    console.error(`seed:build-hub: ${String(failed.length)} issues not imported:`)
-    for (const f of failed) console.error(`  #${String(f.issue)} ${f.code}: ${f.message}`)
-    process.exitCode = 1
+  if ((await ensureBuildHub(db)).hubDeleted) {
+    // Deleted hubs stay deleted (#143): its ID can't be taken again.
+    console.log('seed:build-hub: the Build hub was deleted through the API; nothing imported')
+  } else {
+    const { created, updated, unchanged, skipped, failed } = await importIssues(db, issues)
+    console.log(
+      `seed:build-hub: ${String(issues.length)} issues, ${String(created)} created, ` +
+        `${String(updated)} updated, ${String(unchanged)} unchanged, ${String(failed.length)} failed; ` +
+        `hub has ${String(await buildHubItemCount(db))} items`,
+    )
+    if (skipped.length > 0) {
+      console.log(`seed:build-hub: deleted locally, not re-imported: #${skipped.join(', #')}`)
+    }
+    console.log(`seed:build-hub: sign in as ${DEV_OWNER.email} to see the hub`)
+    if (failed.length > 0) {
+      console.error(`seed:build-hub: ${String(failed.length)} issues not imported:`)
+      for (const f of failed) console.error(`  #${String(f.issue)} ${f.code}: ${f.message}`)
+      process.exitCode = 1
+    }
   }
 } catch (error) {
   console.error(`seed:build-hub: ${(error as Error).message}`)
