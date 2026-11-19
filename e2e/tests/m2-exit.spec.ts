@@ -285,7 +285,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
     let form = page.getByRole('complementary', { name: 'New item', exact: true })
     const first = uniqueTitle('exit first')
     await form.getByLabel('Title (required)').fill(first)
-    // Points stays empty: Number values cannot be set from the UI yet (#155, the test below).
+    await form.getByLabel('Points').fill('5')
     await form.getByLabel('Stage').selectOption({ label: 'To do' })
     await form.getByLabel('Due').fill('2026-12-01')
     await form.getByLabel('Urgent').check()
@@ -299,6 +299,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
       version: 1,
       values: {
         [title]: first,
+        [points]: 5,
         [stage.id]: optionId('To do'),
         [due]: '2026-12-01',
         [urgent]: true,
@@ -351,8 +352,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
     await expect.poll(async () => (await getItem(owner, firstId)).values[urgent]).toBe(false)
     // Three edits, three versions, nothing else touched.
     const edited = await getItem(owner, firstId)
-    expect(edited).toMatchObject({ version: 4, values: { [due]: '2026-12-01' } })
-    expect(edited.values[points] ?? null).toBe(null)
+    expect(edited).toMatchObject({ version: 4, values: { [due]: '2026-12-01', [points]: 5 } })
     // The page shows what the server holds after a reload.
     await page.reload()
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(renamed)
@@ -521,8 +521,6 @@ test('a Number value is saved from the New item form and the item page (#155)', 
   page,
   as,
 }) => {
-  // Known bug #155: the value never reaches the server. Remove this line when it is fixed.
-  test.fail()
   const owner = as('owner')
   const made = await owner.post('/hubs', {
     name: uniqueHubName('number'),
@@ -550,7 +548,7 @@ test('a Number value is saved from the New item form and the item page (#155)', 
     await page.goto(hubPath(hub.id))
     await page.getByRole('button', { name: 'New item' }).first().click()
     const form = page.getByRole('complementary', { name: 'New item', exact: true })
-    // The form and its field are there, so the expected failure can only be #155's.
+    // A Number value is stored as a number, not dropped (#155).
     await expect(form.getByLabel('Points')).toBeVisible()
     await form.getByLabel('Points').fill('3')
     await form.getByRole('button', { name: 'Create item' }).click()

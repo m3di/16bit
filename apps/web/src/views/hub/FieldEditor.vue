@@ -79,6 +79,14 @@ const inputType = computed(() => {
   return 'text'
 })
 
+// The Enter that picks an IME candidate is not a save: the composed text is not in the draft
+// yet. Safari reports it as keyCode 229 without isComposing.
+function onEnter(event: KeyboardEvent) {
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- 229 is how Safari marks it
+  if (event.isComposing || event.keyCode === 229) return
+  commit()
+}
+
 function onToggle(checked: boolean) {
   draft.value = String(checked)
   commit()
@@ -168,6 +176,6 @@ function onToggle(checked: boolean) {
     :hint="readOnly ? readOnlyHint : ''"
     :disabled="disabled || readOnly"
     @change="commit"
-    @keydown.enter="commit"
+    @keydown.enter="onEnter"
   />
 </template>

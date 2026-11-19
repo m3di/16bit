@@ -42,6 +42,20 @@ describe('FieldEditor commits', () => {
     expect(commits).toEqual([8])
   })
 
+  it('does not save on the Enter that confirms an IME candidate', async () => {
+    const { input, commits } = editor(text, 'Hello')
+    type(input, 'にほん')
+    await nextTick()
+    fire(input, 'keydown', { key: 'Enter', isComposing: true })
+    fire(input, 'keydown', { key: 'Enter', keyCode: 229 })
+    expect(commits).toEqual([])
+    // The composed text arrives, then a plain Enter saves it.
+    type(input, '日本')
+    await nextTick()
+    fire(input, 'keydown', { key: 'Enter', keyCode: 13 })
+    expect(commits).toEqual(['日本'])
+  })
+
   it('sends nothing when the number is unchanged, and clears it when emptied', async () => {
     const { input, commits } = editor(number, 3)
     fire(input, 'change')
