@@ -1,0 +1,186 @@
+<script setup lang="ts">
+import type { Item } from '@16bit/core'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import ShellUser from '../../session/ShellUser.vue'
+import { useSession } from '../../session/session.ts'
+import { AppShell, ConfirmDialog } from '../../ui/index.ts'
+import type { Load } from '../home/useDashboard.ts'
+import { provideValueContext } from '../hub/context.ts'
+import FolderSidebar from '../hub/FolderSidebar.vue'
+import { displayId } from '../hub/relations.ts'
+import { canEditItems, folderColumns, folderTree } from '../hub/useHub.ts'
+import { useHubDirectory } from '../hub/useHubDirectory.ts'
+import { useItems } from '../hub/useItems.ts'
+import { usePrincipals } from '../hub/usePrincipals.ts'
+import ItemBody from './ItemBody.vue'
+import ItemState from './ItemState.vue'
+import { expandFor, folderLink, itemPageLink, pageState } from './item-page.ts'
+import { useBacklinks } from './useBacklinks.ts'
+
+const { workspaceId, itemId } = defineProps<{ workspaceId: string; itemId: string }>()
+
+const router = useRouter()
+const session = useSession()
+const fetchFn: typeof fetch = (...args) => fetch(...args)
+const directory = useHubDirectory(workspaceId, fetchFn)
+
+// The item's hub is only known once the item is read; its description comes from the directory.
+const located = ref<Load<Item>>({ state: 'loading' })
+const hubId = computed(() => (located.value.state === 'ready' ? located.value.data.hubId : null))
+const hubLoad = computed(() => (hubId.value ? directory.get(hubId.value) : null))
+const description = computed(() => (hubLoad.value?.state === 'ready' ? hubLoad.value.data : null))
+
+const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '', fetchFn, {
+  list: false,
+})
+const principals = usePrincipals(
+  workspaceId,
+  () => (session.me.value.state === 'ready' ? session.me.value.data : null),
+  fetchFn,
+)
+const backlinks = useBacklinks(workspaceId, itemId, fetchFn)
+
+provideValueContext({
+  workspaceId,
+  fetchFn,
+  actor: principals.actor,
+  actorChoices: () => principals.choices.value,
+  members: () => principals.status.value,
+  retryMembers: () => void principals.load(),
+  linkState: items.linkState,
+  resolveLinked: items.resolveLinked,
+  rememberLinked: items.rememberLinked,
+  hub: directory.get,
+  hubLookup: directory.lookup,
+  ensureHubs: directory.ensure,
+  retryHub: directory.retry,
+  itemLink: (item) => itemPageLink(workspaceId, item),
+})
+
+// The item shows once its hub is known and its relations are expanded, so linked items come
+// with it instead of one request each. If that read fails, the editors read them one by one.
+const shown = ref(false)
+async function locate() {
+  shown.value = false
+  located.value = { state: 'loading' }
+  const result = await items.openItem(itemId)
+  located.value = result
+  if (result.state === 'ready') directory.ensure([result.data.hubId])
+}
+watch(
+  description,
+  async (d) => {
+    if (!d || shown.value || located.value.state !== 'ready') return
+    const expand = expandFor(folderColumns(d, located.value.data.folderId))
+    if (expand.length > 0) await items.readItem(itemId, expand)
+    shown.value = true
+    void backlinks.load()
+  },
+  { immediate: true },
+)
+
+const page = computed(() => {
+  const state = pageState(located.value, hubLoad.value)
+  if (state.state !== 'ready') return state
+  if (!shown.value) return { state: 'loading' as const }
+  return { ...state, item: items.view(itemId) ?? state.item }
+})
+
+function retry() {
+  if (located.value.state === 'error') void locate()
+  else if (hubId.value) directory.retry(hubId.value)
+}
+
+const readOnly = computed(
+  () =>
+    (description.value ? !canEditItems(description.value.hubRole) : false) || items.readOnly.value,
+)
+const tree = computed(() =>
+  description.value
+    ? { state: 'ready' as const, data: folderTree(description.value) }
+    : { state: 'loading' as const },
+)
+
+onMounted(() => {
+  void session.ensure()
+  void principals.load()
+  void locate()
+})
+
+// Delete asks first. The item stays until the server agrees; a refusal shows in the dialog.
+const confirming = ref(false)
+const deleting = ref(false)
+const deleteError = ref('')
+function askDelete() {
+  deleteError.value = ''
+  confirming.value = true
+}
+async function confirmDelete() {
+  const item = items.view(itemId)
+  if (!item) return
+  deleting.value = true
+  deleteError.value = ''
+  const result = await items.remove(itemId)
+  deleting.value = false
+  if (result.ok) {
+    confirming.value = false
+    void router.replace(folderLink(workspaceId, item))
+  } else {
+    deleteError.value = result.message
+  }
+}
+const deleteLabel = computed(() => {
+  const item = items.view(itemId)
+  return item && description.value ? displayId(description.value, item) : 'this item'
+})
+</script>
+
+<template>
+  <AppShell>
+    <template #actions><ShellUser /></template>
+    <template v-if="description && page.state === 'ready'" #sidebar>
+      <FolderSidebar
+        :workspace-id="workspaceId"
+        :hub-name="description.hub.name"
+        :tree="tree"
+        :folder-id="page.item.folderId"
+        current="location"
+      />
+    </template>
+
+    <main
+      class="box-border flex min-w-0 flex-1 flex-wrap items-start gap-10 px-4 py-6 sm:px-9 sm:py-7"
+    >
+      <ItemState :page="page" @retry="retry">
+        <template #default="{ item, hub }">
+          <ItemBody
+            :workspace-id="workspaceId"
+            :item="item"
+            :hub="hub"
+            :columns="folderColumns(hub, item.folderId)"
+            :backlinks="backlinks.list.value"
+            :read-only="readOnly"
+            :saving="items.isSaving(item.id)"
+            :notice="items.notice.value"
+            @save="items.save(item.id, $event)"
+            @delete="askDelete"
+            @dismiss="items.dismissNotice()"
+            @retry-backlinks="backlinks.load()"
+            @more-backlinks="backlinks.loadMore()"
+          />
+        </template>
+      </ItemState>
+    </main>
+
+    <ConfirmDialog
+      v-model:open="confirming"
+      :title="`Delete ${deleteLabel}?`"
+      message="The item and its values are deleted, and items that link to it stop showing the link. This cannot be undone."
+      confirm-label="Delete item"
+      :busy="deleting"
+      :error="deleteError"
+      @confirm="confirmDelete"
+    />
+  </AppShell>
+</template>
