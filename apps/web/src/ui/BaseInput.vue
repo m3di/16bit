@@ -26,6 +26,14 @@ const {
   disabled?: boolean
 }>()
 
+// Not v-model: Vue's v-model casts the value of an <input type="number"> to a number, which
+// breaks the string contract above and every caller that parses the text (issue 155).
+function onInput(event: Event) {
+  // An IME composition commits once, on compositionend, as v-model would.
+  if ((event as InputEvent).isComposing) return
+  model.value = (event.target as HTMLInputElement).value
+}
+
 const id = useId()
 const hintId = `${id}-hint`
 const errorId = `${id}-error`
@@ -42,7 +50,7 @@ const describedBy = computed(
     <input
       v-bind="$attrs"
       :id="id"
-      v-model="model"
+      :value="model"
       :type="type"
       :disabled="disabled"
       :aria-invalid="error ? 'true' : undefined"
@@ -53,6 +61,8 @@ const describedBy = computed(
         error ? 'border-danger' : 'border-line3',
         mono ? 'font-mono text-secondary' : 'text-body',
       ]"
+      @input="onInput"
+      @compositionend="onInput"
     />
     <span v-if="hint" :id="hintId" class="text-secondary text-ink3">{{ hint }}</span>
     <span v-if="error" :id="errorId" class="text-secondary text-danger">{{ error }}</span>
