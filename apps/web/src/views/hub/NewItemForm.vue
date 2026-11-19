@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { FolderAttributeDefinition, ItemValues } from '@16bit/core'
-import { validateItemValues } from '@16bit/core'
 import { ref } from 'vue'
 import { BaseButton } from '../../ui/index.ts'
 import FieldEditor from './FieldEditor.vue'
+import { newItemValues } from './newItem.ts'
 
 const {
   columns,
@@ -27,11 +27,9 @@ function set(attributeId: string, value: ItemValues[string]) {
 }
 
 function submit() {
-  // Unset optional fields are left out; the server stores no value for them.
-  const filled = Object.fromEntries(Object.entries(values.value).filter(([, v]) => v !== null))
-  const result = validateItemValues(columns, filled)
+  const result = newItemValues(columns, values.value)
   if (!result.ok) {
-    errors.value = Object.fromEntries(result.errors.map((e) => [e.attributeId, e.message]))
+    errors.value = result.errors
     return
   }
   errors.value = {}

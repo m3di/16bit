@@ -115,10 +115,10 @@ test('a new row cannot be opened until the server confirms it', async ({ page })
   await expect(panel(page)).toHaveCount(0)
 
   release()
-  await expect(row.getByRole('link', { name: /^DSN-\d+$/ })).toBeVisible()
-  await expect(page).toHaveURL(/[?&]item=/)
-  await expect(panel(page).getByLabel('Title (required)')).toHaveValue(name)
-  await expect(panel(page).getByLabel('Title (required)')).toBeEnabled()
+  // Once confirmed, the new item opens on its own page (#118).
+  await expect(page).toHaveURL(new RegExp(`/w/${demo.workspaceId}/items/[^/?]+$`))
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
+  await expect(page.getByLabel('Title (required)')).toBeEnabled()
 })
 
 test('?item= for an item from another hub shows that it could not be found', async ({

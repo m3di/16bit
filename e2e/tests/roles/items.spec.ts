@@ -109,27 +109,24 @@ test('an editor adds an item and edits it in the browser', async ({ pageAs, as }
   await form.getByLabel('Title (required)').fill(name)
   await form.getByRole('button', { name: 'Create item' }).click()
 
-  const row = itemsTable(page, 'Launch').getByRole('row').filter({ hasText: name })
-  await expect(row.getByRole('link', { name: /^LCH-\d+$/ })).toBeVisible()
-  const id = new URL(page.url()).searchParams.get('item')
-  expect(id).not.toBeNull()
-  const stored = await getItem(as('owner'), id ?? '')
+  // The new item opens on its own page (#118).
+  await expect(page).toHaveURL(/\/w\/demo\/items\/[^/?]+$/)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
+  const id = decodeURIComponent(new URL(page.url()).pathname.split('/').pop() ?? '')
+  const stored = await getItem(as('owner'), id)
   expect(stored).toMatchObject({ updatedBy: people.leo.id, values: { [TITLE]: name } })
 
-  // The new item is open in the panel; Leo renames it there.
+  // Leo renames it there.
   const edited = uniqueTitle('leo edits')
-  const field = itemPanel(page).getByLabel('Title (required)')
+  const field = page.getByLabel('Title (required)')
   await expect(field).toHaveValue(name)
   await field.fill(edited)
   await field.press('Enter')
-  await expect(
-    itemsTable(page, 'Launch').getByRole('row').filter({ hasText: edited }),
-  ).toBeVisible()
   await expect
-    .poll(async () => getItem(as('owner'), id ?? ''))
+    .poll(async () => getItem(as('owner'), id))
     .toMatchObject({ version: 2, updatedBy: people.leo.id, values: { [TITLE]: edited } })
   await page.reload()
-  await expect(itemPanel(page).getByLabel('Title (required)')).toHaveValue(edited)
+  await expect(page.getByLabel('Title (required)')).toHaveValue(edited)
 })
 
 test.describe('read-only from the hub role', () => {

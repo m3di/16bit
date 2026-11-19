@@ -6,31 +6,59 @@ import { selfGrantKey, type SelfGrant, type WorkspaceEntry } from './useDashboar
 const {
   entry,
   canSelfGrant,
+  canCreateHub,
   selfGrants = new Map<string, SelfGrant>(),
 } = defineProps<{
   entry: WorkspaceEntry
   /** The reader is an owner or admin here, so may grant themselves access (D45). */
   canSelfGrant?: boolean
+  /** `hub.create`: owners and admins. */
+  canCreateHub?: boolean
   selfGrants?: ReadonlyMap<string, SelfGrant>
 }>()
-defineEmits<{ retry: []; grantSelf: [hubId: string]; dismissSelfGrant: [hubId: string] }>()
+defineEmits<{
+  retry: []
+  grantSelf: [hubId: string]
+  dismissSelfGrant: [hubId: string]
+  newHub: []
+}>()
 
 const ask = (hubId: string) => selfGrants.get(selfGrantKey(entry.workspace.id, hubId))
 
 const headingId = computed(() => `workspace-${entry.workspace.id}`)
+
+// A workspace that is gone, or whose hubs the reader may not list, takes no new hubs either.
+const offersNewHub = computed(
+  () =>
+    canCreateHub &&
+    !(
+      entry.hubs.state === 'error' &&
+      (entry.hubs.error.isNoPermission || entry.hubs.error.isNotFound)
+    ),
+)
 </script>
 
 <template>
   <section :aria-labelledby="headingId" class="flex flex-col gap-3.5" data-workspace>
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2">
       <h2 :id="headingId" class="m-0 text-body font-medium">{{ entry.workspace.name }}</h2>
-      <!-- Every person in the workspace may see its members; what they can change follows the role. -->
-      <RouterLink
-        :to="{ name: 'workspace-members', params: { workspaceId: entry.workspace.id } }"
-        class="border-b border-line2 text-secondary text-ink3 no-underline hover:border-line3 hover:text-ink"
-        data-members-link
-        >Members and roles<span class="sr-only"> of {{ entry.workspace.name }}</span></RouterLink
-      >
+      <div class="flex flex-wrap items-center gap-4">
+        <BaseButton
+          v-if="offersNewHub"
+          size="sm"
+          variant="quiet"
+          data-new-hub-button
+          @click="$emit('newHub')"
+          >New hub<span class="sr-only"> in {{ entry.workspace.name }}</span></BaseButton
+        >
+        <!-- Every person in the workspace may see its members; what they can change follows the role. -->
+        <RouterLink
+          :to="{ name: 'workspace-members', params: { workspaceId: entry.workspace.id } }"
+          class="border-b border-line2 text-secondary text-ink3 no-underline hover:border-line3 hover:text-ink"
+          data-members-link
+          >Members and roles<span class="sr-only"> of {{ entry.workspace.name }}</span></RouterLink
+        >
+      </div>
     </div>
 
     <StateBlock v-if="entry.hubs.state === 'loading'" state="loading" title="Loading hubs" />
@@ -59,8 +87,18 @@ const headingId = computed(() => `workspace-${entry.workspace.id}`)
       v-else-if="entry.hubs.data.length === 0"
       state="empty"
       title="No hubs yet"
-      message="Hubs in this workspace will show here."
-    />
+      :message="
+        canCreateHub
+          ? 'Create a hub to start adding items. You become its hub admin.'
+          : 'Hubs in this workspace will show here.'
+      "
+    >
+      <template v-if="canCreateHub" #action>
+        <BaseButton size="sm" @click="$emit('newHub')"
+          >New hub<span class="sr-only"> in {{ entry.workspace.name }}</span></BaseButton
+        >
+      </template>
+    </StateBlock>
     <ul v-else class="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 p-0">
       <li v-for="hub in entry.hubs.data" :key="hub.id" class="flex min-w-0 flex-col">
         <HubCard
