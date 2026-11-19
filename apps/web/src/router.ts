@@ -30,6 +30,18 @@ const routes: RouteRecordRaw[] = [
     name: 'hub',
     component: () => import('./views/HubView.vue'),
   },
+  {
+    path: '/w/:workspaceId/settings',
+    redirect: (to) => ({ name: 'workspace-members', params: to.params }),
+  },
+  {
+    // Workspace settings: members and invites. Every person in the workspace may open it;
+    // what they can change follows their role.
+    path: '/w/:workspaceId/settings/members',
+    name: 'workspace-members',
+    component: () => import('./views/WorkspaceSettingsView.vue'),
+    props: (to) => ({ workspaceId: String(to.params['workspaceId'] ?? '') }),
+  },
 ]
 
 // The component kit is a local tool. It is left out of production builds.
