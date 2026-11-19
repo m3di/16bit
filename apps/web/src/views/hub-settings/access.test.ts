@@ -121,6 +121,20 @@ describe('access', () => {
     expect(cappedNote(grant('noor', 'finance', 'viewer'))).toBe('')
     expect(cappedNote(grant('tomas', 'member', 'editor'))).toBe('')
     expect(sourceLabel(grant('bot', 'member', 'editor', 'agent'))).toBe('Agent key')
+    const revoked: AgentKey = {
+      workspaceId: WS,
+      id: 'bot',
+      name: 'bot',
+      hubId: 'bld',
+      hubRole: 'editor',
+      createdBy: 'p-sara',
+      createdAt: '2026-11-01T00:00:00.000Z',
+      expiresAt: null,
+      revokedAt: '2026-11-02T00:00:00.000Z',
+    }
+    expect(sourceLabel(grant('bot', 'member', 'editor', 'agent'), [revoked])).toBe(
+      'Agent key, revoked',
+    )
     expect(sourceLabel(grant('own', 'owner', 'editor'))).toBe('Owner')
   })
 })

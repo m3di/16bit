@@ -15,7 +15,8 @@ import FieldEditor from '../hub/FieldEditor.vue'
 import { displayId } from '../hub/relations.ts'
 import { formatTimestamp } from '../hub/values.ts'
 import BacklinksBlock from './BacklinksBlock.vue'
-import { folderLink, itemFolder, pageTitle } from './item-page.ts'
+import { itemTitle } from '../hub/relations.ts'
+import { folderLink, itemFolder } from './item-page.ts'
 import type { BacklinkList } from './useBacklinks.ts'
 
 // One item on its own page, after the task mockup: the trail and title, the folder's
@@ -54,7 +55,7 @@ const emit = defineEmits<{
 
 const fieldsId = useId()
 const detailsId = useId()
-const title = computed(() => pageTitle(item, hub))
+const title = computed(() => itemTitle(item, hub))
 const label = computed(() => displayId(hub, item))
 const folder = computed(() => itemFolder(hub, item))
 

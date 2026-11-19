@@ -101,9 +101,17 @@ export function cappedNote(target: HubGrantEntry): string {
     : ''
 }
 
-/** "Owner", "Agent key": the second column of the access table. */
-export const sourceLabel = (g: HubGrantEntry) =>
-  g.kind === 'agent' ? 'Agent key' : ROLE_LABELS[g.workspaceRole]
+/**
+ * "Owner", "Agent key": where someone's access comes from. An agent's grant stays when its key is
+ * revoked or expires (the key row keeps the state), so with the key list at hand the label says
+ * the key no longer works; without it, it says nothing it does not know.
+ */
+export function sourceLabel(g: HubGrantEntry, keys: readonly AgentKey[] | null = null): string {
+  if (g.kind !== 'agent') return ROLE_LABELS[g.workspaceRole]
+  const key = keys?.find((k) => k.id === g.principalId)
+  const status = key ? keyStatus(key) : 'active'
+  return status === 'active' ? 'Agent key' : `Agent key, ${status}`
+}
 
 /** The roles the reader may give someone who has no grant yet. */
 export function newGrantRoles(

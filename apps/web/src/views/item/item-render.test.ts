@@ -138,7 +138,8 @@ describe('ItemBody', () => {
   })
 
   it('shows only the mono ID when the hub has no title attribute (D50)', async () => {
-    const html = await body({ hub: description })
+    const untitled = { ...description, hub: { ...description.hub, titleAttributeId: null } }
+    const html = await body({ hub: untitled })
     expect(html).toMatch(/<h1 class="[^"]*font-mono[^"]*"[^>]*>\s*BLD-12\s*<\/h1>/)
     expect(html).not.toMatch(/<h1[^>]*>\s*Ship it/)
   })

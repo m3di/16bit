@@ -431,6 +431,7 @@ describe('HubSettingsPage, access', () => {
     // A viewer of the workspace acts as viewer whatever the grant.
     expect(html).toContain('Acts as viewer')
     expect(rowMenus(html)).toEqual(['Ivy', 'Tomas'])
+    expect(html).toContain('Agent key<')
   })
 
   it('an editor cannot see who has access', async () => {
