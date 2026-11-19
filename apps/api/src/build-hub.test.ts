@@ -1,3 +1,4 @@
+import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import pg from 'pg'
 import { execFile } from 'node:child_process'
@@ -16,6 +17,7 @@ import {
   toValues,
   type GhIssue,
 } from './build-hub.ts'
+import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { DEV_OWNER, DEV_PASSWORD } from './dev-accounts.ts'
@@ -31,12 +33,14 @@ const WS = BUILD_WORKSPACE.id
 
 let db: Kysely<Database>
 let dbUrl: string
+let appUrl: string
 let drop: () => Promise<void>
 
 beforeEach(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   dbUrl = test.url
+  appUrl = test.appUrl
   db = createDb(test.url)
   await migrateToLatest(db)
   await ensureBuildHub(db)
@@ -66,6 +70,41 @@ const hubCount = async () =>
       .where('id', '=', BUILD_HUB.id)
       .executeTakeFirstOrThrow()
   ).item_count
+
+/**
+ * Runs `fn` against the API on the API's own role (row-level security, #44), signed in as the
+ * dev owner, the Build hub's hub admin. For edits and deletes that must go the way a person's do.
+ */
+async function withApi(
+  fn: (
+    call: (method: 'PATCH' | 'DELETE', url: string, payload?: object) => Promise<number>,
+  ) => Promise<void>,
+): Promise<void> {
+  const appDb = createDb(appUrl)
+  const app: FastifyInstance = buildApp({ db: appDb })
+  try {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: DEV_OWNER.email, password: DEV_PASSWORD },
+    })
+    expect(login.statusCode, login.body).toBe(200)
+    const setCookie = login.headers['set-cookie']
+    const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(';')[0] ?? ''
+    await fn(async (method, url, payload) => {
+      const res = await app.inject({
+        method,
+        url: `/v1/workspaces/${WS}${url}`,
+        headers: { cookie },
+        ...(payload && { payload }),
+      })
+      return res.statusCode
+    })
+  } finally {
+    await app.close()
+    await appDb.destroy()
+  }
+}
 
 const revisions = () =>
   db.selectFrom('revision').selectAll().where('workspace_id', '=', WS).orderBy('seq').execute()
@@ -220,14 +259,12 @@ describe('ensureBuildHub title (D50, #120)', () => {
       .where('workspace_id', '=', WS)
       .where('id', '=', BUILD_HUB.id)
       .executeTakeFirstOrThrow()
-  /** As `PATCH /hubs/build` writes it: the title and a version bump. */
+  /** A hub admin's edit through `PATCH /hubs/build`, which bumps the version. */
   const editTitle = (titleAttributeId: string | null) =>
-    db
-      .updateTable('folder')
-      .set({ title_attribute_id: titleAttributeId, version: sql<number>`version + 1` })
-      .where('workspace_id', '=', WS)
-      .where('id', '=', BUILD_HUB.id)
-      .execute()
+    withApi(async (call) => {
+      const status = await call('PATCH', `/hubs/${BUILD_HUB.id}`, { version: 0, titleAttributeId })
+      expect(status).toBe(200)
+    })
 
   it('names Title as the hub’s title when it creates the hub, and keeps it on a re-run', async () => {
     expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 0 })
@@ -258,6 +295,97 @@ describe('ensureBuildHub title (D50, #120)', () => {
     expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 1 })
     await ensureBuildHub(db)
     expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 1 })
+  })
+})
+
+describe('hubs and attributes deleted through the API (#143)', () => {
+  const attributeIds = async () =>
+    (
+      await db
+        .selectFrom('attribute')
+        .select('id')
+        .where('workspace_id', '=', WS)
+        .orderBy('id')
+        .execute()
+    ).map((a) => a.id)
+  const attached = async () =>
+    (
+      await db
+        .selectFrom('folder_attribute')
+        .select('attribute_id')
+        .where('workspace_id', '=', WS)
+        .orderBy('position')
+        .execute()
+    ).map((a) => a.attribute_id)
+
+  it('does not bring back a deleted attribute, and imports without its values', async () => {
+    await importIssues(db, [issue(1), issue(2)])
+    await withApi(async (call) => {
+      // Both items hold a stage, so the delete needs their number as confirm (D51).
+      expect(await call('DELETE', `/attributes/${ATTR.stage}?version=0&confirm=2`)).toBe(204)
+    })
+    const expected = Object.values(ATTR).filter((id) => id !== ATTR.stage)
+
+    expect(await ensureBuildHub(db)).toEqual({ hubDeleted: false })
+    expect(await attributeIds()).toEqual([...expected].sort())
+    expect(await attached()).toEqual(expected)
+
+    // gh-1 is unchanged without its stage; gh-2 changed on GitHub; gh-3 is new.
+    const result = await importIssues(db, [
+      issue(1),
+      issue(2, { labels: [{ name: 'stage:done' }, { name: 'role:qa' }] }),
+      issue(3),
+    ])
+    expect(result).toEqual({ created: 1, updated: 1, unchanged: 1, skipped: [], failed: [] })
+    for (const id of ['gh-1', 'gh-2', 'gh-3']) {
+      expect((await getItem(db, WS, id)).values).not.toHaveProperty(ATTR.stage)
+    }
+    expect((await getItem(db, WS, 'gh-2')).values[ATTR.role]).toBe('qa')
+  })
+
+  it('does not bring back a deleted title attribute, and leaves the title cleared', async () => {
+    await withApi(async (call) => {
+      expect(await call('DELETE', `/attributes/${ATTR.title}?version=0`)).toBe(204)
+    })
+    // The API cleared the title and bumped the hub's version.
+    const hub = () =>
+      db
+        .selectFrom('folder')
+        .select(['title_attribute_id', 'version'])
+        .where('workspace_id', '=', WS)
+        .where('id', '=', BUILD_HUB.id)
+        .executeTakeFirstOrThrow()
+    expect(await hub()).toEqual({ title_attribute_id: null, version: 1 })
+
+    await ensureBuildHub(db)
+    expect(await attributeIds()).not.toContain(ATTR.title)
+    expect(await hub()).toEqual({ title_attribute_id: null, version: 1 })
+    // Title was required; without it the issue still imports.
+    expect((await importIssues(db, [issue(1)])).created).toBe(1)
+    expect((await getItem(db, WS, 'gh-1')).values).not.toHaveProperty(ATTR.title)
+  })
+
+  it('does not bring back a deleted hub', async () => {
+    await withApi(async (call) => {
+      expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
+    })
+    const before = await workspaceSnapshot(db, WS)
+    const log = await db
+      .selectFrom('access_log')
+      .selectAll()
+      .where('workspace_id', '=', WS)
+      .execute()
+
+    expect(await ensureBuildHub(db)).toEqual({ hubDeleted: true })
+    expect(
+      await db.selectFrom('access_log').selectAll().where('workspace_id', '=', WS).execute(),
+    ).toEqual(log)
+    expect(await workspaceSnapshot(db, WS)).toEqual(before)
+    expect(await attributeIds()).toEqual([])
+    for (const table of ['folder', 'hub_grant'] as const) {
+      const rows = await db.selectFrom(table).selectAll().where('workspace_id', '=', WS).execute()
+      expect(rows, table).toEqual([])
+    }
   })
 })
 

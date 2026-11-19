@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { ItemValues, SelectOption, ValueError } from '@16bit/core'
-import type { Kysely } from 'kysely'
+import type { Kysely, Transaction } from 'kysely'
 import { z } from 'zod'
 import type { Database } from './db/database.ts'
 import { ensureHubAdmin } from './access-log.ts'
@@ -9,6 +9,7 @@ import { DEV_OWNER, ensureDevAccounts, linkDevAccount } from './dev-accounts.ts'
 import { HttpError } from './http.ts'
 import { createItem, patchItem } from './items.ts'
 import { seedHubTitle } from './seed-hub-title.ts'
+import { tombstoned } from './seed-tombstones.ts'
 
 // `pnpm seed:build-hub`: imports this repository's GitHub issues into a local "Build" hub,
 // one item per issue. Items are written through the same path as the API (validation with
@@ -134,12 +135,16 @@ export function toValues(issue: GhIssue): ItemValues {
  * the hub's title attribute (D50) unless the hub was edited through the API (seed-hub-title.ts):
  * a title a hub admin changed or cleared stays. The dev
  * owner (dev-accounts.ts) owns the workspace and can sign in to see the hub.
+ *
+ * A hub or attribute deleted through the API stays deleted (#133, as in the demo seed): a deleted
+ * hub is not re-created and this returns `{ hubDeleted: true }`, and deleted attributes are left
+ * out, so `hub_id_check` and `attribute_id_check` never refuse the run.
  */
-export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
+export async function ensureBuildHub(db: Kysely<Database>): Promise<{ hubDeleted: boolean }> {
   const ws = BUILD_WORKSPACE.id
   const ownerId = DEV_OWNER.id
   const accountId = (await ensureDevAccounts(db, [DEV_OWNER])).get(ownerId)
-  await db.transaction().execute(async (trx) => {
+  return db.transaction().execute(async (trx) => {
     await trx
       .insertInto('workspace')
       .values({ id: ws, name: BUILD_WORKSPACE.name })
@@ -160,6 +165,9 @@ export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .execute()
     if (accountId !== undefined) await linkDevAccount(trx, ws, ownerId, accountId)
+    if ((await tombstoned(trx, 'deleted_hub', ws, [BUILD_HUB.id])).size > 0) {
+      return { hubDeleted: true }
+    }
     const created = await trx
       .insertInto('folder')
       .values({
@@ -174,43 +182,55 @@ export async function ensureBuildHub(db: Kysely<Database>): Promise<void> {
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .returning('id')
       .executeTakeFirst()
-    await trx
-      .insertInto('attribute')
-      .values(
-        ATTRIBUTES.map((a) => ({
-          workspace_id: ws,
-          id: a.id,
-          hub_id: BUILD_HUB.id,
-          name: a.name,
-          type: a.type,
-          config: JSON.stringify(a.config),
-        })),
-      )
-      .onConflict((oc) =>
-        oc.columns(['workspace_id', 'id']).doUpdateSet({
-          name: (eb) => eb.ref('excluded.name'),
-          config: (eb) => eb.ref('excluded.config'),
-        }),
-      )
-      .execute()
-    await trx
-      .insertInto('folder_attribute')
-      .values(
-        ATTRIBUTES.map((a, position) => ({
-          workspace_id: ws,
-          hub_id: BUILD_HUB.id,
-          folder_id: BUILD_HUB.id,
-          attribute_id: a.id,
-          position,
-          required: 'required' in a && a.required,
-        })),
-      )
-      .onConflict((oc) => oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing())
-      .execute()
+    const gone = await tombstoned(trx, 'deleted_attribute', ws, Object.values(ATTR))
+    const kept = ATTRIBUTES.filter((a) => !gone.has(a.id))
+    if (kept.length > 0) await upsertAttributes(trx, kept)
     // The issue title is the item title (D50), set only on a hub nobody has edited (#120).
     await seedHubTitle(trx, ws, BUILD_HUB.id, ATTR.title, created !== undefined)
     await ensureHubAdmin(trx, ws, BUILD_HUB.id, ownerId)
+    return { hubDeleted: false }
   })
+}
+
+/** Upserts the hub's attributes and attaches them to the hub folder at their definition position. */
+async function upsertAttributes(
+  trx: Transaction<Database>,
+  attributes: readonly (typeof ATTRIBUTES)[number][],
+): Promise<void> {
+  const ws = BUILD_WORKSPACE.id
+  await trx
+    .insertInto('attribute')
+    .values(
+      attributes.map((a) => ({
+        workspace_id: ws,
+        id: a.id,
+        hub_id: BUILD_HUB.id,
+        name: a.name,
+        type: a.type,
+        config: JSON.stringify(a.config),
+      })),
+    )
+    .onConflict((oc) =>
+      oc.columns(['workspace_id', 'id']).doUpdateSet({
+        name: (eb) => eb.ref('excluded.name'),
+        config: (eb) => eb.ref('excluded.config'),
+      }),
+    )
+    .execute()
+  await trx
+    .insertInto('folder_attribute')
+    .values(
+      attributes.map((a) => ({
+        workspace_id: ws,
+        hub_id: BUILD_HUB.id,
+        folder_id: BUILD_HUB.id,
+        attribute_id: a.id,
+        position: ATTRIBUTES.indexOf(a),
+        required: 'required' in a && a.required,
+      })),
+    )
+    .onConflict((oc) => oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing())
+    .execute()
 }
 
 /** An issue the hub rejected. The rest of the run carries on; the CLI exits non-zero. */
@@ -267,11 +287,15 @@ export async function importIssues(
 ): Promise<ImportResult> {
   const ws = BUILD_WORKSPACE.id
   const result: ImportResult = { created: 0, updated: 0, unchanged: 0, skipped: [], failed: [] }
+  // Values of attributes deleted through the API are left out, as the API would refuse them.
+  const gone = await tombstoned(db, 'deleted_attribute', ws, Object.values(ATTR))
 
   // Oldest first, so the hub's sequence numbers (BLD-1, BLD-2, ...) follow issue order.
   for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
     const id = itemIdFor(issue)
-    const values = toValues(issue)
+    const values = Object.fromEntries(
+      Object.entries(toValues(issue)).filter(([key]) => !gone.has(key)),
+    )
     const current = await db
       .selectFrom('item')
       .select(['values', 'version'])

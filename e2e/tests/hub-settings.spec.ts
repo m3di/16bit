@@ -355,7 +355,7 @@ test('readers who are not hub admins see the schema read-only; a hidden hub is n
   await expect(leo.getByRole('button', { name: 'New attribute' })).toHaveCount(0)
   await expect(leo.getByRole('button', { name: /^Actions for / })).toHaveCount(0)
 
-  // The hub page offers the way in only to hub admins.
+  // The hub page offers the way in only to hub admins, owners and admins.
   await leo.goto(`/w/${WS}/hubs/design`)
   await expect(leo.getByRole('heading', { level: 1 })).toBeVisible()
   await expect(leo.getByRole('link', { name: 'Hub settings' })).toHaveCount(0)
@@ -374,7 +374,8 @@ test('the hub page links hub admins to settings, and the page fits a phone', asy
 }) => {
   await page.goto(`/w/${WS}/hubs/design`)
   await page.getByRole('link', { name: 'Hub settings' }).click()
-  await expect(page).toHaveURL(new RegExp(`/w/${WS}/hubs/design/settings/folders$`))
+  // It opens on General, the first section (#116).
+  await expect(page).toHaveURL(new RegExp(`/w/${WS}/hubs/design/settings/general$`))
   await page
     .getByRole('navigation', { name: 'Hub settings' })
     .getByRole('link', { name: 'Attributes' })

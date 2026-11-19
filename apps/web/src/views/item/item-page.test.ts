@@ -14,27 +14,32 @@ import {
   itemPageLink,
   malformedItemId,
   pageState,
-  pageTitle,
 } from './item-page.ts'
+import { itemTitle } from '../hub/relations.ts'
 import { useBacklinks } from './useBacklinks.ts'
 
 const titled: HubDescription = {
   ...description,
   hub: { ...description.hub, titleAttributeId: 'title' },
 }
+const untitled: HubDescription = {
+  ...description,
+  hub: { ...description.hub, titleAttributeId: null },
+}
 
-describe('pageTitle (D50)', () => {
+// The page titles its item with the shared helper, as relation chips and the picker do.
+describe('itemTitle on the item page (D50)', () => {
   it("is the value of the hub's title attribute, trimmed", () => {
-    expect(pageTitle(item('i1', 1, { title: '  Ship it ' }), titled)).toBe('Ship it')
+    expect(itemTitle(item('i1', 1, { title: '  Ship it ' }), titled)).toBe('Ship it')
   })
 
   it('is empty without a title attribute, even if a text attribute has a value', () => {
-    expect(pageTitle(item('i1', 1, { title: 'Ship it' }), description)).toBe('')
+    expect(itemTitle(item('i1', 1, { title: 'Ship it' }), untitled)).toBe('')
   })
 
   it('is empty for an empty or missing value', () => {
-    expect(pageTitle(item('i1', 1, { title: '   ' }), titled)).toBe('')
-    expect(pageTitle(item('i1', 1, {}), titled)).toBe('')
+    expect(itemTitle(item('i1', 1, { title: '   ' }), titled)).toBe('')
+    expect(itemTitle(item('i1', 1, {}), titled)).toBe('')
   })
 })
 

@@ -1,4 +1,4 @@
-import type { HubDescription, HubRole, Me } from '@16bit/core'
+import type { AgentKey, HubDescription, HubGrantEntry, HubRole, Me } from '@16bit/core'
 import { createSSRApp, h, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { renderToString } from 'vue/server-renderer'
@@ -11,7 +11,8 @@ import FolderAttributesDialog from './FolderAttributesDialog.vue'
 import FolderDialog from './FolderDialog.vue'
 import { description, HUB, meAs, WS } from './fixtures.test-utils.ts'
 import HubSettingsPage from './HubSettingsPage.vue'
-import type { HubSettingsSection } from './schema.ts'
+import { SECTION_PATHS, SECTION_ROUTES, type HubSettingsSection } from './schema.ts'
+import { useHubAccess, type HubAccess } from './useHubAccess.ts'
 import { useHubSettings } from './useHubSettings.ts'
 
 // What each reader is offered, and every page state. Key handling and the write flows in a
@@ -39,16 +40,11 @@ async function renderIn(component: Component, props: Record<string, unknown>) {
         name: 'hub',
         component: { render: () => null },
       },
-      {
-        path: '/w/:workspaceId/hubs/:hubId/settings/folders',
-        name: 'hub-settings-folders',
+      ...(Object.keys(SECTION_ROUTES) as HubSettingsSection[]).map((section) => ({
+        path: `/w/:workspaceId/hubs/:hubId/settings/${SECTION_PATHS[section]}`,
+        name: SECTION_ROUTES[section],
         component: { render: () => null },
-      },
-      {
-        path: '/w/:workspaceId/hubs/:hubId/settings/attributes',
-        name: 'hub-settings-attributes',
-        component: { render: () => null },
-      },
+      })),
     ],
   })
   await router.push(`/w/${WS}/hubs/${HUB}/settings/folders`)
@@ -63,16 +59,19 @@ async function renderPage(
     hub?: () => Response
     load?: boolean
     data?: HubDescription
+    access?: HubAccess
   } = {},
 ) {
   const data = options.data ?? description(options.role ?? 'hub_admin')
   const model = await storeWith(options.hub ?? (() => json(data)), options.load !== false)
   const me = options.me ?? { state: 'ready', data: meAs('member') }
+  const access = options.access ?? useHubAccess(WS, HUB, fakeApi(() => json({}, 500)).fetchFn)
   return renderIn(HubSettingsPage, {
     workspaceId: WS,
     hubId: HUB,
     section: options.section ?? 'folders',
     model,
+    access,
     me,
   })
 }
@@ -293,5 +292,265 @@ describe('AttributeDialog', () => {
     })
     expect(html).toContain('data-title-note')
     expect(html).not.toContain('Add option')
+  })
+})
+
+// ---- general, access, agent keys, danger zone (#116) ------------------------------------
+
+const grantRows = (): HubGrantEntry[] => [
+  {
+    principalId: 'bot',
+    kind: 'agent',
+    name: 'qa-agent',
+    workspaceRole: 'member',
+    hubRole: 'editor',
+  },
+  { principalId: 'ivy', kind: 'user', name: 'Ivy', workspaceRole: 'viewer', hubRole: 'editor' },
+  { principalId: 'own', kind: 'user', name: 'Olga', workspaceRole: 'owner', hubRole: 'viewer' },
+  {
+    principalId: 'p-sara',
+    kind: 'user',
+    name: 'Sara',
+    workspaceRole: 'member',
+    hubRole: 'hub_admin',
+  },
+  { principalId: 'tomas', kind: 'user', name: 'Tomas', workspaceRole: 'member', hubRole: 'editor' },
+]
+
+const keyRows = (): AgentKey[] => [
+  {
+    workspaceId: WS,
+    id: 'bot',
+    name: 'qa-agent',
+    hubId: HUB,
+    hubRole: 'editor',
+    createdBy: 'p-sara',
+    createdAt: '2026-11-01T00:00:00.000Z',
+    expiresAt: null,
+    revokedAt: null,
+  },
+  {
+    workspaceId: WS,
+    id: 'old',
+    name: 'old-agent',
+    hubId: HUB,
+    hubRole: 'viewer',
+    createdBy: 'gone',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    expiresAt: null,
+    revokedAt: '2026-10-02T00:00:00.000Z',
+  },
+]
+
+/** An access store with every list answered, or failing with `fail`. */
+async function accessWith(fail?: Response) {
+  const { fetchFn } = fakeApi((call) => {
+    if (fail) return fail.clone()
+    if (call.path.includes('/grants?')) return json({ items: grantRows(), nextCursor: null })
+    if (call.path.includes('/agent-keys?')) return json({ items: keyRows(), nextCursor: null })
+    if (call.path.includes('/members?'))
+      return json({
+        items: [
+          { workspaceId: WS, id: 'p-sara', kind: 'user', name: 'Sara', workspaceRole: 'member' },
+        ],
+        nextCursor: null,
+      })
+    return json({ error: 'not_found', message: 'x' }, 404)
+  })
+  const access = useHubAccess(WS, HUB, fetchFn)
+  await Promise.all([access.loadGrants(), access.loadKeys(), access.loadMembers()])
+  return access
+}
+
+describe('HubSettingsPage, nav', () => {
+  it('lists every section in order, the danger zone marked', async () => {
+    const html = await renderPage({ section: 'general' })
+    const labels = [
+      ...html.matchAll(/<a [^>]*href="[^"]*\/settings\/[^"]*"[^>]*>([^<]+)<\/a>/g),
+    ].map((m) => m[1])
+    expect(labels).toEqual([
+      'General',
+      'Access',
+      'Folders',
+      'Attributes',
+      'Agent keys',
+      'Danger zone',
+    ])
+    expect(html).toMatch(/aria-current="page"[^>]*>General</)
+    expect(html).toMatch(/class="[^"]*text-danger[^"]*"[^>]*>Danger zone</)
+  })
+})
+
+describe('HubSettingsPage, general', () => {
+  it('a hub admin edits name, colour and title; the item total counts every folder', async () => {
+    const html = await renderPage({ section: 'general' })
+    expect(html).toContain('data-hub-name')
+    expect(html).toContain('value="Build"')
+    expect(html).toContain('5 items in this hub, counting every folder.')
+    expect(html).toContain('role="radiogroup"')
+    expect(html).toContain('data-title-attribute')
+    expect(html).toMatch(/<option value="title"[^>]*selected/)
+    // Only text attributes can title items (D50).
+    expect(html).not.toMatch(/<option value="stage"/)
+    expect(html).toContain('All changes saved')
+  })
+
+  it('anyone else sees the values read-only, with the reason', async () => {
+    for (const [role, ws] of [
+      ['editor', 'member'],
+      ['viewer', 'viewer'],
+      ['editor', 'owner'],
+    ] as const) {
+      const html = await renderPage({
+        section: 'general',
+        role,
+        me: { state: 'ready', data: meAs(ws) },
+      })
+      expect(html, role).toContain('data-general-read-only')
+      expect(html, role).not.toContain('data-hub-name')
+      expect(html, role).toContain('Only hub admins can rename this hub')
+      expect(html, role).toContain('Title')
+      expect(html, role).toContain('Teal')
+    }
+  })
+})
+
+describe('HubSettingsPage, access', () => {
+  it('a hub admin changes members only; agents, owners and themselves are locked', async () => {
+    const access = await accessWith()
+    const html = await renderPage({ section: 'access', access })
+    expect(html).toContain('data-add-access')
+    expect(html).toContain('>Hub role for Tomas</label>')
+    expect(html).toContain('>Hub role for Ivy</label>')
+    expect(html).not.toContain('>Hub role for Sara</label>')
+    expect(html).not.toContain('>Hub role for Olga</label>')
+    expect(html).not.toContain('>Hub role for qa-agent</label>')
+    expect(html).toContain('Set by its key')
+    expect(html).toContain('Only owners change owners')
+    expect(html).toContain('Your own access')
+    // A viewer of the workspace acts as viewer whatever the grant.
+    expect(html).toContain('Acts as viewer')
+    expect(rowMenus(html)).toEqual(['Ivy', 'Tomas'])
+    expect(html).toContain('Agent key<')
+  })
+
+  it('an editor cannot see who has access', async () => {
+    const access = await accessWith()
+    const html = await renderPage({ section: 'access', role: 'editor', access })
+    expect(html).toContain('You cannot see who has access')
+    expect(html).not.toContain('data-grant-row')
+    expect(html).not.toContain('data-add-access')
+  })
+
+  it('an owner with a viewer grant changes everyone but agents, themselves included', async () => {
+    const access = await accessWith()
+    const html = await renderPage({
+      section: 'access',
+      role: 'viewer',
+      access,
+      me: { state: 'ready', data: meAs('owner') },
+    })
+    expect(html).toContain('>Hub role for Sara</label>')
+    expect(html).toContain('>Hub role for Olga</label>')
+    expect(html).not.toContain('>Hub role for qa-agent</label>')
+    expect(rowMenus(html)).toEqual(['Ivy', 'Olga', 'Sara', 'Tomas'])
+  })
+
+  it('an admin cannot touch an owner’s grant (¹)', async () => {
+    const access = await accessWith()
+    const html = await renderPage({
+      section: 'access',
+      role: 'editor',
+      access,
+      me: { state: 'ready', data: meAs('admin') },
+    })
+    expect(html).not.toContain('>Hub role for Olga</label>')
+    expect(rowMenus(html)).not.toContain('Olga')
+  })
+
+  it('loading and error states', async () => {
+    const loading = useHubAccess(WS, HUB, fakeApi(() => json({}, 500)).fetchFn)
+    expect(await renderPage({ section: 'access', access: loading })).toContain(
+      'Loading who has access',
+    )
+    const failed = await accessWith(json({ error: 'internal', message: 'Boom' }, 500))
+    const html = await renderPage({ section: 'access', access: failed })
+    expect(html).toContain('Who has access could not be loaded')
+    expect(html).toContain('Try again')
+  })
+})
+
+describe('HubSettingsPage, agent keys', () => {
+  it('a hub admin lists keys with creator, status, and revokes active ones', async () => {
+    const access = await accessWith()
+    const html = await renderPage({ section: 'keys', access })
+    expect(html).toContain('data-new-key')
+    expect(html).toContain('qa-agent')
+    expect(html).toContain('Active')
+    expect(html).toContain('Revoked')
+    expect((html.match(/data-revoke-key/g) ?? []).length).toBe(1)
+    // A creator missing from the member list shows as a short ID, never a made-up name.
+    expect(html).toContain('name not available')
+  })
+
+  it('an editor cannot see the keys', async () => {
+    const access = await accessWith()
+    const html = await renderPage({ section: 'keys', role: 'editor', access })
+    expect(html).toContain('You cannot see this hub’s agent keys')
+    expect(html).not.toContain('data-key-row')
+  })
+
+  it('says when there are none', async () => {
+    const { fetchFn } = fakeApi(() => json({ items: [], nextCursor: null }))
+    const access = useHubAccess(WS, HUB, fetchFn)
+    await access.loadKeys()
+    const html = await renderPage({ section: 'keys', access })
+    expect(html).toContain('No agent keys yet')
+    // The first key can be made from the empty state.
+    expect(html).toContain('data-new-key')
+  })
+})
+
+describe('HubSettingsPage, danger zone', () => {
+  const empty = (): HubDescription => ({
+    ...description(),
+    hub: { ...description().hub, itemCount: 0 },
+    folders: [],
+  })
+
+  it('an owner deletes an empty hub', async () => {
+    const access = await accessWith()
+    const html = await renderPage({
+      section: 'danger',
+      data: empty(),
+      access,
+      me: { state: 'ready', data: meAs('owner') },
+    })
+    const button = /<button[^>]*data-delete-hub[^>]*>/.exec(html)?.[0] ?? ''
+    expect(button).not.toBe('')
+    expect(button).not.toMatch(/\sdisabled(=""|\s|>)/)
+    expect(html).not.toContain('data-delete-refused')
+  })
+
+  it('a hub that holds items or folders says so', async () => {
+    const html = await renderPage({
+      section: 'danger',
+      me: { state: 'ready', data: meAs('owner') },
+    })
+    expect(html).toContain('It still holds 5 items and 3 folders.')
+    expect(/<button[^>]*data-delete-hub[^>]*>/.exec(html)?.[0]).toMatch(/\sdisabled(=""|\s|>)/)
+  })
+
+  it('an admin is refused while an owner holds a grant; a member always', async () => {
+    const access = await accessWith()
+    const admin = await renderPage({
+      section: 'danger',
+      data: empty(),
+      access,
+      me: { state: 'ready', data: meAs('admin') },
+    })
+    expect(admin).toContain('only an owner can delete it')
+    const member = await renderPage({ section: 'danger', data: empty(), access })
+    expect(member).toContain('Only workspace owners and admins delete hubs.')
   })
 })

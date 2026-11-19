@@ -6,7 +6,9 @@ import {
   folderAttributesResultSchema,
   folderConflictErrorSchema,
   folderSchema,
+  hubConflictErrorSchema,
   hubDescriptionSchema,
+  hubSchema,
   hubPageSchema,
   type Attribute,
   type CreateAttribute,
@@ -14,6 +16,7 @@ import {
   type Folder,
   type FolderAttributes,
   type FolderAttributesResult,
+  type Hub,
   type HubDescription,
   type HubListEntry,
   type SelectOption,
@@ -55,7 +58,31 @@ const CONFLICT = {
     'Someone else changed the attributes of this folder while you were editing. They now show their version; your change was not saved.',
   attribute:
     'Someone else changed this attribute while you were editing. It now shows their version; your change was not saved.',
+  hub: 'Someone else changed this hub while you were editing. It now shows their version; your change was not saved.',
 } as const
+
+/** The fields of the hub that general settings change (`PATCH /hubs/:hubId`). */
+export type HubChange = Partial<Pick<Hub, 'name' | 'color' | 'titleAttributeId'>>
+type HubField = keyof HubChange
+const HUB_FIELDS: readonly HubField[] = ['name', 'color', 'titleAttributeId']
+
+/** Why a hub write or delete was refused, in words. */
+export function hubRefusal(error: ApiRequestError, what: 'change' | 'delete'): string {
+  if (error.isNoPermission) {
+    return what === 'delete'
+      ? 'Your role does not allow deleting this hub.'
+      : 'Only hub admins can change this hub. Your change was not saved.'
+  }
+  if (error.isNotFound) return 'This hub is no longer available.'
+  if (error.code === 'not_empty')
+    return 'The hub still holds items or folders, so it was not deleted.'
+  if (error.code === 'in_use')
+    return 'A relation attribute in another hub links to this hub. Delete that attribute first; the hub was not deleted.'
+  if (error.code === 'network') return 'The server could not be reached. Nothing was changed.'
+  return what === 'delete'
+    ? `The hub was not deleted. ${error.message}`
+    : `Your change was not saved. ${error.message}`
+}
 
 /** A refusal in words. The server's message is the fallback for a 400. */
 export function refusalMessage(error: ApiRequestError, thing: 'folder' | 'attribute'): string {
@@ -319,6 +346,149 @@ export function useHubSettings(
     return result
   }
 
+  // ---- the hub itself --------------------------------------------------------------------
+
+  /** Why the last hub change was refused, shown in the general section until replaced. */
+  const hubNotice = ref<string | null>(null)
+  /** Hub changes sent and not yet answered. */
+  const hubSaving = ref(0)
+  // The last value of each field the server is known to hold while a change to it is in
+  // flight, and the latest change per field, so a late answer never undoes a newer choice.
+  const confirmedHub = new Map<HubField, unknown>()
+  const latestHub = new Map<HubField, number>()
+  let hubSeq = 0
+  // Hub writes go one at a time: each sends the version the previous answer left.
+  let hubQueue: Promise<unknown> = Promise.resolve()
+  // A conflict drops the changes queued behind it: they were made on the version it replaced.
+  let hubEpoch = 0
+
+  function setHubFields(change: HubChange) {
+    const d = data()
+    if (d) d.hub = { ...d.hub, ...change }
+  }
+
+  /**
+   * Shows `change` at once, then sends it. A refusal puts back the last value the server held,
+   * unless a newer change to that field is on its way; a conflict shows the server's hub.
+   */
+  function updateHub(change: HubChange): Promise<WriteResult<Hub>> {
+    const d = data()
+    if (!d)
+      return Promise.resolve({ ok: false, kind: 'refused', message: 'The hub is not loaded.' })
+    const fields = HUB_FIELDS.filter((f) => f in change)
+    const seq = ++hubSeq
+    const epoch = hubEpoch
+    for (const f of fields) {
+      if (!confirmedHub.has(f)) confirmedHub.set(f, d.hub[f])
+      latestHub.set(f, seq)
+    }
+    setHubFields(change)
+    hubNotice.value = null
+    hubSaving.value++
+
+    const run = async (): Promise<WriteResult<Hub>> => {
+      const now = data()
+      if (!now || epoch !== hubEpoch) {
+        return { ok: false, kind: 'conflict', message: CONFLICT.hub }
+      }
+      try {
+        const saved = await sendJson(
+          'PATCH',
+          hubPath,
+          { version: now.hub.version, ...change },
+          hubSchema,
+          fetchFn,
+        )
+        const shown: HubChange = {}
+        for (const f of fields) {
+          if (latestHub.get(f) === seq) {
+            latestHub.delete(f)
+            confirmedHub.delete(f)
+            Object.assign(shown, { [f]: saved[f] })
+          } else {
+            confirmedHub.set(f, saved[f])
+          }
+        }
+        const latest = data()
+        if (latest) {
+          latest.hub = {
+            ...latest.hub,
+            ...shown,
+            version: saved.version,
+            itemCount: saved.itemCount,
+          }
+        }
+        return { ok: true, data: saved }
+      } catch (raw) {
+        const error = asRequestError(raw)
+        const conflict =
+          error.code === 'conflict' ? hubConflictErrorSchema.safeParse(error.body) : null
+        if (conflict?.success) {
+          hubEpoch++
+          latestHub.clear()
+          confirmedHub.clear()
+          const latest = data()
+          if (latest) latest.hub = conflict.data.current
+          hubNotice.value = CONFLICT.hub
+          return { ok: false, kind: 'conflict', message: CONFLICT.hub }
+        }
+        const back: HubChange = {}
+        for (const f of fields) {
+          if (latestHub.get(f) !== seq) continue
+          latestHub.delete(f)
+          Object.assign(back, { [f]: confirmedHub.get(f) })
+          confirmedHub.delete(f)
+        }
+        setHubFields(back)
+        const message = hubRefusal(error, 'change')
+        hubNotice.value = message
+        if (error.isNotFound || (error.isNoPermission && !error.isUnauthorized)) {
+          void load({ keep: true })
+        }
+        return { ok: false, kind: 'refused', message }
+      }
+    }
+
+    const result = hubQueue.then(run).finally(() => {
+      hubSaving.value--
+    })
+    hubQueue = result.catch(() => undefined)
+    return result
+  }
+
+  /**
+   * Deletes the hub (D52). Waits for the answer, as its confirm dialog does. A conflict reads
+   * the hub again, so the counts and version on the page are the server's.
+   */
+  async function deleteHub(): Promise<WriteResult<undefined>> {
+    const d = data()
+    if (!d) return { ok: false, kind: 'refused', message: 'The hub is not loaded.' }
+    const path = `${hubPath}?version=${String(d.hub.version)}`
+    try {
+      await sendJson('DELETE', path, undefined, noContent, fetchFn)
+      return { ok: true, data: undefined }
+    } catch (raw) {
+      const error = asRequestError(raw)
+      if (error.code === 'conflict') {
+        const parsed = hubConflictErrorSchema.safeParse(error.body)
+        const latest = data()
+        if (parsed.success && latest) latest.hub = parsed.data.current
+        void load({ keep: true })
+        return {
+          ok: false,
+          kind: 'conflict',
+          message: 'Someone else changed this hub meanwhile. Check it again before deleting.',
+        }
+      }
+      if (error.code === 'not_empty') void load({ keep: true })
+      return { ok: false, kind: 'refused', message: hubRefusal(error, 'delete') }
+    }
+  }
+
+  function dismissHubNotice() {
+    hubNotice.value = null
+  }
+
   return {
     hub,
     targets,
@@ -331,6 +501,11 @@ export function useHubSettings(
     createAttribute,
     updateAttribute,
     deleteAttribute,
+    hubNotice,
+    hubSaving,
+    updateHub,
+    deleteHub,
+    dismissHubNotice,
   }
 }
 
