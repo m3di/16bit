@@ -4,6 +4,7 @@ import {
   effectiveHubRole,
   HUB_ROLES,
   type AgentHubRole,
+  type AgentKeyState,
   type AgentKey,
   type Attribute,
   type HubDescription,
@@ -140,7 +141,8 @@ export function keyRoleChoices(viewer: Subject | null, hubRole: HubRole): AgentH
 export const canRevokeKey = (viewer: Subject | null, hubRole: HubRole) =>
   !!viewer && allows(can(viewer, 'key.revoke', { hubGrant: hubRole }))
 
-export type KeyStatus = 'active' | 'expired' | 'revoked'
+/** The same states the grant list reports for an agent (`keyState`). */
+export type KeyStatus = AgentKeyState
 
 export function keyStatus(key: AgentKey, now: Date = new Date()): KeyStatus {
   if (key.revokedAt) return 'revoked'

@@ -7,11 +7,13 @@ import {
   BaseButton,
   BaseSelect,
   ConfirmDialog,
+  DataTable,
   FormNotice,
   RowActionsMenu,
   SettingsSection,
   type RowAction,
   type SettingsState,
+  type TableColumn,
 } from '../../ui/index.ts'
 import { createCommitter } from '../workspace/members.ts'
 import {
@@ -51,6 +53,14 @@ onMounted(() => {
 const grants = computed(() => access.grants.value)
 const rows = computed(() => (grants.value.state === 'ready' ? grants.value.data : []))
 const selfId = computed(() => viewer?.id ?? null)
+const tableRows = computed(() => rows.value.map((g) => ({ id: g.principalId, ...g })))
+const ACCESS_COLUMNS: TableColumn[] = [
+  { key: 'who', label: 'Who', rowHeader: true, wrap: true },
+  // A select, or the role with the reason it is locked: never cut short.
+  { key: 'role', label: 'Hub role', wrap: true },
+  { key: 'source', label: 'In the workspace', wrap: true },
+  { key: 'actions', label: 'Actions', labelHidden: true, align: 'end', shrink: true },
+]
 
 const state = computed((): SettingsState => {
   if (!lists.value) return 'no-permission'
@@ -208,83 +218,58 @@ function onAdded(person: Principal, role: HubRole) {
       </template>
     </FormNotice>
 
-    <div class="relative min-w-0 overflow-x-auto">
-      <table class="w-full min-w-[480px] border-collapse text-left">
-        <caption class="sr-only">
-          Who has access to this hub, and their hub role
-        </caption>
-        <thead>
-          <tr class="border-b border-line">
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Who</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Hub role</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">
-              In the workspace
-            </th>
-            <th scope="col" class="h-8 w-10 text-caption font-normal text-ink3">
-              <span class="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="g in rows"
-            :key="g.principalId"
-            class="border-b border-line"
-            data-grant-row
-            :data-principal-id="g.principalId"
-          >
-            <th scope="row" class="h-[38px] pr-3 font-normal">
-              <span class="inline-flex min-w-0 items-center gap-2">
-                <ActorChip
-                  :actor="{
-                    id: g.principalId,
-                    name: g.name,
-                    kind: g.kind === 'agent' ? 'agent' : 'person',
-                  }"
-                />
-                <span v-if="g.principalId === selfId" class="text-secondary text-ink3">You</span>
-              </span>
-            </th>
-            <td class="h-[38px] pr-3">
-              <div v-if="choices(g).length > 1" class="w-36" :data-grant-role="g.principalId">
-                <BaseSelect
-                  :model-value="shownRole(g)"
-                  :label="`Hub role for ${g.name}`"
-                  label-hidden
-                  size="sm"
-                  :options="roleOptions(g)"
-                  @update:model-value="onRole(g, $event)"
-                  @blur="committer.flush(g.principalId)"
-                />
-              </div>
-              <span
-                v-else
-                class="inline-flex flex-wrap items-baseline gap-x-2"
-                data-grant-role-text
-              >
-                <span>{{ HUB_ROLE_LABELS[g.hubRole] }}</span>
-                <span
-                  v-if="lockedGrantReason(viewer, hubRole, g)"
-                  class="text-secondary text-ink3"
-                  >{{ lockedGrantReason(viewer, hubRole, g) }}</span
-                >
-              </span>
-              <span v-if="cappedNote(g)" class="block text-secondary text-ink3" data-capped>{{
-                cappedNote(g)
-              }}</span>
-            </td>
-            <td class="h-[38px] pr-3 text-secondary text-ink2">{{ sourceLabel(g) }}</td>
-            <td class="h-[38px] text-right">
-              <RowActionsMenu
-                :label="`Actions for ${g.name}`"
-                :items="rowActions(g)"
-                @select="onRowAction(g, $event)"
-              />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      mode="static"
+      caption="Who has access to this hub, and their hub role"
+      :columns="ACCESS_COLUMNS"
+      :rows="tableRows"
+      :min-width="480"
+      :row-attrs="(g) => ({ 'data-grant-row': true, 'data-principal-id': g.principalId })"
+    >
+      <template #cell="{ row: g, column }">
+        <span v-if="column.key === 'who'" class="inline-flex min-w-0 items-center gap-2">
+          <ActorChip
+            :actor="{
+              id: g.principalId,
+              name: g.name,
+              kind: g.kind === 'agent' ? 'agent' : 'person',
+            }"
+          />
+          <span v-if="g.principalId === selfId" class="text-secondary text-ink3">You</span>
+        </span>
+        <template v-else-if="column.key === 'role'">
+          <div v-if="choices(g).length > 1" class="w-36" :data-grant-role="g.principalId">
+            <BaseSelect
+              :model-value="shownRole(g)"
+              :label="`Hub role for ${g.name}`"
+              label-hidden
+              size="sm"
+              :options="roleOptions(g)"
+              @update:model-value="onRole(g, $event)"
+              @blur="committer.flush(g.principalId)"
+            />
+          </div>
+          <span v-else class="inline-flex flex-wrap items-baseline gap-x-2" data-grant-role-text>
+            <span>{{ HUB_ROLE_LABELS[g.hubRole] }}</span>
+            <span v-if="lockedGrantReason(viewer, hubRole, g)" class="text-secondary text-ink3">{{
+              lockedGrantReason(viewer, hubRole, g)
+            }}</span>
+          </span>
+          <span v-if="cappedNote(g)" class="block text-secondary text-ink3" data-capped>{{
+            cappedNote(g)
+          }}</span>
+        </template>
+        <span v-else-if="column.key === 'source'" class="text-secondary text-ink2">{{
+          sourceLabel(g)
+        }}</span>
+        <RowActionsMenu
+          v-else-if="column.key === 'actions'"
+          :label="`Actions for ${g.name}`"
+          :items="rowActions(g)"
+          @select="onRowAction(g, $event)"
+        />
+      </template>
+    </DataTable>
   </SettingsSection>
 
   <AddAccessDialog

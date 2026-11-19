@@ -6,9 +6,11 @@ import {
   ActorChip,
   BaseButton,
   ConfirmDialog,
+  DataTable,
   SettingsSection,
   StatusDot,
   type SettingsState,
+  type TableColumn,
 } from '../../ui/index.ts'
 import { shortDate } from '../workspace/members.ts'
 import {
@@ -45,6 +47,15 @@ onMounted(() => {
 
 const keys = computed(() => access.keys.value)
 const rows = computed(() => (keys.value.state === 'ready' ? keys.value.data : []))
+const KEY_COLUMNS: TableColumn[] = [
+  { key: 'key', label: 'Key', rowHeader: true, wrap: true },
+  { key: 'role', label: 'Hub role' },
+  { key: 'createdBy', label: 'Created by', wrap: true },
+  { key: 'created', label: 'Created' },
+  { key: 'expires', label: 'Expires' },
+  { key: 'status', label: 'Status' },
+  { key: 'actions', label: 'Actions', labelHidden: true, align: 'end', shrink: true },
+]
 
 const state = computed((): SettingsState => {
   if (!lists.value) return 'no-permission'
@@ -156,61 +167,42 @@ async function confirmRevoke() {
       <BaseButton size="sm" data-new-key @click="createOpen = true">New agent key</BaseButton>
     </template>
 
-    <div class="relative min-w-0 overflow-x-auto">
-      <table class="w-full min-w-[640px] border-collapse text-left">
-        <caption class="sr-only">
-          Agent keys of this hub, newest first
-        </caption>
-        <thead>
-          <tr class="border-b border-line">
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Key</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Hub role</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Created by</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Created</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Expires</th>
-            <th scope="col" class="h-8 pr-3 text-caption font-normal text-ink3">Status</th>
-            <th scope="col" class="h-8 text-caption font-normal text-ink3">
-              <span class="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="key in rows"
-            :key="key.id"
-            class="border-b border-line"
-            data-key-row
-            :data-key-id="key.id"
-          >
-            <th scope="row" class="h-[38px] pr-3 font-normal">
-              <ActorChip :actor="{ id: key.id, name: key.name, kind: 'agent' }" />
-            </th>
-            <td class="h-[38px] pr-3">{{ HUB_ROLE_LABELS[key.hubRole] }}</td>
-            <td class="h-[38px] pr-3"><ActorChip :actor="creatorOf(key)" /></td>
-            <td class="h-[38px] pr-3 text-secondary text-ink2">{{ shortDate(key.createdAt) }}</td>
-            <td class="h-[38px] pr-3 text-secondary text-ink2">
-              {{ key.expiresAt ? shortDate(key.expiresAt) : 'Never' }}
-            </td>
-            <td class="h-[38px] pr-3">
-              <StatusDot
-                :label="STATUS[keyStatus(key)].label"
-                :tone="STATUS[keyStatus(key)].tone"
-              />
-            </td>
-            <td class="h-[38px] text-right">
-              <BaseButton
-                v-if="revokes && keyStatus(key) !== 'revoked'"
-                size="sm"
-                danger
-                data-revoke-key
-                @click="startRevoke(key)"
-                >Revoke<span class="sr-only"> {{ key.name }}</span></BaseButton
-              >
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      mode="static"
+      caption="Agent keys of this hub, newest first"
+      :columns="KEY_COLUMNS"
+      :rows="rows"
+      :min-width="640"
+      :row-attrs="(key) => ({ 'data-key-row': true, 'data-key-id': key.id })"
+    >
+      <template #cell="{ row: key, column }">
+        <ActorChip
+          v-if="column.key === 'key'"
+          :actor="{ id: key.id, name: key.name, kind: 'agent' }"
+        />
+        <template v-else-if="column.key === 'role'">{{ HUB_ROLE_LABELS[key.hubRole] }}</template>
+        <ActorChip v-else-if="column.key === 'createdBy'" :actor="creatorOf(key)" />
+        <span v-else-if="column.key === 'created'" class="text-secondary text-ink2">{{
+          shortDate(key.createdAt)
+        }}</span>
+        <span v-else-if="column.key === 'expires'" class="text-secondary text-ink2">{{
+          key.expiresAt ? shortDate(key.expiresAt) : 'Never'
+        }}</span>
+        <StatusDot
+          v-else-if="column.key === 'status'"
+          :label="STATUS[keyStatus(key)].label"
+          :tone="STATUS[keyStatus(key)].tone"
+        />
+        <BaseButton
+          v-else-if="column.key === 'actions' && revokes && keyStatus(key) !== 'revoked'"
+          size="sm"
+          danger
+          data-revoke-key
+          @click="startRevoke(key)"
+          >Revoke<span class="sr-only"> {{ key.name }}</span></BaseButton
+        >
+      </template>
+    </DataTable>
   </SettingsSection>
 
   <KeyDialog
