@@ -742,7 +742,7 @@ async function stripValues(
       .deleteFrom('item_index')
       .where('workspace_id', '=', workspaceId)
       .where('attribute_id', '=', key)
-      .where('item_id', 'in', ids)
+      .where(sql<boolean>`item_id = ANY(${ids}::text[])`)
       .execute()
     const index = changes.flatMap((c) =>
       indexEntries(attribute, c.value).map((entry) => ({

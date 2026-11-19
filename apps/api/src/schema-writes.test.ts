@@ -19,7 +19,7 @@ import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { sessionCookie } from './db/test-session.ts'
-import { createItem } from './items.ts'
+import { appendRevisions, createItem } from './items.ts'
 import { lockHubSchema } from './schema-lock.ts'
 
 // Integration tests for the schema write API (#112) against a real Postgres, through the API's
@@ -930,6 +930,40 @@ describe('item writes and the hub schema lock', () => {
     expect(res.statusCode, res.body).toBe(422)
     const created = await db.selectFrom('item').select('id').where('id', '=', 'i8').execute()
     expect(created).toEqual([])
+  })
+})
+
+describe('appendRevisions', () => {
+  it('outside a request takes N numbers in one update, and refuses a missing workspace', async () => {
+    const before = await db
+      .selectFrom('workspace')
+      .select('next_revision_seq')
+      .where('id', '=', 'w1')
+      .executeTakeFirstOrThrow()
+    await db.transaction().execute(async (trx) => {
+      await trx.updateTable('item').set({ version: 2 }).where('id', 'in', ['i1', 'i3']).execute()
+      await appendRevisions(trx, 'w1', 'own', [
+        { hubId: 'build', itemId: 'i1', version: 2, patch: { op: 'update', values: {} } },
+        { hubId: 'build', itemId: 'i3', version: 2, patch: { op: 'update', values: {} } },
+      ])
+    })
+    const seqs = await db
+      .selectFrom('revision')
+      .select('seq')
+      .where('workspace_id', '=', 'w1')
+      .where('version', '=', 2)
+      .orderBy('seq')
+      .execute()
+    expect(seqs.map((r) => r.seq)).toEqual([before.next_revision_seq, before.next_revision_seq + 1])
+    await expect(
+      db
+        .transaction()
+        .execute((trx) =>
+          appendRevisions(trx, 'nope', 'own', [
+            { hubId: 'build', itemId: 'i1', version: 3, patch: { op: 'update', values: {} } },
+          ]),
+        ),
+    ).rejects.toThrow('no workspace row')
   })
 })
 

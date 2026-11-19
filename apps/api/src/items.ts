@@ -100,12 +100,14 @@ const INSERT_CHUNK = 1000
 
 /**
  * Appends one revision per entry, for writes that change many items at once (#112). It runs
- * last, after every item row is written, and holds the workspace row for three statements only:
+ * last, after every item row is written, and holds the workspace row for a few statements only:
  * the sequence numbers, one INSERT per 1,000 revisions, and one NOTIFY statement.
  *
  * workspace_guard (migration 0008) lets the API role move `next_revision_seq` one step per
- * UPDATE, so the N steps run server-side in one DO statement. A DO block takes no parameters:
- * the workspace and the count go in as transaction-local settings.
+ * UPDATE, so in a request the N steps run server-side in one DO statement, on the workspace the
+ * request is scoped to (`app.workspace_id`). A DO block takes no parameters, so the count goes in
+ * as a transaction-local setting. Outside a request (the owner, which the guard skips) it is one
+ * UPDATE.
  */
 export async function appendRevisions(
   trx: Trx,
@@ -115,20 +117,31 @@ export async function appendRevisions(
 ): Promise<void> {
   const n = revisions.length
   if (n === 0) return
-  await sql`
-    SELECT set_config('app.revision_workspace', ${workspaceId}, true),
-           set_config('app.revision_steps', ${String(n)}, true)
-  `.execute(trx)
-  await sql`
-    DO $$
-    BEGIN
-      FOR i IN 1 .. current_setting('app.revision_steps')::int LOOP
-        UPDATE workspace SET next_revision_seq = next_revision_seq + 1
-        WHERE id = current_setting('app.revision_workspace');
-      END LOOP;
-    END
-    $$
-  `.execute(trx)
+  if (isScoped(trx)) {
+    await sql`SELECT set_config('app.revision_steps', ${String(n)}, true)`.execute(trx)
+    await sql`
+      DO $$
+      BEGIN
+        FOR i IN 1 .. current_setting('app.revision_steps')::int LOOP
+          UPDATE workspace SET next_revision_seq = next_revision_seq + 1
+          WHERE id = current_setting('app.workspace_id');
+          IF NOT FOUND THEN
+            RAISE EXCEPTION 'no workspace row to take revision numbers from';
+          END IF;
+        END LOOP;
+      END
+      $$
+    `.execute(trx)
+  } else {
+    const moved = await trx
+      .updateTable('workspace')
+      .set({ next_revision_seq: sql`next_revision_seq + ${n}` })
+      .where('id', '=', workspaceId)
+      .executeTakeFirst()
+    if (moved.numUpdatedRows === 0n) {
+      throw new Error(`no workspace row ${workspaceId} to take revision numbers from`)
+    }
+  }
   const { next } = await trx
     .selectFrom('workspace')
     .select('next_revision_seq as next')
