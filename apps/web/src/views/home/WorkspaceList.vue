@@ -3,10 +3,16 @@ import { BaseButton, StateBlock } from '../../ui/index.ts'
 import type { Load, SelfGrant, WorkspaceEntry } from './useDashboard.ts'
 import WorkspaceSection from './WorkspaceSection.vue'
 
-const { selfGrantIn = () => false, selfGrants = new Map<string, SelfGrant>() } = defineProps<{
+const {
+  selfGrantIn = () => false,
+  createHubIn = () => false,
+  selfGrants = new Map<string, SelfGrant>(),
+} = defineProps<{
   workspaces: Load<WorkspaceEntry[]>
   /** Whether the reader may grant themselves access to hubs in a workspace. */
   selfGrantIn?: (workspaceId: string) => boolean
+  /** Whether the reader may create hubs in a workspace (`hub.create`). */
+  createHubIn?: (workspaceId: string) => boolean
   selfGrants?: ReadonlyMap<string, SelfGrant>
 }>()
 defineEmits<{
@@ -14,6 +20,7 @@ defineEmits<{
   retryHubs: [workspaceId: string]
   grantSelf: [workspaceId: string, hubId: string]
   dismissSelfGrant: [workspaceId: string, hubId: string]
+  newHub: [workspaceId: string]
 }>()
 </script>
 
@@ -51,10 +58,12 @@ defineEmits<{
       :key="entry.workspace.id"
       :entry="entry"
       :can-self-grant="selfGrantIn(entry.workspace.id)"
+      :can-create-hub="createHubIn(entry.workspace.id)"
       :self-grants="selfGrants"
       @retry="$emit('retryHubs', entry.workspace.id)"
       @grant-self="$emit('grantSelf', entry.workspace.id, $event)"
       @dismiss-self-grant="$emit('dismissSelfGrant', entry.workspace.id, $event)"
+      @new-hub="$emit('newHub', entry.workspace.id)"
     />
   </template>
 </template>

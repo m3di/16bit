@@ -18,6 +18,7 @@ import NewItemForm from './NewItemForm.vue'
 import { provideValueContext } from './context.ts'
 import { folderColumns, truncatedNote, useHub } from './useHub.ts'
 import { useHubDirectory } from './useHubDirectory.ts'
+import { canWriteItems } from './newItem.ts'
 import { canSort, inHub, useItems, valueErrors } from './useItems.ts'
 import { usePrincipals } from './usePrincipals.ts'
 
@@ -30,16 +31,28 @@ const { workspaceId, hubId, folderId, itemId } = defineProps<{
 }>()
 
 const router = useRouter()
-const { hub, tree, readOnly: roleReadOnly, load: loadHub } = useHub(workspaceId, hubId)
+const { hub, tree, load: loadHub } = useHub(workspaceId, hubId)
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
 const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '')
 const { list, rows, notice } = items
-// Read-only from the hub role on load, or after the server refused a write: a grant lowered
-// while the page is open is only known once a write gets a 403.
-const readOnly = computed(() => roleReadOnly.value || items.readOnly.value)
+const session = useSession()
+
+// `item.write` from `can()`, once both the reader and their hub role are known.
+const writeAccess = computed(() =>
+  canWriteItems(
+    session.me.value.state === 'ready' ? session.me.value.data : undefined,
+    workspaceId,
+    description.value?.hubRole,
+  ),
+)
+// Read-only by role, or after the server refused a write: a grant lowered while the page is
+// open is only known once a write gets a 403.
+const readOnly = computed(() => writeAccess.value === false || items.readOnly.value)
+// "New item" waits until the reader is known to be allowed. Edits in the panel only turn
+// read-only once the role is known to refuse them, so fields do not flash a read-only hint.
+const canWrite = computed(() => writeAccess.value === true && !items.readOnly.value)
 
 // Names for actors, and the hubs that linked items live in, for cells and editors.
-const session = useSession()
 const fetchFn: typeof fetch = (...args) => fetch(...args)
 const directory = useHubDirectory(workspaceId, fetchFn)
 const principals = usePrincipals(
@@ -194,7 +207,7 @@ const closePanel = () => {
 }
 
 function startCreate() {
-  if (readOnly.value) return
+  if (!canWrite.value) return
   createErrors.value = {}
   creating.value = true
   if (itemId) void router.push({ query: {} })
@@ -205,7 +218,8 @@ async function submitCreate(values: ItemValues) {
   createBusy.value = false
   if (result.ok) {
     creating.value = false
-    void router.push(itemLink(result.item))
+    // The new item opens on its own page, where the rest of it can be filled in.
+    void router.push({ name: 'item', params: { workspaceId, itemId: result.item.id } })
   } else if (readOnly.value) {
     // The hub refused the write: the form cannot succeed, the notice says why.
     creating.value = false
@@ -261,7 +275,7 @@ async function submitCreate(values: ItemValues) {
                 >You can view the items in this hub but not add or change them.</span
               >
               <BaseButton
-                v-else
+                v-else-if="canWrite"
                 variant="primary"
                 :disabled="list.state !== 'ready'"
                 data-new-item-button
@@ -288,7 +302,7 @@ async function submitCreate(values: ItemValues) {
               :selected-id="itemId"
               :item-link="itemLink"
               :is-creating="items.isCreating"
-              :read-only="readOnly"
+              :read-only="!canWrite"
               :sort="items.sort.value"
               @open="openItem"
               @retry="openFolder(openFolderId)"

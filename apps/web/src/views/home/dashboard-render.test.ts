@@ -7,6 +7,7 @@ import { ApiRequestError } from '../../api/client.ts'
 import AppShell from '../../ui/AppShell.vue'
 import HubCard from '../../ui/HubCard.vue'
 import type { WorkspaceEntry } from './useDashboard.ts'
+import NewHubDialog from './NewHubDialog.vue'
 import WorkspaceSection from './WorkspaceSection.vue'
 
 const router = () =>
@@ -244,5 +245,82 @@ describe('WorkspaceSection self-grant', () => {
     expect(refused).toContain('data-self-grant-error')
     expect(refused).toContain('Access was not given. Boom')
     expect(refused).toContain('role="alert"')
+  })
+})
+
+describe('WorkspaceSection new hub', () => {
+  const ready = entry({ state: 'ready', data: [hub] })
+  const newHubButtons = (html: string) => (html.match(/data-new-hub-button/g) ?? []).length
+
+  it('offers owners and admins "New hub", named with the workspace', async () => {
+    const html = await render(WorkspaceSection, { entry: ready, canCreateHub: true })
+    expect(newHubButtons(html)).toBe(1)
+    expect(html).toContain('New hub<span class="sr-only"> in Parcel Tracker</span>')
+  })
+
+  it('offers nothing to others', async () => {
+    const html = await render(WorkspaceSection, { entry: ready })
+    expect(html).not.toContain('New hub')
+  })
+
+  it('says how to start in an empty workspace, and only creators get the action', async () => {
+    const empty = entry({ state: 'ready', data: [] })
+    const creator = await render(WorkspaceSection, { entry: empty, canCreateHub: true })
+    expect(creator).toContain('Create a hub to start adding items.')
+    expect(creator.match(/>New hub</g)).toHaveLength(2)
+    const other = await render(WorkspaceSection, { entry: empty })
+    expect(other).toContain('Hubs in this workspace will show here.')
+    expect(other).not.toContain('New hub')
+  })
+
+  it('keeps "New hub" while hubs load or fail to load, not for a workspace that is gone', async () => {
+    const loading = await render(WorkspaceSection, {
+      entry: entry({ state: 'loading' }),
+      canCreateHub: true,
+    })
+    expect(newHubButtons(loading)).toBe(1)
+    const failed = await render(WorkspaceSection, {
+      entry: entry({ state: 'error', error: new ApiRequestError('network', 'Unreachable') }),
+      canCreateHub: true,
+    })
+    expect(newHubButtons(failed)).toBe(1)
+    for (const error of [
+      new ApiRequestError('forbidden', 'No', 403),
+      new ApiRequestError('not_found', 'Gone', 404),
+    ]) {
+      const html = await render(WorkspaceSection, {
+        entry: entry({ state: 'error', error }),
+        canCreateHub: true,
+      })
+      expect(newHubButtons(html)).toBe(0)
+    }
+  })
+})
+
+describe('NewHubDialog', () => {
+  const create = () => Promise.resolve({ ok: false as const, message: 'unused' })
+
+  it('asks for a name, an ID prefix and a colour, in the workspace named', async () => {
+    const html = await render(NewHubDialog, {
+      open: true,
+      workspaceName: 'Parcel Tracker',
+      usedColors: ['indigo', 'blue'],
+      create,
+    })
+    expect(html).toContain('New hub')
+    expect(html).toContain('In Parcel Tracker. You become its hub admin.')
+    expect(html).toMatch(/<label[^>]*>Name<\/label>/)
+    expect(html).toMatch(/<label[^>]*>ID prefix<\/label>/)
+    expect(html).toContain('It cannot be changed later.')
+    expect(html).toContain('role="radiogroup"')
+    // The first colour no hub uses yet is chosen.
+    expect(html).toMatch(/value="cyan"[^>]*checked|checked[^>]*value="cyan"/)
+    expect(html).toContain('Create hub')
+    expect(html).not.toContain('role="alert"')
+  })
+
+  it('renders nothing inside while closed', async () => {
+    const html = await render(NewHubDialog, { workspaceName: 'Parcel Tracker', create })
+    expect(html).not.toContain('Create hub')
   })
 })

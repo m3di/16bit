@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import type { CreateHub, PaletteColor } from '@16bit/core'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import ShellUser from '../session/ShellUser.vue'
 import { AppShell } from '../ui/index.ts'
 import { useSession } from '../session/session.ts'
 import { viewerOf } from './hub-settings/access.ts'
 import { useDashboard } from './home/useDashboard.ts'
 import WorkspaceList from './home/WorkspaceList.vue'
+import NewHubDialog from './home/NewHubDialog.vue'
+import { canCreateHub, createHub } from './home/newHub.ts'
 
 const { workspaces, totals, selfGrants, load, reloadHubs, grantSelf, dismissSelfGrant } =
   useDashboard()
@@ -23,6 +27,37 @@ const selfGrantIn = (workspaceId: string) => selfIn(workspaceId) !== null
 function onGrantSelf(workspaceId: string, hubId: string) {
   const viewer = selfIn(workspaceId)
   if (viewer) void grantSelf(workspaceId, hubId, viewer.id)
+}
+
+// New hubs: owners and admins (`hub.create`). The creator lands in the hub's General settings,
+// as its hub admin, to carry on setting it up.
+const router = useRouter()
+const me = computed(() => (session.me.value.state === 'ready' ? session.me.value.data : null))
+const createHubIn = (workspaceId: string) => canCreateHub(me.value, workspaceId)
+const newHubIn = ref<string | null>(null)
+const newHubOpen = computed({
+  get: () => newHubIn.value !== null,
+  set: (open) => {
+    if (!open) newHubIn.value = null
+  },
+})
+const newHubEntry = computed(() => {
+  const list = workspaces.value
+  return list.state === 'ready'
+    ? (list.data.find((e) => e.workspace.id === newHubIn.value) ?? null)
+    : null
+})
+const usedColors = computed<PaletteColor[]>(() => {
+  const hubs = newHubEntry.value?.hubs
+  return hubs?.state === 'ready' ? hubs.data.map((h) => h.color) : []
+})
+// The dialog cannot close while the create runs, so `newHubIn` holds still meanwhile.
+const sendNewHub = (body: CreateHub) => createHub(newHubIn.value ?? '', body)
+function onHubCreated(hub: { id: string; workspaceId: string }) {
+  void router.push({
+    name: 'hub-settings-general',
+    params: { workspaceId: hub.workspaceId, hubId: hub.id },
+  })
 }
 
 onMounted(() => {
@@ -53,11 +88,20 @@ const summary = computed(() =>
       <WorkspaceList
         :workspaces="workspaces"
         :self-grant-in="selfGrantIn"
+        :create-hub-in="createHubIn"
         :self-grants="selfGrants"
         @retry="load()"
         @retry-hubs="reloadHubs"
         @grant-self="onGrantSelf"
         @dismiss-self-grant="dismissSelfGrant"
+        @new-hub="newHubIn = $event"
+      />
+      <NewHubDialog
+        v-model:open="newHubOpen"
+        :workspace-name="newHubEntry?.workspace.name ?? ''"
+        :used-colors="usedColors"
+        :create="sendNewHub"
+        @created="onHubCreated"
       />
     </main>
   </AppShell>
