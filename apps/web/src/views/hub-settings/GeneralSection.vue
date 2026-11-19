@@ -104,6 +104,12 @@ const titleHint = computed(() =>
     : 'Items are titled with this text attribute in links, the relation picker and their page.',
 )
 
+// The prefix is chosen when the hub is created; the hub update has no field for it.
+const prefixNote = computed(
+  () =>
+    `Items are numbered ${hub.value.idPrefix}-1, ${hub.value.idPrefix}-2 and on. It is set when the hub is created and does not change.`,
+)
+
 const saveState = computed(() =>
   model.hubSaving.value > 0 ? 'Saving' : model.hubNotice.value ? '' : 'All changes saved',
 )
@@ -164,6 +170,13 @@ const saveState = computed(() =>
           <span>{{ titleName || 'None: items show their ID only' }}</span>
         </div>
       </div>
+
+      <!-- Read-only for everyone: the hub update has no field for it. -->
+      <dl class="m-0 flex flex-col gap-1" data-hub-prefix>
+        <dt class="text-secondary text-ink3">ID prefix</dt>
+        <dd class="m-0 font-mono text-secondary text-ink">{{ hub.idPrefix }}</dd>
+        <dd class="m-0 text-secondary text-ink3">{{ prefixNote }}</dd>
+      </dl>
     </div>
   </SettingsSection>
 </template>

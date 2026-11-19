@@ -101,6 +101,10 @@ describe('access', () => {
     expect(lockedGrantReason(me, 'hub_admin', grant('own', 'owner', 'editor'))).toBe(
       'Only owners change owners',
     )
+    // The reason says who may change the row, not the role the source column already shows.
+    expect(lockedGrantReason(me, 'hub_admin', grant('adm', 'admin', 'editor'))).toBe(
+      'Only owners and admins change admins',
+    )
   })
 
   it("an admin changes anyone's but an owner's, their own included (¹)", () => {

@@ -21,6 +21,7 @@ import {
   type AttributeDraft,
   type DraftField,
 } from './schema.ts'
+import { usageNote, useOptionUsage } from './optionUsage.ts'
 import type { HubSettings } from './useHubSettings.ts'
 
 const open = defineModel<boolean>('open', { default: false })
@@ -57,13 +58,24 @@ function fill() {
   }
 }
 
+// How many items use each option (`GET /attributes/:id/usage`), so removing a used option
+// shows its count before saving.
+const optionUsage = useOptionUsage((a) => model.attributeUsage(a))
+const usage = optionUsage.usage
+const usageCounts = computed(() => (usage.value.state === 'ready' ? usage.value.counts : {}))
+const usageLine = computed(() => usageNote(usage.value, attribute.value?.type ?? null))
+
 watch(
   open,
   (isOpen) => {
-    if (!isOpen) return
+    if (!isOpen) {
+      optionUsage.clear()
+      return
+    }
     fill()
     errors.value = {}
     error.value = ''
+    void optionUsage.load(attribute.value)
   },
   { immediate: true },
 )
@@ -180,7 +192,11 @@ async function saveExisting(confirm?: number) {
   }
   confirmOpen.value = false
   error.value = result.message
-  if (result.kind === 'conflict') fill()
+  if (result.kind === 'conflict') {
+    // The page now shows the other version, with its own options: count those.
+    fill()
+    void optionUsage.load(attribute.value)
+  }
 }
 </script>
 
@@ -276,8 +292,19 @@ async function saveExisting(confirm?: number) {
       </p>
 
       <div v-if="hasOptions" class="flex flex-col gap-1">
-        <OptionsEditor v-model="draft.options" />
+        <OptionsEditor v-model="draft.options" :usage="usageCounts" />
         <span v-if="errors.options" class="text-secondary text-danger">{{ errors.options }}</span>
+        <p v-if="usageLine" class="m-0 text-secondary text-ink3" data-option-usage>
+          {{ usageLine }}
+        </p>
+        <FormNotice v-if="usage.state === 'error'" data-option-usage-error>
+          {{ usage.message }}
+          <template v-if="usage.retry" #action>
+            <BaseButton size="sm" variant="quiet" @click="optionUsage.load(attribute)"
+              >Try again</BaseButton
+            >
+          </template>
+        </FormNotice>
       </div>
 
       <FormNotice v-if="error" data-attr-dialog-error>{{ error }}</FormNotice>

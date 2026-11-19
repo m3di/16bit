@@ -280,6 +280,8 @@ describe('AttributeDialog', () => {
     expect(html).toMatch(/value="To do"/)
     expect(html).toMatch(/value="Done"/)
     expect(html).toContain('Filter and sort: on')
+    // The per-option counts are read when the dialog opens (#147).
+    expect(html).toContain('Counting the items that use each option.')
   })
 
   it('names the title attribute as such', async () => {
@@ -394,6 +396,12 @@ describe('HubSettingsPage, general', () => {
     // Only text attributes can title items (D50).
     expect(html).not.toMatch(/<option value="stage"/)
     expect(html).toContain('All changes saved')
+    // The prefix shows, read-only: it is not a field.
+    expect(html).toContain('data-hub-prefix')
+    // A term and its value, so the label is read with the prefix.
+    expect(html).toMatch(/<dt[^>]*>ID prefix<\/dt><dd class="[^"]*font-mono[^"]*">BLD<\/dd>/)
+    expect(html).toContain('Items are numbered BLD-1, BLD-2 and on.')
+    expect(html).not.toMatch(/<input[^>]*value="BLD"/)
   })
 
   it('anyone else sees the values read-only, with the reason', async () => {
@@ -412,6 +420,7 @@ describe('HubSettingsPage, general', () => {
       expect(html, role).toContain('Only hub admins can rename this hub')
       expect(html, role).toContain('Title')
       expect(html, role).toContain('Teal')
+      expect(html, role).toContain('data-hub-prefix')
     }
   })
 })
