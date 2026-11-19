@@ -1,6 +1,7 @@
 import {
   attributeConflictErrorSchema,
   attributeSchema,
+  attributeUsageSchema,
   confirmRequiredErrorSchema,
   createdAgentKeySchema,
   folderAttributesConflictErrorSchema,
@@ -865,6 +866,156 @@ describe('updating attributes', () => {
     release()
     await writer
     expect((await removal).statusCode).toBe(200)
+  })
+})
+
+describe('GET /attributes/:attributeId/usage (#141)', () => {
+  const usage = async (who: string, attributeId: string) => {
+    const res = await person(who, 'GET', `/attributes/${attributeId}/usage`)
+    expect(res.statusCode, res.body).toBe(200)
+    return attributeUsageSchema.parse(res.json())
+  }
+  const counts = (u: { options: { optionId: string; items: number }[] }) =>
+    u.options.map((o) => [o.optionId, o.items])
+
+  it('counts the hub’s items per option, in option order, zero included', async () => {
+    // i1 build {todo, [a, b]}, i2 and i3 in the subfolder bugs {done}, {todo}, and i4 {[b, c]}.
+    await createItem(db, 'w1', 'own', {
+      id: 'i4',
+      folderId: 'build',
+      values: { title: 'Four', tags: ['b', 'c'] },
+    })
+    expect(await usage('ha', 'stage')).toEqual({
+      attributeId: 'stage',
+      version: 0,
+      options: [
+        { optionId: 'todo', items: 2 },
+        { optionId: 'doing', items: 0 },
+        { optionId: 'done', items: 1 },
+      ],
+    })
+    expect(counts(await usage('ha', 'tags'))).toEqual([
+      ['a', 1],
+      ['b', 2],
+      ['c', 1],
+    ])
+    // Owners with a hub admin grant read it too.
+    expect(counts(await usage('own', 'stage'))).toEqual(counts(await usage('ha', 'stage')))
+  })
+
+  it('reads item values when the attribute is not indexed, with the same counts', async () => {
+    await createItem(db, 'w1', 'own', {
+      id: 'i4',
+      folderId: 'build',
+      values: { title: 'Four', tags: ['b', 'c'] },
+    })
+    const indexed = [await usage('ha', 'stage'), await usage('ha', 'tags')]
+    // Empty the index too, so the counts can only come from `item.values`.
+    await db
+      .updateTable('attribute')
+      .set({ indexed: false })
+      .where('workspace_id', '=', 'w1')
+      .execute()
+    await db.deleteFrom('item_index').where('workspace_id', '=', 'w1').execute()
+    expect([await usage('ha', 'stage'), await usage('ha', 'tags')]).toEqual(indexed)
+  })
+
+  it('follows option changes, with the attribute’s new version', async () => {
+    const res = await person('ha', 'PATCH', '/attributes/stage', {
+      version: 0,
+      options: [
+        { id: 'todo', label: 'To do' },
+        { id: 'later', label: 'Later' },
+      ],
+      confirm: 1,
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(await usage('ha', 'stage')).toEqual({
+      attributeId: 'stage',
+      version: 1,
+      options: [
+        { optionId: 'todo', items: 2 },
+        { optionId: 'later', items: 0 },
+      ],
+    })
+  })
+
+  it('matches confirm_required for one option, and does not add up across options', async () => {
+    await createItem(db, 'w1', 'own', {
+      id: 'i4',
+      folderId: 'build',
+      values: { title: 'Four', tags: ['b', 'c'] },
+    })
+    const tags = Object.fromEntries(counts(await usage('ha', 'tags'))) as Record<string, number>
+    const stage = Object.fromEntries(counts(await usage('ha', 'stage'))) as Record<string, number>
+    expect(tags).toEqual({ a: 1, b: 2, c: 1 })
+    /** `affected` of an option removal sent without `confirm`, which writes nothing. */
+    const affected = async (attributeId: string, keep: string[]) => {
+      const res = await person('ha', 'PATCH', `/attributes/${attributeId}`, {
+        version: 0,
+        options: keep.map((id) => ({ id, label: id })),
+      })
+      expect(res.statusCode, res.body).toBe(409)
+      return confirmRequiredErrorSchema.parse(res.json()).affected
+    }
+    // One option: exactly its count, for a select and a multi-select.
+    expect(await affected('stage', ['todo', 'doing'])).toBe(stage['done'])
+    expect(await affected('tags', ['a', 'c'])).toBe(tags['b'])
+    // Two options: i1 holds a and b, so it counts once in `affected` and once under each here.
+    const both = await affected('tags', ['c'])
+    expect(both).toBe(2)
+    expect(both).toBeLessThan((tags['a'] ?? 0) + (tags['b'] ?? 0))
+  })
+
+  it('is 404 for another workspace’s attribute with the same ID', async () => {
+    await db.insertInto('workspace').values({ id: 'w2', name: 'Beta' }).execute()
+    await db
+      .insertInto('folder')
+      .values({
+        workspace_id: 'w2',
+        id: 'build',
+        hub_id: 'build',
+        parent_id: null,
+        name: 'build',
+        color: 'blue',
+        id_prefix: 'H',
+      })
+      .execute()
+    await db
+      .insertInto('attribute')
+      .values({
+        workspace_id: 'w2',
+        id: 'stage',
+        hub_id: 'build',
+        name: 'stage',
+        type: 'select',
+        config: { options: [{ id: 'todo', label: 'todo' }] },
+        indexed: false,
+      })
+      .execute()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/workspaces/w2/attributes/stage/usage',
+      headers: await as('own'),
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('is 400 for an attribute without options', async () => {
+    const res = await person('ha', 'GET', '/attributes/title/usage')
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ error: 'invalid_request' })
+  })
+
+  it('is 403 below hub admin, 404 for a hidden hub or a missing attribute', async () => {
+    expect((await person('ed', 'GET', '/attributes/stage/usage')).statusCode).toBe(403)
+    expect((await person('vw', 'GET', '/attributes/stage/usage')).statusCode).toBe(403)
+    // No grant on build: the hub is hidden, for admins too (D45), the same as a missing one.
+    for (const who of ['out', 'adm2']) {
+      const res = await person(who, 'GET', '/attributes/stage/usage')
+      expect(res.statusCode, who).toBe(404)
+      expect(res.json()).toEqual((await person('ha', 'GET', '/attributes/nope/usage')).json())
+    }
   })
 })
 
