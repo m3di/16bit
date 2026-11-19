@@ -3,6 +3,7 @@ import {
   conflictErrorSchema,
   DEFAULT_PAGE_LIMIT,
   itemQueryResultSchema,
+  itemReadSchema,
   itemSchema,
   type Attribute,
   type Item,
@@ -11,7 +12,14 @@ import {
   type ValueError,
 } from '@16bit/core'
 import { computed, ref } from 'vue'
-import { ApiRequestError, asRequestError, getJson, sendJson, type Fetch } from '../../api/client.ts'
+import {
+  ApiRequestError,
+  asRequestError,
+  getJson,
+  noContent,
+  sendJson,
+  type Fetch,
+} from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
 import { listValue, type LinkedState } from './relations.ts'
 
@@ -92,6 +100,21 @@ export function valueErrors(error: ApiRequestError): Record<string, string> {
   return out
 }
 
+export type RemoveResult = { ok: true } | { ok: false; message: string }
+
+/**
+ * A random v4 UUID for a new item. `crypto.randomUUID` only exists in secure contexts
+ * (HTTPS or localhost); over plain HTTP on any other host, `getRandomValues` still does.
+ */
+export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> = crypto): string {
+  if (typeof c.randomUUID === 'function') return c.randomUUID()
+  const b = c.getRandomValues(new Uint8Array(16))
+  b[6] = ((b[6] ?? 0) & 0x0f) | 0x40
+  b[8] = ((b[8] ?? 0) & 0x3f) | 0x80
+  const hex = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 /** An item opened by ID inside a hub's page. One from another hub is reported as missing. */
 export function inHub(result: Load<Item>, hubId: string): Load<Item> {
   if (result.state !== 'ready' || result.data.hubId === hubId) return result
@@ -105,12 +128,17 @@ export function inHub(result: Load<Item>, hubId: string): Load<Item> {
  * Items of one hub: the selected folder's list, single items opened by ID, and writes.
  * The server's copy of each item is kept apart from local edits, so a rejected edit rolls
  * back by dropping it, and a 409 replaces the server copy with the item as it is now.
+ *
+ * `options.list: false` is for a page without a folder list (the item page): linked items are
+ * then read without waiting for a list query that never comes.
  */
 export function useItems(
   workspaceId: string,
   idPrefix: () => string,
   fetchFn: Fetch = (...args) => fetch(...args),
+  options: { list?: boolean } = {},
 ) {
+  const hasList = options.list ?? true
   const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}`
   const itemPath = (id: string) => `${base}/items/${encodeURIComponent(id)}`
 
@@ -259,7 +287,7 @@ export function useItems(
    */
   function resolveLinked(ids: Iterable<string>) {
     // Nothing is read while the list is loading: its answer may cover these IDs.
-    if (list.value.state === 'loading') return
+    if (hasList && list.value.state === 'loading') return
     for (const id of ids) {
       if (linkState(id).access !== 'unknown' || opening.has(`link:${id}`)) continue
       if (linkWaiting.includes(id)) continue
@@ -432,6 +460,29 @@ export function useItems(
     return running
   }
 
+  /**
+   * Reads an item again with `expand` (relation attributes, at most `MAX_EXPAND_ATTRIBUTES`),
+   * so its linked items arrive with it, as with a folder query. The server copy is replaced
+   * unless a newer version is already known.
+   */
+  async function readItem(id: string, expandIds: readonly string[]): Promise<Load<Item>> {
+    const query =
+      expandIds.length > 0 ? `?expand=${expandIds.map(encodeURIComponent).join(',')}` : ''
+    try {
+      const {
+        linked: links,
+        linkedTruncated,
+        ...item
+      } = await getJson(`${itemPath(id)}${query}`, itemReadSchema, fetchFn)
+      const known = server.value[id]
+      if (!known || known.version <= item.version) server.value[id] = item
+      absorbLinked({ items: [item], nextCursor: null, linked: links, linkedTruncated }, expandIds)
+      return { state: 'ready', data: item }
+    } catch (thrown) {
+      return { state: 'error', error: asRequestError(thrown) }
+    }
+  }
+
   /** Runs writes to one item one after another, so each sends the version the last one got. */
   function enqueue<T>(id: string, task: () => Promise<T>): Promise<T> {
     const run = (queues.get(id) ?? Promise.resolve()).then(task, task)
@@ -511,7 +562,7 @@ export function useItems(
     if (!folder) {
       return { ok: false, error: new ApiRequestError('invalid_request', 'No folder is open.') }
     }
-    const id = crypto.randomUUID()
+    const id = newItemId()
     const placeholder: Item = {
       workspaceId,
       id,
@@ -556,6 +607,62 @@ export function useItems(
     }
   }
 
+  /**
+   * Deletes an item at the version shown, after any edit still on its way. Nothing is removed
+   * from view until the server agrees: the caller leaves the item's page on success. On a 409
+   * the item shows its current values and the message says so; a 404 means it is already gone,
+   * which is what was asked.
+   */
+  function remove(id: string): Promise<RemoveResult> {
+    if (creating.value[id]) {
+      return Promise.resolve({
+        ok: false,
+        message: 'The new item is still being saved. Delete it once it has been created.',
+      })
+    }
+    return enqueue(id, async (): Promise<RemoveResult> => {
+      const before = server.value[id]
+      if (!before) return { ok: false, message: 'This item is not loaded.' }
+      try {
+        await sendJson(
+          'DELETE',
+          `${itemPath(id)}?version=${String(before.version)}`,
+          undefined,
+          noContent,
+          fetchFn,
+        )
+      } catch (thrown) {
+        const error = asRequestError(thrown)
+        const conflict = conflictErrorSchema.safeParse(error.body)
+        if (error.isNotFound) {
+          // Fall through: it is gone either way.
+        } else if (error.status === 403) {
+          readOnly.value = true
+          return {
+            ok: false,
+            message: `${label(before)} was not deleted. You can view the items in this hub but not change them.`,
+          }
+        } else if (error.code === 'conflict' && conflict.success) {
+          server.value[id] = conflict.data.current
+          pending.value[id] = []
+          return {
+            ok: false,
+            message: `${label(before)} was changed by someone else, so it was not deleted. The latest values are shown; delete it again if you still want to.`,
+          }
+        } else {
+          return {
+            ok: false,
+            message: `${label(before)} was not deleted. ${sentence(error.message)}`,
+          }
+        }
+      }
+      if (list.value.state === 'ready') {
+        list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
+      }
+      return { ok: true }
+    })
+  }
+
   const dismissNotice = () => {
     say(null)
   }
@@ -574,8 +681,10 @@ export function useItems(
     openFolder,
     loadMore,
     openItem,
+    readItem,
     save,
     create,
+    remove,
     dismissNotice,
     linked,
     linkState,

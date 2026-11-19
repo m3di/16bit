@@ -316,6 +316,13 @@ async function submitCreate(values: ItemValues) {
       >
         <ItemPanelBody :item="panelItem" @retry="retryPanel">
           <template #default="{ item }">
+            <RouterLink
+              v-if="!items.isCreating(item.id)"
+              :to="{ name: 'item', params: { workspaceId, itemId: item.id } }"
+              class="self-start border-b border-line2 text-ink no-underline hover:border-line3"
+              data-item-page-link
+              >Open page</RouterLink
+            >
             <ItemDetails
               :key="item.id"
               :item="item"
