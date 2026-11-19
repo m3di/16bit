@@ -95,6 +95,67 @@ export async function appendRevision(
   return seq
 }
 
+/** Rows per INSERT when many are written at once, well under Postgres's parameter limit. */
+const INSERT_CHUNK = 1000
+
+/**
+ * Appends one revision per entry, for writes that change many items at once (#112). It runs
+ * last, after every item row is written, and holds the workspace row for three statements only:
+ * the sequence numbers, one INSERT per 1,000 revisions, and one NOTIFY statement.
+ *
+ * workspace_guard (migration 0008) lets the API role move `next_revision_seq` one step per
+ * UPDATE, so the N steps run server-side in one DO statement. A DO block takes no parameters:
+ * the workspace and the count go in as transaction-local settings.
+ */
+export async function appendRevisions(
+  trx: Trx,
+  workspaceId: string,
+  actor: string,
+  revisions: { hubId: string; itemId: string; version: number; patch: RevisionPatch }[],
+): Promise<void> {
+  const n = revisions.length
+  if (n === 0) return
+  await sql`
+    SELECT set_config('app.revision_workspace', ${workspaceId}, true),
+           set_config('app.revision_steps', ${String(n)}, true)
+  `.execute(trx)
+  await sql`
+    DO $$
+    BEGIN
+      FOR i IN 1 .. current_setting('app.revision_steps')::int LOOP
+        UPDATE workspace SET next_revision_seq = next_revision_seq + 1
+        WHERE id = current_setting('app.revision_workspace');
+      END LOOP;
+    END
+    $$
+  `.execute(trx)
+  const { next } = await trx
+    .selectFrom('workspace')
+    .select('next_revision_seq as next')
+    .where('id', '=', workspaceId)
+    .executeTakeFirstOrThrow()
+  const first = next - n
+  const rows = revisions.map((r, i) => ({
+    workspace_id: workspaceId,
+    seq: first + i,
+    item_id: r.itemId,
+    hub_id: r.hubId,
+    version: r.version,
+    patch: JSON.stringify(r.patch),
+    actor,
+  }))
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    await trx
+      .insertInto('revision')
+      .values(rows.slice(i, i + INSERT_CHUNK))
+      .execute()
+  }
+  await sql`
+    SELECT pg_notify(${REVISION_CHANNEL}, ${`${workspaceId}:`} || s::text)
+    FROM generate_series(${first}::bigint, ${next - 1}::bigint) AS s
+  `.execute(trx)
+}
+
 /** Adds `delta` to the item count of the hub and, if different, of the folder. */
 async function bumpCounts(
   trx: Trx,

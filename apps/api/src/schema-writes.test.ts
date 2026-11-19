@@ -767,6 +767,22 @@ describe('updating attributes', () => {
     }
     expect((await itemRow('i2')).version).toBe(1)
     expect(await indexRows('stage')).toEqual([{ item_id: 'i2', ord: 0, txt: 'done' }])
+    // The two revisions take the next two sequence numbers, in item ID order.
+    const log = await db
+      .selectFrom('revision')
+      .select(['seq', 'item_id'])
+      .where('workspace_id', '=', 'w1')
+      .orderBy('seq')
+      .execute()
+    const workspace = await db
+      .selectFrom('workspace')
+      .select('next_revision_seq')
+      .where('id', '=', 'w1')
+      .executeTakeFirstOrThrow()
+    const last = log.slice(-2)
+    expect(last.map((r) => r.item_id)).toEqual(['i1', 'i3'])
+    expect((last[1]?.seq ?? 0) - (last[0]?.seq ?? 0)).toBe(1)
+    expect(workspace.next_revision_seq).toBe((last[1]?.seq ?? 0) + 1)
 
     // A value with the removed option is refused from now on.
     const edit = await person('ed', 'PATCH', '/items/i3', { version: 2, values: { stage: 'todo' } })
@@ -803,6 +819,31 @@ describe('updating attributes', () => {
     expect((await itemRow('i1')).version).toBe(1)
   })
 
+  it('takes no exclusive lock when no option is removed', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let locked!: () => void
+    const isLocked = new Promise<void>((resolve) => (locked = resolve))
+    const writer = db.transaction().execute(async (trx) => {
+      await lockHubSchema(trx, 'w1', 'build', 'shared')
+      locked()
+      await held
+    })
+    await isLocked
+    const res = await person('ha', 'PATCH', '/attributes/tags', {
+      version: 0,
+      options: [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+        { id: 'c', label: 'C' },
+        { id: 'd', label: 'D' },
+      ],
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    release()
+    await writer
+  })
+
   it('waits for item writes in flight before stripping values', async () => {
     // An item write holds the hub's schema lock shared while it validates and writes.
     let release!: () => void
@@ -824,6 +865,71 @@ describe('updating attributes', () => {
     release()
     await writer
     expect((await removal).statusCode).toBe(200)
+  })
+})
+
+describe('item writes and the hub schema lock', () => {
+  /**
+   * Holds the hub's schema lock exclusive, as an option removal does, until `commit()`; then
+   * removes the `doing` option from `stage` in the same transaction and commits.
+   */
+  async function removalInFlight() {
+    let commit!: () => void
+    const go = new Promise<void>((resolve) => (commit = resolve))
+    let locked!: () => void
+    const isLocked = new Promise<void>((resolve) => (locked = resolve))
+    const done = db.transaction().execute(async (trx) => {
+      await lockHubSchema(trx, 'w1', 'build', 'exclusive')
+      locked()
+      await go
+      await trx
+        .updateTable('attribute')
+        .set({
+          config: JSON.stringify({
+            options: [
+              { id: 'todo', label: 'todo' },
+              { id: 'done', label: 'done' },
+            ],
+          }),
+          version: sql`version + 1`,
+        })
+        .where('workspace_id', '=', 'w1')
+        .where('id', '=', 'stage')
+        .execute()
+    })
+    await isLocked
+    return { commit, done }
+  }
+
+  // Each fails if the write stops taking the lock (it answers 200 at once) or takes it after
+  // reading the folder's attributes (it waits, then answers 200 with the old options).
+  it('a patch waits, then validates against the options as they are after the removal', async () => {
+    const removal = await removalInFlight()
+    const patch = person('ed', 'PATCH', '/items/i2', { version: 1, values: { stage: 'doing' } })
+    expect(await settledWithin(patch, 300)).toBe('pending')
+    removal.commit()
+    await removal.done
+    const res = await patch
+    expect(res.statusCode, res.body).toBe(422)
+    const i2 = await itemRow('i2')
+    expect(i2.values).toMatchObject({ stage: 'done' })
+    expect(i2.version).toBe(1)
+  })
+
+  it('a create waits, then validates against the options as they are after the removal', async () => {
+    const removal = await removalInFlight()
+    const create = person('ed', 'POST', '/items', {
+      id: 'i8',
+      folderId: 'bugs',
+      values: { title: 'Eight', stage: 'doing' },
+    })
+    expect(await settledWithin(create, 300)).toBe('pending')
+    removal.commit()
+    await removal.done
+    const res = await create
+    expect(res.statusCode, res.body).toBe(422)
+    const created = await db.selectFrom('item').select('id').where('id', '=', 'i8').execute()
+    expect(created).toEqual([])
   })
 })
 

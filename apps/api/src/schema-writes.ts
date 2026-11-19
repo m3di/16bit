@@ -3,6 +3,7 @@ import {
   applyAttributeUpdate,
   attributeSchema,
   can,
+  indexEntries,
   type Attribute,
   type CreateAttribute,
   type CreateFolder,
@@ -20,10 +21,10 @@ import {
   type UpdateFolder,
   type UpdateHub,
 } from '@16bit/core'
-import { sql, type RawBuilder, type Selectable, type Transaction } from 'kysely'
+import { sql, type RawBuilder, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { hubExists, ownGrant } from './access.ts'
-import type { Database, ItemTable } from './db/database.ts'
+import type { Database } from './db/database.ts'
 import {
   decodeCursor,
   encodeCursor,
@@ -33,7 +34,7 @@ import {
   schemaConflict,
   sqlState,
 } from './http.ts'
-import { appendRevision, writeIndex } from './items.ts'
+import { appendRevisions } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
 import { lockHubSchema } from './schema-lock.ts'
 
@@ -356,19 +357,24 @@ export async function updateFolder(
   if (input.parentId !== undefined) {
     // Moves in a hub are serialised on its row (step 5), so the cycle check below holds.
     await lockHubRow(trx, workspaceId, hubId)
-    const { rows } = await sql<{ id: string; hub_id: string }>`
-      WITH RECURSIVE up (id, hub_id, parent_id) AS (
-        SELECT f.id, f.hub_id, f.parent_id FROM folder f
+    const parent = await trx
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', workspaceId)
+      .where('hub_id', '=', hubId)
+      .where('id', '=', input.parentId)
+      .executeTakeFirst()
+    if (!parent) throw invalid('parentId: must be the hub or a folder of the same hub')
+    const { rows } = await sql<{ cycle: boolean }>`
+      WITH RECURSIVE up (id, parent_id) AS (
+        SELECT f.id, f.parent_id FROM folder f
         WHERE f.workspace_id = ${workspaceId} AND f.id = ${input.parentId}
         UNION
-        SELECT f.id, f.hub_id, f.parent_id FROM folder f JOIN up ON f.id = up.parent_id
+        SELECT f.id, f.parent_id FROM folder f JOIN up ON f.id = up.parent_id
         WHERE f.workspace_id = ${workspaceId})
-      SELECT id, hub_id FROM up
+      SELECT EXISTS (SELECT 1 FROM up WHERE up.id = ${folderId}) AS cycle
     `.execute(trx)
-    if (rows[0]?.hub_id !== hubId) {
-      throw invalid('parentId: must be the hub or a folder of the same hub')
-    }
-    if (rows.some((r) => r.id === folderId)) {
+    if (rows[0]?.cycle) {
       throw invalid('parentId: a folder cannot move into itself or one of its subfolders')
     }
   }
@@ -654,20 +660,33 @@ async function lockAttribute(
   return row
 }
 
+/** An item whose value for one attribute is about to change: only that value is loaded. */
+interface Affected {
+  id: string
+  hub_id: string
+  value: ItemValues[string] | undefined
+}
+
 /**
- * The hub's items that `holds` matches, locked FOR NO KEY UPDATE in ID order (step 4). With
- * any, `confirm` must be their number (D51), or the write is a 409 `confirm_required`.
+ * The hub's items that `holds` matches, locked FOR NO KEY UPDATE in ID order (step 4), with
+ * their value for `attributeId` only, not the whole `values`. With any, `confirm` must be their
+ * number (D51), or the write is a 409 `confirm_required`.
  */
 async function lockAffected(
   trx: Trx,
   workspaceId: string,
   hubId: string,
+  attributeId: string,
   holds: RawBuilder<boolean>,
   confirm: number | undefined,
-): Promise<Selectable<ItemTable>[]> {
+): Promise<Affected[]> {
   const items = await trx
     .selectFrom('item')
-    .selectAll()
+    .select([
+      'id',
+      'hub_id',
+      sql<ItemValues[string] | undefined>`${sql.ref('values')} -> ${attributeId}::text`.as('value'),
+    ])
     .where('workspace_id', '=', workspaceId)
     .where('hub_id', '=', hubId)
     .where(holds)
@@ -686,56 +705,78 @@ async function lockAffected(
 
 /**
  * Writes `next(value)` for `attribute` into each item: a new value, or `null` to remove it.
- * Each changed item gets a new version and a revision; item_index follows when the attribute is
- * indexed and still exists. Links of a deleted relation go with the attribute (cascade).
+ * One UPDATE for all items (new version each); item_index follows when `reindex` and the
+ * attribute is indexed (a deleted attribute's rows and links go with it, by cascade). The
+ * revisions come last, in one batch (`appendRevisions`), so the workspace row is taken after
+ * every item is written and held only briefly (step 7).
  */
 async function stripValues(
   trx: Trx,
   workspaceId: string,
   actor: string,
   attribute: Attribute,
-  items: Selectable<ItemTable>[],
+  items: Affected[],
   next: (value: ItemValues[string] | undefined) => ItemValues[string],
   reindex: boolean,
 ): Promise<void> {
+  if (items.length === 0) return
   const key = attribute.id
-  for (const item of items) {
-    const value = next(item.values[key])
-    const row = await trx
-      .updateTable('item')
-      .set({
-        values:
-          value === null
-            ? sql`${sql.ref('values')} - ${key}::text`
-            : sql`${sql.ref('values')} || ${JSON.stringify({ [key]: value })}::jsonb`,
-        version: sql`version + 1`,
-        updated_at: sql`now()`,
-        updated_by: actor,
-      })
+  const changes = items.map((item) => ({ id: item.id, value: next(item.value) }))
+  const { rows } = await sql<{ id: string; hub_id: string; version: number }>`
+    UPDATE item i
+    SET values = CASE WHEN v.val IS NULL THEN i.values - ${key}::text
+                      ELSE i.values || jsonb_build_object(${key}::text, v.val) END,
+        version = i.version + 1,
+        updated_at = now(),
+        updated_by = ${actor}
+    FROM unnest(${changes.map((c) => c.id)}::text[],
+                ${changes.map((c) => (c.value === null ? null : JSON.stringify(c.value)))}::jsonb[])
+         AS v (id, val)
+    WHERE i.workspace_id = ${workspaceId} AND i.id = v.id
+    RETURNING i.id, i.hub_id, i.version
+  `.execute(trx)
+
+  if (reindex && attribute.indexed) {
+    const ids = changes.map((c) => c.id)
+    await trx
+      .deleteFrom('item_index')
       .where('workspace_id', '=', workspaceId)
-      .where('id', '=', item.id)
-      .returning(['version'])
-      .executeTakeFirstOrThrow()
-    if (reindex && attribute.indexed) {
-      await writeIndex(
-        trx,
-        workspaceId,
-        item.id,
-        [{ attribute, required: false }],
-        { [key]: value },
-        true,
-      )
-    }
-    await appendRevision(
-      trx,
-      workspaceId,
-      item.hub_id,
-      item.id,
-      row.version,
-      { op: 'update', values: { [key]: value } },
-      actor,
+      .where('attribute_id', '=', key)
+      .where('item_id', 'in', ids)
+      .execute()
+    const index = changes.flatMap((c) =>
+      indexEntries(attribute, c.value).map((entry) => ({
+        workspace_id: workspaceId,
+        attribute_id: key,
+        item_id: c.id,
+        ord: entry.ord,
+        num: entry.column === 'num' ? (entry.value as number) : null,
+        txt: entry.column === 'txt' ? (entry.value as string) : null,
+        ts: entry.column === 'ts' ? (entry.value as string) : null,
+      })),
     )
+    for (let i = 0; i < index.length; i += 1000) {
+      await trx
+        .insertInto('item_index')
+        .values(index.slice(i, i + 1000))
+        .execute()
+    }
   }
+
+  const valueOf = new Map(changes.map((c) => [c.id, c.value]))
+  await appendRevisions(
+    trx,
+    workspaceId,
+    actor,
+    rows
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((r) => ({
+        hubId: r.hub_id,
+        itemId: r.id,
+        version: r.version,
+        patch: { op: 'update', values: { [key]: valueOf.get(r.id) ?? null } },
+      })),
+  )
 }
 
 /**
@@ -751,12 +792,22 @@ export async function updateAttribute(
 ): Promise<Attribute> {
   const hubId = await hubOfAttribute(trx, workspaceId, attributeId)
   await requireManage(trx, workspaceId, me, hubId, 'Attribute')
-  // Step 2, only when options may be removed: a rename strips nothing.
-  if (input.options !== undefined) await lockHubSchema(trx, workspaceId, hubId, 'exclusive')
-  const row = await lockAttribute(trx, workspaceId, attributeId, input.version, 'noKeyUpdate')
-  const result = applyAttributeUpdate(toAttribute(row), input)
+  // Which options go is decided on the attribute as the client saw it. Every write moves the
+  // version, so if the locked row below still has that version, it has these options too.
+  const seen = await trx
+    .selectFrom('attribute')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('id', '=', attributeId)
+    .executeTakeFirst()
+  if (!seen) throw notFound('Attribute')
+  if (seen.version !== input.version) throw schemaConflict('attribute', toAttribute(seen))
+  const result = applyAttributeUpdate(toAttribute(seen), input)
   if (!result.ok) throw invalid(result.message)
   const { removedOptionIds: removed } = result
+  // Step 2, only when options are removed: a rename or a new option strips nothing.
+  if (removed.length > 0) await lockHubSchema(trx, workspaceId, hubId, 'exclusive')
+  await lockAttribute(trx, workspaceId, attributeId, input.version, 'noKeyUpdate')
 
   const items =
     removed.length > 0
@@ -764,6 +815,7 @@ export async function updateAttribute(
           trx,
           workspaceId,
           hubId,
+          attributeId,
           sql<boolean>`${sql.ref('values')} -> ${attributeId}::text ?| ${removed}::text[]`,
           input.confirm,
         )
@@ -822,6 +874,7 @@ export async function deleteAttribute(
     trx,
     workspaceId,
     hubId,
+    attributeId,
     sql<boolean>`${sql.ref('values')} ? ${attributeId}::text`,
     query.confirm,
   )
