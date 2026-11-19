@@ -4,6 +4,7 @@ import {
   attributeSchema,
   can,
   indexEntries,
+  type AgentKeyState,
   type Attribute,
   type AttributeUsage,
   type CreateAttribute,
@@ -246,7 +247,9 @@ const grantCursorSchema = z.tuple([z.string(), z.string()])
 
 /**
  * `GET /hubs/:hubId/grants` (`grant.list`): who holds a grant on the hub, by name then principal
- * ID. Names and hub roles only, nothing inside the hub.
+ * ID. Names and hub roles only, nothing inside the hub. An agent's grant outlives its key, so
+ * agent rows carry `keyState` (#151), read the way `auth_agent_key()` decides (migration 0005):
+ * revoked first, then expired at or before now().
  */
 export async function listHubGrants(
   trx: Trx,
@@ -264,7 +267,20 @@ export async function listHubGrants(
     .innerJoin('principal as p', (j) =>
       j.onRef('p.workspace_id', '=', 'g.workspace_id').onRef('p.id', '=', 'g.principal_id'),
     )
+    // Only agents have a key row (D47). People can read every key row of their workspace, and
+    // only people pass `grant.list`.
+    .leftJoin('agent_key as k', (j) =>
+      j
+        .onRef('k.workspace_id', '=', 'g.workspace_id')
+        .onRef('k.principal_id', '=', 'g.principal_id'),
+    )
     .select(['p.id', 'p.kind', 'p.name', 'p.workspace_role', 'g.hub_role'])
+    .select(
+      sql<AgentKeyState>`CASE
+        WHEN k.principal_id IS NULL OR k.revoked_at IS NOT NULL THEN 'revoked'
+        WHEN k.expires_at IS NOT NULL AND k.expires_at <= now() THEN 'expired'
+        ELSE 'active' END`.as('key_state'),
+    )
     .where('g.workspace_id', '=', workspaceId)
     .where('g.hub_id', '=', hubId)
     .where('p.removed_at', 'is', null)
@@ -274,13 +290,18 @@ export async function listHubGrants(
     .orderBy('p.id')
     .limit(query.limit + 1)
     .execute()
-  const items = rows.slice(0, query.limit).map((r): HubGrantEntry => ({
-    principalId: r.id,
-    kind: r.kind,
-    name: r.name,
-    workspaceRole: r.workspace_role,
-    hubRole: r.hub_role,
-  }))
+  const items = rows.slice(0, query.limit).map((r): HubGrantEntry => {
+    const base = {
+      principalId: r.id,
+      name: r.name,
+      workspaceRole: r.workspace_role,
+      hubRole: r.hub_role,
+    }
+    // An agent with no key row cannot sign in, so it reads as revoked.
+    return r.kind === 'agent'
+      ? { kind: 'agent', ...base, keyState: r.key_state }
+      : { kind: 'user', ...base }
+  })
   const last = items.at(-1)
   return {
     items,

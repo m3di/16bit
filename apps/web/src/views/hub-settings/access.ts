@@ -4,6 +4,7 @@ import {
   effectiveHubRole,
   HUB_ROLES,
   type AgentHubRole,
+  type AgentKeyState,
   type AgentKey,
   type Attribute,
   type HubDescription,
@@ -103,14 +104,11 @@ export function cappedNote(target: HubGrantEntry): string {
 
 /**
  * "Owner", "Agent key": where someone's access comes from. An agent's grant stays when its key is
- * revoked or expires (the key row keeps the state), so with the key list at hand the label says
- * the key no longer works; without it, it says nothing it does not know.
+ * revoked or expires, and the grant list says so (`keyState`).
  */
-export function sourceLabel(g: HubGrantEntry, keys: readonly AgentKey[] | null = null): string {
+export function sourceLabel(g: HubGrantEntry): string {
   if (g.kind !== 'agent') return ROLE_LABELS[g.workspaceRole]
-  const key = keys?.find((k) => k.id === g.principalId)
-  const status = key ? keyStatus(key) : 'active'
-  return status === 'active' ? 'Agent key' : `Agent key, ${status}`
+  return g.keyState === 'active' ? 'Agent key' : `Agent key, ${g.keyState}`
 }
 
 /** The roles the reader may give someone who has no grant yet. */
@@ -143,7 +141,8 @@ export function keyRoleChoices(viewer: Subject | null, hubRole: HubRole): AgentH
 export const canRevokeKey = (viewer: Subject | null, hubRole: HubRole) =>
   !!viewer && allows(can(viewer, 'key.revoke', { hubGrant: hubRole }))
 
-export type KeyStatus = 'active' | 'expired' | 'revoked'
+/** The same states the grant list reports for an agent (`keyState`). */
+export type KeyStatus = AgentKeyState
 
 export function keyStatus(key: AgentKey, now: Date = new Date()): KeyStatus {
   if (key.revokedAt) return 'revoked'
