@@ -179,7 +179,17 @@ describe('MembersPage states', () => {
       },
     )
     expect(html).toContain('data-state="no-permission"')
+    expect(html).toContain('Agent keys cannot see a workspace’s members.')
     expect(html).not.toContain('data-member-row')
+  })
+
+  it('gives a person refused the list a generic reason, not the agent one', async () => {
+    const html = await renderPage(ready('p-tomas', 'member'), {
+      [`GET ${base}/members`]: () => json({ error: 'forbidden', message: 'No' }, 403),
+    })
+    expect(html).toContain('data-state="no-permission"')
+    expect(html).toContain('Your role does not let you see this workspace’s members.')
+    expect(html).not.toContain('Agent keys')
   })
 
   it('shows an error with a retry', async () => {

@@ -55,7 +55,6 @@ export function lockedReason(viewer: Subject | null, target: Principal, owners: 
   if (target.workspaceRole !== 'owner') return ''
   if (viewer.workspaceRole !== 'owner') return 'Only owners change owners'
   return owners <= 1 ? 'The only owner' : ''
-  return ''
 }
 
 export type RemoveState = { kind: 'allowed' } | { kind: 'refused'; reason: string } | null
@@ -129,4 +128,78 @@ export function peopleSummary(people: number, invites: number | null): string {
   return invites === null || invites === 0
     ? base
     : `${base}, ${plural(invites, 'invite', 'invites')} pending`
+}
+
+/**
+ * After revoking `revokedId`, whose Revoke button should take focus: the first revocable invite
+ * after it in list order, else the last one before it, else none. Rows without a Revoke button
+ * (owner-role invites, for an admin) are skipped, so Enter never lands on the wrong invite.
+ */
+export function nextRevokeFocus(
+  rows: readonly { id: string; revocable: boolean }[],
+  revokedId: string,
+): string | null {
+  const at = rows.findIndex((r) => r.id === revokedId)
+  if (at === -1) return null
+  const after = rows.slice(at + 1).find((r) => r.revocable)
+  if (after) return after.id
+  const before = rows
+    .slice(0, at)
+    .filter((r) => r.revocable)
+    .at(-1)
+  return before?.id ?? null
+}
+
+/**
+ * Collects quick successive choices per key and commits only the last one, after `delay` ms of
+ * quiet or at once on `flush`. A closed native select fires `change` on every arrow key in
+ * Chrome on Windows and Linux; without this each key would send a role change.
+ */
+export function createCommitter<T>(
+  commit: (key: string, value: T) => void,
+  delay = 700,
+  timers: {
+    set: (fn: () => void, ms: number) => unknown
+    clear: (handle: unknown) => void
+  } = {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => {
+      clearTimeout(handle as ReturnType<typeof setTimeout>)
+    },
+  },
+) {
+  const pending = new Map<string, { value: T; handle: unknown }>()
+
+  function flush(key: string) {
+    const entry = pending.get(key)
+    if (!entry) return
+    timers.clear(entry.handle)
+    pending.delete(key)
+    commit(key, entry.value)
+  }
+
+  function choose(key: string, value: T) {
+    const entry = pending.get(key)
+    if (entry) timers.clear(entry.handle)
+    pending.set(key, {
+      value,
+      handle: timers.set(() => {
+        flush(key)
+      }, delay),
+    })
+  }
+
+  /** Drops a pending choice without committing it. */
+  function cancel(key: string) {
+    const entry = pending.get(key)
+    if (!entry) return
+    timers.clear(entry.handle)
+    pending.delete(key)
+  }
+
+  function flushAll() {
+    for (const key of [...pending.keys()]) flush(key)
+  }
+
+  return { choose, flush, cancel, flushAll }
 }

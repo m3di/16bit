@@ -95,11 +95,13 @@ async function copy() {
     :title="created ? 'Invite link' : 'Invite people'"
     :description="
       created
-        ? 'Copy the link now. It is shown only once, and one person can use it.'
+        ? 'Copy the link now. It is shown only once, and one person can use it. Choose Done when you have it.'
         : 'Anyone with the link can join this workspace with the role you choose.'
     "
-    :persistent="busy"
+    :persistent="busy || created !== null"
   >
+    <!-- While the one-time link shows, Escape, Close and the backdrop do nothing: the link
+         cannot be shown again, so only Done closes it. -->
     <div v-if="created" class="flex flex-col gap-4" data-invite-created>
       <div ref="linkField">
         <BaseInput

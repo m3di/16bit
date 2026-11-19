@@ -1,11 +1,13 @@
 import type { Principal, Subject, WorkspaceRole } from '@16bit/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   canListInvites,
   canManage,
   canRevokeInvite,
+  createCommitter,
   inviteRoles,
   lockedReason,
+  nextRevokeFocus,
   ownerCount,
   peopleSummary,
   removeState,
@@ -133,5 +135,76 @@ describe('words', () => {
     const now = new Date('2026-11-19T12:00:00Z')
     expect(shortDate('2026-11-14T12:00:00Z', now)).toBe('Nov 14')
     expect(shortDate('2027-01-02T12:00:00Z', now)).toBe('Jan 2, 2027')
+  })
+})
+
+describe('nextRevokeFocus', () => {
+  // An admin's view: owner-role invites have no Revoke button.
+  const rows = [
+    { id: 'o1', revocable: false },
+    { id: 'a', revocable: true },
+    { id: 'o2', revocable: false },
+    { id: 'b', revocable: true },
+    { id: 'c', revocable: true },
+  ]
+
+  it('skips rows without a Revoke button to the next one after', () => {
+    expect(nextRevokeFocus(rows, 'a')).toBe('b')
+    expect(nextRevokeFocus(rows, 'b')).toBe('c')
+  })
+
+  it('falls back to the last one before, then to none', () => {
+    expect(nextRevokeFocus(rows, 'c')).toBe('b')
+    expect(
+      nextRevokeFocus(
+        [
+          { id: 'a', revocable: true },
+          { id: 'o', revocable: false },
+        ],
+        'a',
+      ),
+    ).toBe(null)
+    expect(nextRevokeFocus(rows, 'missing')).toBeNull()
+  })
+})
+
+describe('createCommitter', () => {
+  it('commits only the last of quick choices, once, after the pause', () => {
+    vi.useFakeTimers()
+    try {
+      const commit = vi.fn()
+      const c = createCommitter<string>(commit, 700)
+      c.choose('tomas', 'viewer')
+      vi.advanceTimersByTime(300)
+      c.choose('tomas', 'finance')
+      vi.advanceTimersByTime(699)
+      expect(commit).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(commit).toHaveBeenCalledExactlyOnceWith('tomas', 'finance')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('commits at once on flush, drops a cancelled choice, and keeps people apart', () => {
+    vi.useFakeTimers()
+    try {
+      const commit = vi.fn()
+      const c = createCommitter<string>(commit)
+      c.choose('tomas', 'viewer')
+      c.choose('omar', 'member')
+      c.flush('tomas')
+      expect(commit).toHaveBeenCalledExactlyOnceWith('tomas', 'viewer')
+      c.cancel('omar')
+      vi.runAllTimers()
+      expect(commit).toHaveBeenCalledOnce()
+      c.flush('tomas')
+      expect(commit).toHaveBeenCalledOnce()
+      c.choose('omar', 'admin')
+      c.flushAll()
+      expect(commit).toHaveBeenLastCalledWith('omar', 'admin')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

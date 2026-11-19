@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Invite, Me, Principal, WorkspaceRole } from '@16bit/core'
-import { computed, nextTick, ref, useTemplateRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef } from 'vue'
 import { useRouter } from 'vue-router'
 import { asRequestError } from '../../api/client.ts'
 import {
@@ -20,8 +20,10 @@ import InviteDialog from './InviteDialog.vue'
 import {
   canManage,
   canRevokeInvite,
+  createCommitter,
   inviteRoles,
   lockedReason,
+  nextRevokeFocus,
   ownerCount,
   peopleSummary,
   removeState,
@@ -72,7 +74,10 @@ const stateText = computed(() => {
     case 'no-permission':
       return {
         title: 'You do not have access to this',
-        message: 'Agent keys cannot see a workspace’s members.',
+        message:
+          me.state === 'ready' && me.data?.kind === 'agent'
+            ? 'Agent keys cannot see a workspace’s members.'
+            : 'Your role does not let you see this workspace’s members.',
       }
     case 'error':
       return {
@@ -127,33 +132,70 @@ function rowActions(p: Principal): RowAction[] {
     : [{ key: 'remove', label, danger: true, disabled: true, reason: state.reason }]
 }
 
-// Changes to your own role ask first: there is no way back without another owner or admin.
-const selfChange = ref<WorkspaceRole | null>(null)
-const selfChangeOpen = ref(false)
-// Bumped to redraw a role select whose change was cancelled, so it shows the role again.
-const selectKey = ref(0)
+// A role choice shows at once and is sent after a short pause or when the select loses focus,
+// so arrowing through a closed select sends one change, not one per key.
+const drafts = ref(new Map<string, WorkspaceRole>())
+const committer = createCommitter<WorkspaceRole>((id, role) => {
+  commitRole(id, role)
+})
+onBeforeUnmount(() => {
+  committer.flushAll()
+})
+
+const shownRole = (p: Principal) => drafts.value.get(p.id) ?? p.workspaceRole
 
 function onRole(p: Principal, value: string) {
-  const role = value as WorkspaceRole
-  if (p.id === selfId.value) {
+  drafts.value.set(p.id, value as WorkspaceRole)
+  committer.choose(p.id, value as WorkspaceRole)
+}
+
+function commitRole(id: string, role: WorkspaceRole) {
+  const current = people.value.find((p) => p.id === id)?.workspaceRole
+  if (role === current) {
+    drafts.value.delete(id)
+    return
+  }
+  if (id === selfId.value) {
+    // Changes to your own role ask first: there is no way back without another owner or admin.
+    // The draft stays on screen while the question is open.
     selfChange.value = role
     selfChangeOpen.value = true
     return
   }
-  void model.changeRole(p.id, role)
+  drafts.value.delete(id)
+  void model.changeRole(id, role)
 }
+
+const selfChange = ref<WorkspaceRole | null>(null)
+const selfChangeOpen = ref(false)
 
 function confirmSelfChange() {
   const role = selfChange.value
-  selfChangeOpen.value = false
-  if (role && selfId.value) void model.changeRole(selfId.value, role)
+  const id = selfId.value
   selfChange.value = null
+  selfChangeOpen.value = false
+  if (!role || !id) return
+  drafts.value.delete(id)
+  void model.changeRole(id, role)
 }
 
-function onSelfChangeClosed() {
-  if (selfChange.value !== null) selectKey.value++
+async function onSelfChangeOpen(open: boolean) {
+  if (open || selfChange.value === null) return
+  // Cancelled: only this select goes back to the saved role, and keeps focus.
+  const id = selfId.value
   selfChange.value = null
+  if (!id) return
+  committer.cancel(id)
+  drafts.value.delete(id)
+  await nextTick()
+  roleSelect(id)?.focus()
 }
+
+const peopleList = useTemplateRef<HTMLElement>('peopleList')
+const roleSelect = (id: string) =>
+  [...(peopleList.value?.querySelectorAll<HTMLElement>('[data-role-select]') ?? [])]
+    .find((el) => el.dataset['roleSelect'] === id)
+    ?.querySelector('select') ?? null
 
 const status = ref('')
 const statusEl = useTemplateRef<HTMLElement>('statusEl')
@@ -219,12 +261,22 @@ const creatorOf = (invite: Invite) => {
 const inviteList = useTemplateRef<HTMLElement>('inviteList')
 const inviteButton = useTemplateRef<HTMLElement>('inviteButton')
 
-async function revoke(invite: Invite, index: number) {
+async function revoke(invite: Invite) {
+  const rows =
+    invites.value.state === 'ready'
+      ? invites.value.data.map((i) => ({
+          id: i.id,
+          revocable: canRevokeInvite(viewer.value, i.workspaceRole),
+        }))
+      : []
+  const nextId = nextRevokeFocus(rows, invite.id)
   const done = model.revokeInvite(invite.id)
-  // The row is gone at once: focus moves to the revoke button that took its place.
+  // The row is gone at once: focus moves to the next Revoke button on the page, skipping rows
+  // without one, so Enter never revokes an invite the reader did not pick.
   await nextTick()
-  const buttons = inviteList.value?.querySelectorAll<HTMLElement>('[data-revoke]') ?? []
-  const next = buttons[Math.min(index, buttons.length - 1)]
+  const next = [...(inviteList.value?.querySelectorAll<HTMLElement>('[data-invite-id]') ?? [])]
+    .find((row) => row.dataset['inviteId'] === nextId)
+    ?.querySelector<HTMLElement>('[data-revoke]')
   if (next) next.focus()
   else inviteButton.value?.querySelector('button')?.focus()
   await done
@@ -287,7 +339,7 @@ const inviteSectionState = computed((): SettingsState => {
       <template #actions>
         <span class="text-secondary text-ink3" data-people-summary>{{ summary }}</span>
       </template>
-      <div class="relative min-w-0 overflow-x-auto">
+      <div ref="peopleList" class="relative min-w-0 overflow-x-auto">
         <table class="w-full border-collapse text-left">
           <caption class="sr-only">
             People in this workspace and their roles
@@ -310,18 +362,15 @@ const inviteSectionState = computed((): SettingsState => {
                 </span>
               </th>
               <td class="h-[38px] pr-3">
-                <div
-                  v-if="roleOptions(p).length > 1"
-                  :key="`${p.id}-${String(selectKey)}`"
-                  class="w-36"
-                >
+                <div v-if="roleOptions(p).length > 1" class="w-36" :data-role-select="p.id">
                   <BaseSelect
-                    :model-value="p.workspaceRole"
+                    :model-value="shownRole(p)"
                     :label="`Role for ${p.name}`"
                     label-hidden
                     size="sm"
                     :options="roleOptions(p)"
                     @update:model-value="onRole(p, $event)"
+                    @blur="committer.flush(p.id)"
                   />
                 </div>
                 <span v-else class="inline-flex flex-wrap items-baseline gap-x-2" data-role-text>
@@ -391,7 +440,7 @@ const inviteSectionState = computed((): SettingsState => {
           </thead>
           <tbody>
             <tr
-              v-for="(invite, index) in invites.data"
+              v-for="invite in invites.data"
               :key="invite.id"
               class="border-b border-line"
               data-invite-row
@@ -413,7 +462,7 @@ const inviteSectionState = computed((): SettingsState => {
                   size="sm"
                   danger
                   data-revoke
-                  @click="revoke(invite, index)"
+                  @click="revoke(invite)"
                   >Revoke<span class="sr-only">
                     the {{ ROLE_LABELS[invite.workspaceRole].toLowerCase() }} invite from
                     {{ shortDate(invite.createdAt) }}</span
@@ -451,6 +500,6 @@ const inviteSectionState = computed((): SettingsState => {
     message="You may lose the right to change roles. Only another owner or admin could change yours back."
     :confirm-label="`Change my role`"
     @confirm="confirmSelfChange"
-    @update:open="(o: boolean) => (o ? undefined : onSelfChangeClosed())"
+    @update:open="onSelfChangeOpen"
   />
 </template>
