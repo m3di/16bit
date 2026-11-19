@@ -114,6 +114,7 @@ describe('migrations', () => {
       '0007_principal_removed',
       '0008_row_level_security',
       '0009_schema_writes',
+      '0010_invite_update_owner',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -778,7 +779,7 @@ describe('0009_schema_writes', () => {
         VALUES ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1');
     `.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0009_schema_writes'])
+    expect(await migrateToLatest(db)).toEqual(['0009_schema_writes', '0010_invite_update_owner'])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
     ])
@@ -808,5 +809,26 @@ describe('0009_schema_writes', () => {
       .execute()
     const { error } = await migrator().migrateTo('0008_row_level_security')
     expect(String(error)).toMatch(/hubs have been deleted/)
+  })
+})
+
+describe('0010_invite_update_owner', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+  const policy = async () => {
+    const { rows } = await sql<{ check: string }>`
+      SELECT with_check AS check FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = 'invite' AND policyname = 'invite_update'
+    `.execute(db)
+    return rows[0]?.check ?? null
+  }
+
+  it('applies after 0009 and migrates back down to the 0008 policy', async () => {
+    expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
+    const before = await policy()
+    expect(await migrateToLatest(db)).toEqual(['0010_invite_update_owner'])
+    expect(await policy()).toMatch(/owner/)
+    expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
+    expect(await policy()).toBe(before)
   })
 })
