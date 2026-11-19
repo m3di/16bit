@@ -12,9 +12,11 @@ import {
   deleteAttributeQuerySchema,
   deleteFolderQuerySchema,
   folderAttributesConflictErrorSchema,
+  folderAttributesResultSchema,
   folderAttributesSchema,
   folderConflictErrorSchema,
   hubConflictErrorSchema,
+  hubDescriptionSchema,
   hubGrantPageSchema,
   hubSchema,
   invitePageSchema,
@@ -44,6 +46,7 @@ const stage: Attribute = {
   hubId: 'h1',
   name: 'Stage',
   indexed: true,
+  version: 0,
   type: 'select',
   config: {
     options: [
@@ -60,6 +63,31 @@ describe('hub', () => {
     expect(hubSchema.parse({ ...hub, titleAttributeId: null }).titleAttributeId).toBeNull()
     expect(hubSchema.safeParse({ ...hub, parentId: 'x' }).success).toBe(false)
     expect(hubSchema.safeParse({ ...hub, titleAttributeId: undefined }).success).toBe(false)
+  })
+
+  it('is the hub of a hub description', () => {
+    const description = {
+      hub,
+      hubRole: 'viewer',
+      folders: [],
+      attributes: [stage],
+      folderAttributes: [],
+      truncated: { folders: false, attributes: false, folderAttributes: false },
+    }
+    expect(hubDescriptionSchema.parse(description).hub.titleAttributeId).toBe('title')
+    const untitled: Partial<typeof hub> = { ...hub }
+    delete untitled.titleAttributeId
+    expect(hubDescriptionSchema.safeParse({ ...description, hub: untitled }).success).toBe(false)
+  })
+
+  it('gives attributes a version, which a conflict carries', () => {
+    expect(attributeSchema.parse(stage).version).toBe(0)
+    const unversioned: Partial<Attribute> = { ...stage }
+    delete unversioned.version
+    expect(attributeSchema.safeParse(unversioned).success).toBe(false)
+    expect(attributeSchema.safeParse({ ...stage, version: -1 }).success).toBe(false)
+    const conflict = { error: 'conflict', message: 'm', current: { ...stage, version: 3 } }
+    expect(attributeConflictErrorSchema.parse(conflict).current.version).toBe(3)
   })
 
   it('updates name, colour and title attribute with the version', () => {
@@ -160,7 +188,7 @@ describe('attributes', () => {
       type: 'relation',
       config: { targetHubId: 'h2' },
     })
-    const stored = { ...body, id: 'refs', workspaceId: 'w1', hubId: 'h1' }
+    const stored = { ...body, id: 'refs', workspaceId: 'w1', hubId: 'h1', version: 0 }
     expect(attributeSchema.safeParse(stored).success).toBe(false)
     expect(attributeSchema.safeParse({ ...stored, hubId: 'h2' }).success).toBe(true)
   })
@@ -272,12 +300,41 @@ describe('folder attributes', () => {
       }),
     ).toEqual({
       version: 4,
+      dryRun: false,
       attributes: [
         { attributeId: 'title', required: true },
         { attributeId: 'stage', required: false },
       ],
     })
     expect(setFolderAttributesSchema.safeParse({ version: 4, attributes: [] }).success).toBe(true)
+    expect(
+      setFolderAttributesSchema.parse({ version: 4, dryRun: true, attributes: [] }).dryRun,
+    ).toBe(true)
+  })
+
+  it('answers with how many items leave each required attribute empty (D51)', () => {
+    const result = {
+      folder,
+      attributes: [
+        {
+          workspaceId: 'w1',
+          hubId: 'h1',
+          folderId: 'f1',
+          attributeId: 'title',
+          position: 0,
+          required: true,
+        },
+      ],
+      requiredEmpty: [{ attributeId: 'title', items: 2 }],
+    }
+    expect(folderAttributesResultSchema.parse(result)).toEqual(result)
+    expect(
+      folderAttributesResultSchema.safeParse({
+        ...result,
+        requiredEmpty: [{ attributeId: 'title', items: -1 }],
+      }).success,
+    ).toBe(false)
+    expect(folderAttributesResultSchema.safeParse({ folder, attributes: [] }).success).toBe(false)
   })
 
   it('refuses duplicates, a missing version, positions and too many', () => {

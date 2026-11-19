@@ -55,6 +55,18 @@ export const folderSchema = z.strictObject({
 })
 export type Folder = z.infer<typeof folderSchema>
 
+/**
+ * A hub with its title attribute (D50): a folder with no parent (D2). `titleAttributeId` names
+ * one of the hub's `text` attributes, or `null` for none, in which case items show only their
+ * mono ID. It is cleared when that attribute is removed. Folder rows that are not hubs have no
+ * title attribute, so only hub reads (`GET /hubs/:hubId`, `PATCH /hubs/:hubId`) carry it.
+ */
+export const hubSchema = folderSchema.extend({
+  parentId: z.null(),
+  titleAttributeId: idSchema.nullable(),
+})
+export type Hub = z.infer<typeof hubSchema>
+
 const attributeBase = {
   workspaceId: idSchema,
   id: idSchema,
@@ -62,6 +74,8 @@ const attributeBase = {
   name: z.string().min(1).max(200),
   /** Copied into `item_index` for filter and sort (D6). */
   indexed: z.boolean(),
+  /** Starts at 0 and moves with every write to the attribute (D8, #111). */
+  version: z.int().min(0),
 }
 
 /**

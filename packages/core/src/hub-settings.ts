@@ -8,6 +8,7 @@ import {
   attributeVariants,
   folderAttributeSchema,
   folderSchema,
+  hubSchema,
   idSchema,
   principalSchema,
 } from './entities.ts'
@@ -42,16 +43,7 @@ const atLeastOneChange =
 // ----------------------------------------------------------------------------------------
 // Hub
 
-/**
- * A hub as hub settings sees it: a folder with no parent (D2) and its title attribute (D50).
- * `titleAttributeId` names one of the hub's `text` attributes, or `null` for none, in which
- * case items show only their mono ID. It is cleared when that attribute is removed.
- */
-export const hubSchema = folderSchema.extend({
-  parentId: z.null(),
-  titleAttributeId: idSchema.nullable(),
-})
-export type Hub = z.infer<typeof hubSchema>
+// `hubSchema` (the hub with its title attribute, D50) is in entities.ts, beside `folderSchema`.
 
 /**
  * `PATCH /hubs/:hubId`, hub admins (`hub.rename`). Returns the hub (`hubSchema`). At least
@@ -232,10 +224,16 @@ export const MAX_FOLDER_ATTRIBUTES = 200
  * and sets `required`; positions are the list order. Each must be an attribute of the folder's
  * hub (400). Detaching keeps item values; it only stops showing them. A newly required
  * attribute that existing items leave empty is allowed, and those items stay valid (D51).
- * Checks and bumps the folder's `version`. Returns `folderAttributesSchema`.
+ * Checks and bumps the folder's `version`. Returns `folderAttributesResultSchema`, which says
+ * how many items of the folder leave each required attribute empty.
+ *
+ * With `dryRun`, nothing is written and the version does not move: the response is what the
+ * folder would look like, with the same counts, so settings can show them before saving (D51).
+ * A stale `version` is still a 409.
  */
 export const setFolderAttributesSchema = z.strictObject({
   version: folderVersionSchema,
+  dryRun: z.boolean().default(false),
   attributes: z
     .array(z.strictObject({ attributeId: idSchema, required: z.boolean().default(false) }))
     .max(MAX_FOLDER_ATTRIBUTES)
@@ -254,6 +252,18 @@ export const folderAttributesSchema = z.strictObject({
   attributes: z.array(folderAttributeSchema).max(MAX_FOLDER_ATTRIBUTES),
 })
 export type FolderAttributes = z.infer<typeof folderAttributesSchema>
+
+/**
+ * The response of `PUT /folders/:folderId/attributes`: the folder and its attributes, plus
+ * `requiredEmpty`, one entry per required attribute in list order, with the number of items in
+ * this folder (not its subfolders) that hold no value for it (D51). Those items stay valid.
+ */
+export const folderAttributesResultSchema = folderAttributesSchema.extend({
+  requiredEmpty: z
+    .array(z.strictObject({ attributeId: idSchema, items: z.int().min(0) }))
+    .max(MAX_FOLDER_ATTRIBUTES),
+})
+export type FolderAttributesResult = z.infer<typeof folderAttributesResultSchema>
 
 // ----------------------------------------------------------------------------------------
 // Grants and invites

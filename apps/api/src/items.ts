@@ -27,6 +27,7 @@ import type { Database } from './db/database.ts'
 import { inTransaction, isScoped } from './db/scope.ts'
 import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
 import { toAttribute, toItem } from './mappers.ts'
+import { lockHubSchema } from './schema-lock.ts'
 
 type Db = Kysely<Database>
 type Trx = Transaction<Database>
@@ -53,12 +54,17 @@ const REVISION_VERSION_KEY = 'revision_workspace_id_item_id_version_key'
 // so taking it after the hub and folder cannot deadlock with them. An item's item_index and
 // link rows are written while its item row is held, before the workspace row.
 //
+// Create and patch first take the hub's schema lock shared (schema-lock.ts), then read the
+// folder's attributes, so a schema write that strips values waits for them or they see its
+// result. Delete takes none: it only removes values. Schema writes and their place in this
+// order are described at the top of schema-writes.ts.
+//
 // Relation targets are locked FOR KEY SHARE, in ID order, before the writer's link rows are
 // touched and before any hub row, so a target cannot be deleted before the links commit. KEY
 // SHARE does not conflict with another write's own row lock (FOR NO KEY UPDATE), only with a
 // delete, and a delete takes only its own item row before the hub, folder and workspace rows.
 
-async function appendRevision(
+export async function appendRevision(
   trx: Trx,
   workspaceId: string,
   hubId: string,
@@ -89,6 +95,80 @@ async function appendRevision(
   return seq
 }
 
+/** Rows per INSERT when many are written at once, well under Postgres's parameter limit. */
+const INSERT_CHUNK = 1000
+
+/**
+ * Appends one revision per entry, for writes that change many items at once (#112). It runs
+ * last, after every item row is written, and holds the workspace row for a few statements only:
+ * the sequence numbers, one INSERT per 1,000 revisions, and one NOTIFY statement.
+ *
+ * workspace_guard (migration 0008) lets the API role move `next_revision_seq` one step per
+ * UPDATE, so in a request the N steps run server-side in one DO statement, on the workspace the
+ * request is scoped to (`app.workspace_id`). A DO block takes no parameters, so the count goes in
+ * as a transaction-local setting. Outside a request (the owner, which the guard skips) it is one
+ * UPDATE.
+ */
+export async function appendRevisions(
+  trx: Trx,
+  workspaceId: string,
+  actor: string,
+  revisions: { hubId: string; itemId: string; version: number; patch: RevisionPatch }[],
+): Promise<void> {
+  const n = revisions.length
+  if (n === 0) return
+  if (isScoped(trx)) {
+    await sql`SELECT set_config('app.revision_steps', ${String(n)}, true)`.execute(trx)
+    await sql`
+      DO $$
+      BEGIN
+        FOR i IN 1 .. current_setting('app.revision_steps')::int LOOP
+          UPDATE workspace SET next_revision_seq = next_revision_seq + 1
+          WHERE id = current_setting('app.workspace_id');
+          IF NOT FOUND THEN
+            RAISE EXCEPTION 'no workspace row to take revision numbers from';
+          END IF;
+        END LOOP;
+      END
+      $$
+    `.execute(trx)
+  } else {
+    const moved = await trx
+      .updateTable('workspace')
+      .set({ next_revision_seq: sql`next_revision_seq + ${n}` })
+      .where('id', '=', workspaceId)
+      .executeTakeFirst()
+    if (moved.numUpdatedRows === 0n) {
+      throw new Error(`no workspace row ${workspaceId} to take revision numbers from`)
+    }
+  }
+  const { next } = await trx
+    .selectFrom('workspace')
+    .select('next_revision_seq as next')
+    .where('id', '=', workspaceId)
+    .executeTakeFirstOrThrow()
+  const first = next - n
+  const rows = revisions.map((r, i) => ({
+    workspace_id: workspaceId,
+    seq: first + i,
+    item_id: r.itemId,
+    hub_id: r.hubId,
+    version: r.version,
+    patch: JSON.stringify(r.patch),
+    actor,
+  }))
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    await trx
+      .insertInto('revision')
+      .values(rows.slice(i, i + INSERT_CHUNK))
+      .execute()
+  }
+  await sql`
+    SELECT pg_notify(${REVISION_CHANNEL}, ${`${workspaceId}:`} || s::text)
+    FROM generate_series(${first}::bigint, ${next - 1}::bigint) AS s
+  `.execute(trx)
+}
+
 /** Adds `delta` to the item count of the hub and, if different, of the folder. */
 async function bumpCounts(
   trx: Trx,
@@ -112,7 +192,7 @@ async function bumpCounts(
  * of the item for each such attribute is replaced, so a multi-valued type can shrink or grow.
  * `null` in `values` clears the attribute's rows. Runs in the item's write transaction.
  */
-async function writeIndex(
+export async function writeIndex(
   trx: Trx,
   workspaceId: string,
   itemId: string,
@@ -334,20 +414,23 @@ export async function createItem(
   actor: string,
   input: { id?: string | undefined; folderId: string; values: Record<string, unknown> },
 ): Promise<Item> {
-  const folder = await db
-    .selectFrom('folder')
-    .select(['id', 'hub_id'])
-    .where('workspace_id', '=', workspaceId)
-    .where('id', '=', input.folderId)
-    .executeTakeFirst()
-  if (!folder) throw notFound('Folder')
-  const definitions = await folderDefinitions(db, workspaceId, folder.id)
-  const values = stripNulls(validate(definitions, input.values, false))
-  const id = input.id ?? randomUUID()
-  const relations = touchedRelations(definitions, values)
-  const autoIds = definitions.map((d) => d.attribute).filter((a) => a.type === 'auto_id')
-
   return inTransaction(db, async (trx) => {
+    const folder = await trx
+      .selectFrom('folder')
+      .select(['id', 'hub_id'])
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', input.folderId)
+      .executeTakeFirst()
+    if (!folder) throw notFound('Folder')
+    // Before reading the attributes, so a schema write that strips values can't commit
+    // between this validation and the insert (schema-lock.ts).
+    await lockHubSchema(trx, workspaceId, folder.hub_id, 'shared')
+    const definitions = await folderDefinitions(trx, workspaceId, folder.id)
+    const values = stripNulls(validate(definitions, input.values, false))
+    const id = input.id ?? randomUUID()
+    const relations = touchedRelations(definitions, values)
+    const autoIds = definitions.map((d) => d.attribute).filter((a) => a.type === 'auto_id')
+
     // History outlives a deleted item, so an ID is never reused, even after a delete.
     const used = await trx
       .selectFrom('revision')
@@ -369,6 +452,14 @@ export async function createItem(
       .returning(sql<number>`next_seq - 1`.as('seq_id'))
       .executeTakeFirstOrThrow()
     await bumpCounts(trx, workspaceId, folder.hub_id, folder.id, 1)
+    // A folder delete that committed while this write waited for the hub row (#112).
+    const live = await trx
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', folder.id)
+      .executeTakeFirst()
+    if (!live) throw notFound('Folder')
     // Auto IDs are the item's seqId, written once here; clients cannot set them.
     const stored: ItemValues = { ...values }
     for (const attribute of autoIds) stored[attribute.id] = seq_id
@@ -420,12 +511,14 @@ export async function patchItem(
   id: string,
   input: PatchItem,
 ): Promise<Item> {
-  const before = await getItem(db, workspaceId, id)
-  const definitions = await folderDefinitions(db, workspaceId, before.folderId)
-  const validated = validate(definitions, input.values, true)
-  const relations = touchedRelations(definitions, validated)
-
   return inTransaction(db, async (trx) => {
+    const before = await getItem(trx, workspaceId, id)
+    // Before reading the attributes: see createItem and schema-lock.ts.
+    await lockHubSchema(trx, workspaceId, before.hubId, 'shared')
+    const definitions = await folderDefinitions(trx, workspaceId, before.folderId)
+    const validated = validate(definitions, input.values, true)
+    const relations = touchedRelations(definitions, validated)
+
     // NO KEY UPDATE, like the UPDATE below, so writers linking to this item are not blocked.
     const current = await trx
       .selectFrom('item')
