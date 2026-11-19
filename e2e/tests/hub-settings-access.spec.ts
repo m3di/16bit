@@ -76,6 +76,10 @@ test('a hub admin renames and recolours the hub and sets its title attribute (D5
   await page.goto(settings(hub.id, 'general'))
   const general = page.getByRole('region', { name: 'General' })
   await expect(general.getByText('2 items in this hub, counting every folder.')).toBeVisible()
+  // The ID prefix shows read-only: it is set when the hub is created (#150).
+  await expect(general.locator('[data-hub-prefix]')).toContainText('ID prefix')
+  await expect(general.locator('[data-hub-prefix]')).toContainText('Items are numbered ACC-1')
+  await expect(general.getByRole('textbox', { name: 'ID prefix' })).toHaveCount(0)
 
   const renamed = `${hub.name} renamed`
   await general.getByLabel('Name').fill(renamed)
@@ -291,4 +295,37 @@ test('an owner gives themselves access from the dashboard’s "no access" card',
   await expect(page.getByRole('link', { name: new RegExp(hub.name) })).toBeVisible()
   const mine = (await grantsOf(owner, hub.id)).find((g) => g.principalId === people.owner.id)
   expect(mine?.hubRole).toBe('hub_admin')
+})
+
+test('a self-grant whose hub list fails to reload says so, and loads it again (#150)', async ({
+  page,
+  as,
+}) => {
+  const owner = as('owner')
+  const hub = await newHub(owner, 'self grant stale')
+  await expectStatus(await owner.delete(`/hubs/${hub.id}/grants/${people.owner.id}`), 204)
+
+  await page.goto('/')
+  const card = page.locator('[data-hub-card]').filter({ hasText: hub.name })
+  await expect(card).toContainText('No access')
+  // The grant goes through; the hub list read after it does not.
+  const hubList = (url: URL) => url.pathname === `/v1/workspaces/${hub.workspaceId}/hubs`
+  await page.route(hubList, (route) =>
+    route.fulfill({ status: 503, json: { error: 'internal', message: 'Unavailable' } }),
+  )
+  await page.getByRole('button', { name: `Give myself access to ${hub.name}` }).click()
+  const notice = page.locator('[data-self-grant-stale]')
+  await expect(notice).toContainText(
+    `The hubs could not be loaded again. You now have access to ${hub.name}`,
+  )
+  await expect(page.getByRole('button', { name: `Give myself access to ${hub.name}` })).toHaveCount(
+    0,
+  )
+  const mine = (await grantsOf(owner, hub.id)).find((g) => g.principalId === people.owner.id)
+  expect(mine?.hubRole).toBe('hub_admin')
+
+  await page.unroute(hubList)
+  await notice.getByRole('button', { name: 'Load hubs again' }).click()
+  await expect(page.getByRole('link', { name: new RegExp(hub.name) })).toBeVisible()
+  await expect(notice).toHaveCount(0)
 })

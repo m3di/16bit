@@ -446,6 +446,54 @@ describe('GET /hubs/:hubId/grants', () => {
     expect(page2.nextCursor).toBeNull()
   })
 
+  it('marks agent grants whose key is revoked or expired, people carry no key state', async () => {
+    const make = async (name: string, expiresAt?: string) => {
+      const res = await person('adm', 'POST', '/hubs/tmp2/agent-keys', {
+        name,
+        hubRole: 'viewer',
+        ...(expiresAt ? { expiresAt } : {}),
+      })
+      expect(res.statusCode, res.body).toBe(201)
+      return createdAgentKeySchema.parse(res.json())
+    }
+    const live = await make('k-live', new Date(Date.now() + 86_400_000).toISOString())
+    const gone = await make('k-revoked')
+    const old = await make('k-expired', new Date(Date.now() + 86_400_000).toISOString())
+    const both = await make('k-both', new Date(Date.now() + 86_400_000).toISOString())
+    for (const k of [gone, both]) {
+      const res = await person('adm', 'POST', `/agent-keys/${k.key.id}/revoke`)
+      expect(res.statusCode, res.body).toBe(200)
+    }
+    // No route sets a past expiry, so age the keys directly.
+    await db
+      .updateTable('agent_key')
+      .set({ expires_at: sql<Date>`now() - interval '1 second'` })
+      .where('principal_id', 'in', [old.key.id, both.key.id])
+      .execute()
+
+    const res = await person('adm', 'GET', '/hubs/tmp2/grants')
+    expect(res.statusCode, res.body).toBe(200)
+    const items = hubGrantPageSchema.parse(res.json()).items
+    const state = Object.fromEntries(
+      items.map((g) => [g.name, g.kind === 'agent' ? g.keyState : undefined]),
+    )
+    expect(state).toEqual({
+      adm: undefined,
+      ha: undefined,
+      'k-both': 'revoked',
+      'k-expired': 'expired',
+      'k-live': 'active',
+      'k-revoked': 'revoked',
+    })
+    expect(items.find((g) => g.name === 'ha')).not.toHaveProperty('keyState')
+
+    // The marks agree with what the auth hook lets in.
+    const me = (secret: string) =>
+      app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `Bearer ${secret}` } })
+    expect((await me(live.secret)).statusCode).toBe(200)
+    for (const k of [gone, old, both]) expect((await me(k.secret)).statusCode).toBe(401)
+  })
+
   it('lists for owners and admins without a grant, not for others', async () => {
     expect((await person('adm2', 'GET', '/hubs/build/grants')).statusCode).toBe(200)
     expect((await person('ed', 'GET', '/hubs/build/grants')).statusCode).toBe(403)

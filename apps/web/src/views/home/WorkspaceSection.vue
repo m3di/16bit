@@ -113,7 +113,17 @@ const offersNewHub = computed(
         <template v-else>
           <HubCard :name="hub.name" :color="hub.color" no-access class="flex-1" />
           <div v-if="canSelfGrant" class="flex flex-col gap-1 pt-1.5" data-self-grant>
-            <span>
+            <!-- Access was given, but the list could not be read again to open the hub. -->
+            <FormNotice v-if="ask(hub.id)?.state === 'stale'" data-self-grant-stale>
+              The hubs could not be loaded again. You now have access to {{ hub.name }}; load them
+              to open it.
+              <template #action>
+                <BaseButton size="sm" variant="quiet" @click="$emit('retry')"
+                  >Load hubs again</BaseButton
+                >
+              </template>
+            </FormNotice>
+            <span v-else>
               <BaseButton
                 size="sm"
                 variant="quiet"

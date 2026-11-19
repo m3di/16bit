@@ -23,8 +23,11 @@ export interface WorkspaceEntry {
   hubs: Load<HubListEntry[]>
 }
 
-/** A self-grant on its way, or why it was refused. Keyed by `selfGrantKey`. */
-export type SelfGrant = { state: 'busy' } | { state: 'error'; message: string }
+/**
+ * A self-grant on its way, why it was refused, or `stale`: access was given but the hub list
+ * could not be read again, so the card still says "No access". Keyed by `selfGrantKey`.
+ */
+export type SelfGrant = { state: 'busy' } | { state: 'error'; message: string } | { state: 'stale' }
 
 export const selfGrantKey = (workspaceId: string, hubId: string) => `${workspaceId}/${hubId}`
 
@@ -42,16 +45,25 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
   /** Self-grants by owners and admins from a "no access" card. */
   const selfGrants = ref(new Map<string, SelfGrant>())
 
-  async function loadHubs(entry: WorkspaceEntry, gen: number, keep = false) {
+  /** Reads a workspace's hubs. `keep` leaves the list on screen while it is read again. */
+  async function loadHubs(entry: WorkspaceEntry, gen: number, keep = false): Promise<boolean> {
     if (!(keep && entry.hubs.state === 'ready')) entry.hubs = { state: 'loading' }
     const path = `/v1/workspaces/${encodeURIComponent(entry.workspace.id)}/hubs`
     try {
       const hubs = await getAllPages(path, hubPageSchema, fetchFn)
-      if (gen === generation) entry.hubs = { state: 'ready', data: hubs }
+      if (gen !== generation) return false
+      entry.hubs = { state: 'ready', data: hubs }
+      // The list now shows every grant given, so no card waits for a reload any more.
+      const prefix = selfGrantKey(entry.workspace.id, '')
+      for (const [key, ask] of selfGrants.value) {
+        if (ask.state === 'stale' && key.startsWith(prefix)) selfGrants.value.delete(key)
+      }
+      return true
     } catch (error) {
       if (gen === generation && !(keep && entry.hubs.state === 'ready')) {
         entry.hubs = { state: 'error', error: asRequestError(error) }
       }
+      return false
     }
   }
 
@@ -87,7 +99,10 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
     if (!entry) return
     let running = loadingHubs.get(workspaceId)
     if (!running) {
-      running = loadHubs(entry, generation).finally(() => loadingHubs.delete(workspaceId))
+      // Keeps a list on screen (after a self-grant); an error state goes to loading as before.
+      running = loadHubs(entry, generation, true)
+        .then(() => undefined)
+        .finally(() => loadingHubs.delete(workspaceId))
       loadingHubs.set(workspaceId, running)
     }
     await running
@@ -96,7 +111,8 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
   /**
    * An owner or admin gives themselves hub admin access to a hub they see as "no access"
    * (docs/ROLES.md, D45). The API logs it in `access_log` (D48). The card turns into a link once
-   * the hub list is read again, since only that read carries the hub's item count.
+   * the hub list is read again, since only that read carries the hub's item count. If that read
+   * fails, the grant is `stale` and the card says so, with a way to read the list again.
    */
   async function grantSelf(workspaceId: string, hubId: string, principalId: string) {
     const key = selfGrantKey(workspaceId, hubId)
@@ -121,8 +137,8 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
       workspaces.value.state === 'ready'
         ? workspaces.value.data.find((e) => e.workspace.id === workspaceId)
         : undefined
-    if (entry) await loadHubs(entry, generation, true)
-    selfGrants.value.delete(key)
+    if (!entry || (await loadHubs(entry, generation, true))) selfGrants.value.delete(key)
+    else selfGrants.value.set(key, { state: 'stale' })
   }
 
   function dismissSelfGrant(workspaceId: string, hubId: string) {

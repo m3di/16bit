@@ -17,6 +17,7 @@ import {
   folderConflictErrorSchema,
   hubConflictErrorSchema,
   hubDescriptionSchema,
+  hubGrantEntrySchema,
   hubGrantPageSchema,
   hubSchema,
   invitePageSchema,
@@ -390,6 +391,7 @@ describe('grants and invites', () => {
           name: 'Triage bot',
           workspaceRole: 'member',
           hubRole: 'viewer',
+          keyState: 'revoked',
         },
       ],
       nextCursor: null,
@@ -397,6 +399,19 @@ describe('grants and invites', () => {
     expect(hubGrantPageSchema.parse(page).items).toHaveLength(2)
     const withEmail = { ...page.items[0], email: 'mina@example.com' }
     expect(hubGrantPageSchema.safeParse({ ...page, items: [withEmail] }).success).toBe(false)
+  })
+
+  it('marks an agent grant with its key state, and only agent grants', () => {
+    const [user, agent] = [
+      { principalId: 'p1', kind: 'user', name: 'Mina', workspaceRole: 'member', hubRole: 'editor' },
+      { principalId: 'k1', kind: 'agent', name: 'Bot', workspaceRole: 'member', hubRole: 'viewer' },
+    ]
+    for (const keyState of ['active', 'revoked', 'expired']) {
+      expect(hubGrantEntrySchema.parse({ ...agent, keyState })).toMatchObject({ keyState })
+    }
+    expect(hubGrantEntrySchema.safeParse(agent).success).toBe(false)
+    expect(hubGrantEntrySchema.safeParse({ ...agent, keyState: 'lost' }).success).toBe(false)
+    expect(hubGrantEntrySchema.safeParse({ ...user, keyState: 'active' }).success).toBe(false)
   })
 
   it('pages pending invites', () => {

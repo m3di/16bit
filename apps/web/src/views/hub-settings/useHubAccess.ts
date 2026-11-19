@@ -161,7 +161,8 @@ export function useHubAccess(
     if (!list) return
     const entry: HubGrantEntry = {
       principalId: person.id,
-      kind: person.kind,
+      // Only people are added here; an agent's grant comes with its key (D47).
+      kind: 'user',
       name: person.name,
       workspaceRole: person.workspaceRole,
       hubRole: saved.hubRole,
@@ -205,6 +206,11 @@ export function useHubAccess(
     if (keys.value.state === 'ready') {
       const at = keys.value.data.findIndex((k) => k.id === keyId)
       if (at !== -1) keys.value.data[at] = saved
+    }
+    // The agent keeps its grant; the access list marks it revoked.
+    if (grants.value.state === 'ready') {
+      const g = grants.value.data.find((x) => x.principalId === keyId)
+      if (g?.kind === 'agent') g.keyState = 'revoked'
     }
     return saved
   }
