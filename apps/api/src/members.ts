@@ -26,7 +26,7 @@ import { toFolder } from './mappers.ts'
 // and redeem_invite (migration 0004). Each takes, in this order:
 //
 //   1. principal rows: the owners in ID order (member changes), then the target; createHub
-//      takes its actor here instead (#96). FOR NO KEY UPDATE or FOR SHARE, never FOR UPDATE:
+//      and revokeInvite (invites.ts) take their actor here instead (#96, #113). FOR NO KEY UPDATE or FOR SHARE, never FOR UPDATE:
 //      every foreign key to principal (access_log.actor, revision.actor, item.updated_by,
 //      hub_grant, invite, agent_key) takes FOR KEY SHARE, which only FOR UPDATE blocks. A
 //      writer that already holds the workspace row and then inserts its log or revision row

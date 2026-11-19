@@ -45,6 +45,13 @@ export interface ActionScopes {
   'hub.create': undefined
   /** `role` is the workspace role the invite carries. */
   'member.invite': { role: WorkspaceRole }
+  /**
+   * List the workspace's pending invites, owner-role ones included. Part of "Invite members"
+   * in docs/ROLES.md: whoever may invite sees what is pending.
+   */
+  'invite.list': undefined
+  /** End a pending invite. `role` is the workspace role it carries: as `member.invite` (¹). */
+  'invite.revoke': { role: WorkspaceRole }
   /** `ownerCount` is the number of owners in the workspace now. */
   'member.changeRole': { target: Subject; role: WorkspaceRole; ownerCount: number }
   'member.remove': { target: Subject; ownerCount: number }
@@ -94,6 +101,8 @@ export const ACTIONS = [
   'hub.listAll',
   'hub.create',
   'member.invite',
+  'invite.list',
+  'invite.revoke',
   'member.changeRole',
   'member.remove',
   'hub.see',
@@ -205,8 +214,11 @@ function decide(actor: Subject, action: Action, scope: ActionScopes[Action]): De
       return allowIf(!isAgent && (role === 'owner' || role === 'finance'))
     case 'hub.listAll':
     case 'hub.create':
+    case 'invite.list':
       return allowIf(isOwnerOrAdmin(actor))
-    case 'member.invite': {
+    // Revoking follows creating: an admin can't end an owner-role invite either (¹).
+    case 'member.invite':
+    case 'invite.revoke': {
       const s = scope as ActionScopes['member.invite']
       if (!isOwnerOrAdmin(actor)) return 'forbidden'
       return allowIf(!(role === 'admin' && s.role === 'owner'))

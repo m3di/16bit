@@ -61,6 +61,8 @@ describe('workspace actions (ROLES.md "Workspace actions")', () => {
       [Y, Y, Y, Y, Y, Y],
     ],
     ['invite members', (a) => check(a, 'member.invite', { role: 'member' }), [Y, Y, F, F, F, F]],
+    ['list pending invites', (a) => check(a, 'invite.list'), [Y, Y, F, F, F, F]],
+    ['revoke an invite', (a) => check(a, 'invite.revoke', { role: 'member' }), [Y, Y, F, F, F, F]],
     [
       'change a member role',
       (a) =>
@@ -166,6 +168,8 @@ describe('workspace actions (ROLES.md "Workspace actions")', () => {
       expect(check(odd, action), action).toBe(F)
     }
     expect(check(odd, 'member.invite', { role: 'member' })).toBe(F)
+    expect(check(odd, 'invite.list')).toBe(F)
+    expect(check(odd, 'invite.revoke', { role: 'member' })).toBe(F)
     expect(check(odd, 'hub.see', { hubGrant: null })).toBe(N)
     expect(check(odd, 'key.revoke', { hubGrant: 'editor' })).toBe(F)
   })
@@ -332,6 +336,9 @@ describe('footnote ¹: admins and owners', () => {
     ['admin invites an owner', user('admin'), 'member.invite', { role: 'owner' }, F],
     ['admin invites an admin', user('admin'), 'member.invite', { role: 'admin' }, Y],
     ['owner invites an owner', user('owner'), 'member.invite', { role: 'owner' }, Y],
+    ['admin revokes an owner invite', user('admin'), 'invite.revoke', { role: 'owner' }, F],
+    ['admin revokes an admin invite', user('admin'), 'invite.revoke', { role: 'admin' }, Y],
+    ['owner revokes an owner invite', user('owner'), 'invite.revoke', { role: 'owner' }, Y],
     [
       'admin promotes a member to owner',
       user('admin'),

@@ -400,7 +400,12 @@ describe('listing keys', () => {
   })
 
   it('rejects a malformed cursor', async () => {
-    for (const cursor of ['nope', Buffer.from('["x","y"]').toString('base64url')]) {
+    for (const cursor of [
+      'nope',
+      Buffer.from('["x","y"]').toString('base64url'),
+      // Date.parse accepts it, Postgres would not: must be a 400, not a 500.
+      Buffer.from('["hello 2020","y"]').toString('base64url'),
+    ]) {
       const res = await person(
         'ha',
         'GET',
