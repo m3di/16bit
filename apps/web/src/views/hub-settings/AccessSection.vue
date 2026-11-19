@@ -17,7 +17,6 @@ import { createCommitter } from '../workspace/members.ts'
 import {
   ACCESS_HIDDEN,
   canListGrants,
-  canListKeys,
   canRevokeGrant,
   cappedNote,
   grantRoleChoices,
@@ -47,12 +46,7 @@ const lists = computed(() => canListGrants(viewer, hubRole))
 
 onMounted(() => {
   if (lists.value) void access.loadGrants()
-  // Only to say which agents' keys no longer work.
-  if (canListKeys(viewer, hubRole) && access.keys.value.state !== 'ready') void access.loadKeys()
 })
-const keyList = computed(() =>
-  access.keys.value.state === 'ready' ? access.keys.value.data : null,
-)
 
 const grants = computed(() => access.grants.value)
 const rows = computed(() => (grants.value.state === 'ready' ? grants.value.data : []))
@@ -279,7 +273,7 @@ function onAdded(person: Principal, role: HubRole) {
                 cappedNote(g)
               }}</span>
             </td>
-            <td class="h-[38px] pr-3 text-secondary text-ink2">{{ sourceLabel(g, keyList) }}</td>
+            <td class="h-[38px] pr-3 text-secondary text-ink2">{{ sourceLabel(g) }}</td>
             <td class="h-[38px] text-right">
               <RowActionsMenu
                 :label="`Actions for ${g.name}`"

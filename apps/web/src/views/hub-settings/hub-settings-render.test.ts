@@ -304,6 +304,7 @@ const grantRows = (): HubGrantEntry[] => [
     name: 'qa-agent',
     workspaceRole: 'member',
     hubRole: 'editor',
+    keyState: 'active',
   },
   { principalId: 'ivy', kind: 'user', name: 'Ivy', workspaceRole: 'viewer', hubRole: 'editor' },
   { principalId: 'own', kind: 'user', name: 'Olga', workspaceRole: 'owner', hubRole: 'viewer' },
