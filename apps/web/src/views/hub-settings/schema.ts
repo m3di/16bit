@@ -17,18 +17,12 @@ import { folderTree, type FolderEntry } from '../hub/useHub.ts'
 // Pure rules for hub settings, folders and attributes: who may change them, what a folder may
 // move under, what blocks a delete, and the create body for each attribute type.
 
-/** The sections of hub settings that exist so far. General, access and keys come next. */
-export type HubSettingsSection = 'folders' | 'attributes'
-
-export const SECTION_ROUTES: Record<HubSettingsSection, string> = {
-  folders: 'hub-settings-folders',
-  attributes: 'hub-settings-attributes',
-}
-
-export const SECTION_LABELS: Record<HubSettingsSection, string> = {
-  folders: 'Folders',
-  attributes: 'Attributes',
-}
+export {
+  SECTION_LABELS,
+  SECTION_PATHS,
+  SECTION_ROUTES,
+  type HubSettingsSection,
+} from './sections.ts'
 
 /** Shown wherever a reader without `hub.manageSchema` sees the schema read-only. */
 export const READ_ONLY_REASON = 'Only hub admins can change folders and attributes.'

@@ -82,7 +82,7 @@ export const attributes: Attribute[] = [
 ]
 
 export const description: HubDescription = {
-  hub: { ...folder('bld', null, 'Build'), parentId: null, titleAttributeId: null },
+  hub: { ...folder('bld', null, 'Build'), parentId: null, titleAttributeId: 'title' },
   hubRole: 'hub_admin',
   folders: [folder('b', 'bld', 'Bugs'), folder('a', 'bld', 'Archive'), folder('a1', 'a', 'Old')],
   attributes,

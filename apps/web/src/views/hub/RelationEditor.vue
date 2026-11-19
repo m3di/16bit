@@ -5,7 +5,7 @@ import { BaseButton, BaseInput, BaseSelect, StateBlock } from '../../ui/index.ts
 import { useValueContext } from './context.ts'
 import { displayId, itemTitle, showsLoadedOnlyNote, toggled } from './relations.ts'
 import RelationValue from './RelationValue.vue'
-import { folderColumns, folderTree } from './useHub.ts'
+import { folderTree } from './useHub.ts'
 import { useRelationSearch } from './useRelationSearch.ts'
 
 const {
@@ -85,9 +85,7 @@ const folderModel = computed({
 const offered = computed(() => search.offered(itemId ? [...value, itemId] : value))
 const result = (item: Item) => {
   const hub = targetHub.value
-  return hub
-    ? { id: displayId(hub, item), title: itemTitle(item, folderColumns(hub, item.folderId)) }
-    : { id: '', title: '' }
+  return hub ? { id: displayId(hub, item), title: itemTitle(item, hub) } : { id: '', title: '' }
 }
 
 function link(item: Item) {

@@ -210,3 +210,39 @@ describe('WorkspaceSection', () => {
     expect(html).toContain('Unreachable')
   })
 })
+
+describe('WorkspaceSection self-grant', () => {
+  it('offers owners and admins access to a "no access" hub, named for screen readers', async () => {
+    const html = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hub, hidden] }),
+      canSelfGrant: true,
+    })
+    expect(html).toContain('Give myself access')
+    expect(html).toContain('to Finance')
+    expect((html.match(/data-self-grant(?!-)/g) ?? []).length).toBe(1)
+  })
+
+  it('offers nothing to others', async () => {
+    const html = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hidden] }),
+    })
+    expect(html).not.toContain('Give myself access')
+  })
+
+  it('shows a self-grant on its way and one that was refused', async () => {
+    const busy = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hidden] }),
+      canSelfGrant: true,
+      selfGrants: new Map([['w/fin', { state: 'busy' }]]),
+    })
+    expect(busy).toContain('Giving access')
+    const refused = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hidden] }),
+      canSelfGrant: true,
+      selfGrants: new Map([['w/fin', { state: 'error', message: 'Access was not given. Boom' }]]),
+    })
+    expect(refused).toContain('data-self-grant-error')
+    expect(refused).toContain('Access was not given. Boom')
+    expect(refused).toContain('role="alert"')
+  })
+})
