@@ -9,6 +9,7 @@ import {
   expect,
   expectStatus,
   hubPath,
+  listAll,
   people,
   test,
   uniqueHubName,
@@ -24,10 +25,8 @@ import {
 const SEEDED = ['Archive', 'Design', 'Hiring', 'Launch', 'Product', 'Support']
 const PHONE = { width: 390, height: 844 }
 
-async function hubList(client: Client): Promise<HubListEntry[]> {
-  const res = await client.get('/hubs?limit=200')
-  await expectStatus(res, 200)
-  return hubPageSchema.parse(await res.json()).items
+function hubList(client: Client): Promise<HubListEntry[]> {
+  return listAll(client, '/hubs', hubPageSchema)
 }
 
 /** Seeded hubs in the list, by name, with the caller's access to each. */

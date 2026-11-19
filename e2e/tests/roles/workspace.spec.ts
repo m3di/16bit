@@ -1,5 +1,13 @@
 import { createdInviteSchema, principalSchema, pageSchema } from '@16bit/core'
-import { expect, expectStatus, people, test, workspaceSection, WS_NAME } from '../support/roles.ts'
+import {
+  expect,
+  expectStatus,
+  listAll,
+  people,
+  test,
+  workspaceSection,
+  WS_NAME,
+} from '../support/roles.ts'
 
 // docs/ROLES.md, "Workspace actions": the workspace and its member list, invites, role
 // changes and removal. Owners and admins manage members; nobody else does; agents do nothing.
@@ -13,9 +21,7 @@ test('every person sees the workspace and its member list; an agent key sees nei
   agentKey,
 }) => {
   for (const person of ['owner', 'mina', 'leo', 'ivy', 'noor'] as const) {
-    const res = await as(person).get('/members?limit=200')
-    await expectStatus(res, 200)
-    const names = memberPage.parse(await res.json()).items.map((m) => m.name)
+    const names = (await listAll(as(person), '/members', memberPage)).map((m) => m.name)
     expect(names, person).toEqual(expect.arrayContaining(Object.values(people).map((p) => p.name)))
   }
 
@@ -112,8 +118,7 @@ test('owners and admins remove members, who then lose the workspace', async ({
   await expectStatus(await removedByOwner.client.get('/members'), 404)
 
   // The member list no longer names them.
-  const list = await as('leo').get('/members?limit=200')
-  const names = memberPage.parse(await list.json()).items.map((m) => m.name)
+  const names = (await listAll(as('leo'), '/members', memberPage)).map((m) => m.name)
   expect(names).not.toContain(removedByAdmin.name)
   expect(names).not.toContain(removedByOwner.name)
 

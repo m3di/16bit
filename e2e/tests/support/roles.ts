@@ -3,9 +3,11 @@ import {
   createdAgentKeySchema,
   createdInviteSchema,
   itemSchema,
+  MAX_PAGE_LIMIT,
   type AgentHubRole,
   type AgentKey,
   type Item,
+  type Page as ListPage,
 } from '@16bit/core'
 import { readFileSync } from 'node:fs'
 import {
@@ -86,6 +88,30 @@ export class Client {
 /** Fails with the response body in the message, so a failure says what the API objected to. */
 export async function expectStatus(res: APIResponse, status: number): Promise<void> {
   expect(res.status(), `${res.url()}: ${await res.text()}`).toBe(status)
+}
+
+/**
+ * Every entry of a paged list (`/hubs`, `/members`, `/hubs/:id/agent-keys`, ...), following
+ * `nextCursor` to the last page. A long-lived database holds more rows than one page (#158), so
+ * a spec never looks for its own row in the first page only.
+ */
+export async function listAll<T>(
+  client: Client,
+  path: string,
+  schema: { parse: (body: unknown) => ListPage<T> },
+): Promise<T[]> {
+  const all: T[] = []
+  let cursor: string | null = null
+  do {
+    const sep = path.includes('?') ? '&' : '?'
+    const after = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+    const res = await client.get(`${path}${sep}limit=${String(MAX_PAGE_LIMIT)}${after}`)
+    await expectStatus(res, 200)
+    const page = schema.parse(await res.json())
+    all.push(...page.items)
+    cursor = page.nextCursor
+  } while (cursor)
+  return all
 }
 
 /** A title no other test or run will use, so a spec can find exactly its own row. */

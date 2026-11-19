@@ -10,6 +10,7 @@ import {
   expect,
   expectStatus,
   hubPath,
+  listAll,
   test,
   uniqueHubName,
   uniqueTitle,
@@ -25,10 +26,8 @@ import {
 
 const PHONE = { width: 390, height: 844 }
 
-async function hubList(client: Client): Promise<HubListEntry[]> {
-  const res = await client.get('/hubs?limit=200')
-  await expectStatus(res, 200)
-  return hubPageSchema.parse(await res.json()).items
+function hubList(client: Client): Promise<HubListEntry[]> {
+  return listAll(client, '/hubs', hubPageSchema)
 }
 
 /** Deletes a hub a test created; it is empty, so the API allows it (D52). */

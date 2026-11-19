@@ -1,7 +1,7 @@
 import { agentKeyPageSchema, hubDescriptionSchema, meSchema } from '@16bit/core'
 import { readFileSync } from 'node:fs'
 import { stateFile } from '../support/auth-state.ts'
-import { expect, expectStatus, NO_STATE, test, uniqueTitle } from '../support/roles.ts'
+import { expect, expectStatus, listAll, NO_STATE, test, uniqueTitle } from '../support/roles.ts'
 
 // docs/ROLES.md, "Agent keys" and the key rows of "Workspace actions" and "Hub actions". A key
 // is its own principal with one hub grant (D47) and no workspace actions (D28). Agents have no
@@ -121,9 +121,8 @@ test('owners and admins with a grant create keys up to their own hub role; other
     hubRole: 'editor',
     creator: hubAdmin.client,
   })
-  const listed = await hubAdmin.client.get('/hubs/archive/agent-keys?limit=200')
-  await expectStatus(listed, 200)
-  expect(agentKeyPageSchema.parse(await listed.json()).items.map((k) => k.id)).toContain(madeKey.id)
+  const listed = await listAll(hubAdmin.client, '/hubs/archive/agent-keys', agentKeyPageSchema)
+  expect(listed.map((k) => k.id)).toContain(madeKey.id)
   await expectStatus(await hubAdmin.client.post(`/agent-keys/${madeKey.id}/revoke`), 200)
 })
 
@@ -133,9 +132,8 @@ test('the people who can create keys on a hub list them; others cannot', async (
 }) => {
   const { key } = await agentKey({ hubId: 'product', hubRole: 'viewer' })
   for (const person of ['owner', 'mina'] as const) {
-    const res = await as(person).get('/hubs/product/agent-keys?limit=200')
-    await expectStatus(res, 200)
-    const names = agentKeyPageSchema.parse(await res.json()).items.map((k) => k.name)
+    const keys = await listAll(as(person), '/hubs/product/agent-keys', agentKeyPageSchema)
+    const names = keys.map((k) => k.name)
     expect(names).toContain(key.name)
     // The key `pnpm seed` makes.
     expect(names).toContain('Triage bot')
