@@ -2,8 +2,9 @@
 import { MAX_EXPAND_ATTRIBUTES, type Item, type ItemValues } from '@16bit/core'
 import { ApiRequestError } from '../../api/client.ts'
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useSession } from '../../session/session.ts'
+import { canManageSchema } from '../hub-settings/schema.ts'
 import ShellUser from '../../session/ShellUser.vue'
 import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -71,6 +72,12 @@ provideValueContext({
     },
     query: { item: item.id },
   }),
+})
+
+const managesSchema = computed(() => {
+  const d = description.value
+  const me = session.me.value
+  return !!d && me.state === 'ready' && canManageSchema(me.data, workspaceId, d.hubRole)
 })
 
 const openFolderId = computed(() => folderId ?? hubId)
@@ -203,7 +210,17 @@ async function submitCreate(values: ItemValues) {
 
 <template>
   <AppShell>
-    <template #actions><ShellUser /></template>
+    <template #actions>
+      <!-- Hub admins change folders and attributes in hub settings (hub.manageSchema). -->
+      <RouterLink
+        v-if="managesSchema"
+        :to="{ name: 'hub-settings-folders', params: { workspaceId, hubId } }"
+        class="border-b border-line2 text-secondary text-ink no-underline hover:border-line3"
+        data-hub-settings-link
+        >Hub settings</RouterLink
+      >
+      <ShellUser />
+    </template>
     <template #sidebar>
       <FolderSidebar
         :workspace-id="workspaceId"

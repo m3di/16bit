@@ -1,4 +1,10 @@
-import { createRouter, createWebHistory, type RouteRecordRaw, type RouterHistory } from 'vue-router'
+import {
+  createRouter,
+  createWebHistory,
+  type RouteLocationNormalized,
+  type RouteRecordRaw,
+  type RouterHistory,
+} from 'vue-router'
 import HomeView from './views/HomeView.vue'
 
 declare module 'vue-router' {
@@ -7,6 +13,11 @@ declare module 'vue-router' {
     public?: boolean
   }
 }
+
+const hubParams = (to: RouteLocationNormalized) => ({
+  workspaceId: String(to.params['workspaceId'] ?? ''),
+  hubId: String(to.params['hubId'] ?? ''),
+})
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'home', component: HomeView },
@@ -22,6 +33,22 @@ const routes: RouteRecordRaw[] = [
     name: 'invite',
     component: () => import('./views/InviteView.vue'),
     meta: { public: true },
+  },
+  // Hub settings: folders and attributes so far; general, access and keys come next. Every
+  // reader with a grant may open it; only hub admins change anything (`hub.manageSchema`).
+  // There is no bare `/settings` path: it would shadow a folder whose ID is `settings` on the
+  // hub route below, and clients may choose folder IDs.
+  {
+    path: '/w/:workspaceId/hubs/:hubId/settings/folders',
+    name: 'hub-settings-folders',
+    component: () => import('./views/HubSettingsView.vue'),
+    props: (to) => ({ ...hubParams(to), section: 'folders' }),
+  },
+  {
+    path: '/w/:workspaceId/hubs/:hubId/settings/attributes',
+    name: 'hub-settings-attributes',
+    component: () => import('./views/HubSettingsView.vue'),
+    props: (to) => ({ ...hubParams(to), section: 'attributes' }),
   },
   {
     // The selected folder is optional: without it the hub's own items show. `?item=` opens
