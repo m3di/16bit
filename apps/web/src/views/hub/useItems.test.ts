@@ -6,6 +6,7 @@ import {
   canSort,
   inHub,
   LINKED_READ_LIMIT,
+  newItemId,
   nextSort,
   refusedSort,
   useItems,
@@ -776,5 +777,144 @@ describe('useItems: no permission to edit (#50)', () => {
     expect(s.notice.value).toBe(
       'The item was not created. You can view the items in this hub but not add them.',
     )
+  })
+})
+
+describe('newItemId (#119)', () => {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+  it('uses randomUUID where the browser has it', () => {
+    expect(newItemId({ randomUUID: () => 'a-b-c-d-e', getRandomValues: (b) => b })).toBe(
+      'a-b-c-d-e',
+    )
+  })
+
+  it('makes a v4 UUID without randomUUID, as over plain HTTP on another host', () => {
+    const id = newItemId({ getRandomValues: (b) => crypto.getRandomValues(b) })
+    expect(id).toMatch(uuid)
+    const zeros = newItemId({ getRandomValues: <T extends ArrayBufferView | null>(b: T) => b })
+    expect(zeros).toBe('00000000-0000-4000-8000-000000000000')
+  })
+})
+
+describe('useItems: an item page without a list (#119)', () => {
+  it('reads an item with expand and keeps its linked items, and a missing one as gone', async () => {
+    const target = item('t1', 5, { title: 'Target' })
+    const api = fakeApi(() =>
+      json({
+        ...item('i1', 1, { blocks: ['t1', 't2', 't3'] }),
+        linked: { t1: { access: 'read', item: target }, t2: { access: 'none' } },
+        linkedTruncated: false,
+      }),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
+    const result = await s.readItem('i1', ['blocks', 'parent'])
+    expect(api.calls[0]?.path).toBe('/v1/workspaces/w/items/i1?expand=blocks,parent')
+    expect(result).toMatchObject({ state: 'ready', data: { id: 'i1' } })
+    expect(s.view('i1')).not.toHaveProperty('linked')
+    expect(s.linkState('t1')).toEqual({ access: 'read', item: target })
+    expect(s.linkState('t2')).toEqual({ access: 'none' })
+    expect(s.linkState('t3')).toEqual({ access: 'gone' })
+  })
+
+  it('keeps a newer version than the one read', async () => {
+    const api = fakeApi((call) =>
+      call.path.includes('expand') ? json(item('i1', 1, {}, 1)) : json(item('i1', 1, {}, 3)),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
+    await s.openItem('i1')
+    await s.readItem('i1', ['blocks'])
+    expect(s.view('i1')?.version).toBe(3)
+  })
+
+  it('reports a failed read without touching the store', async () => {
+    const api = fakeApi(() => json({ error: 'not_found', message: 'Item not found' }, 404))
+    const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
+    expect(await s.readItem('i1', [])).toMatchObject({ state: 'error', error: { status: 404 } })
+    expect(s.view('i1')).toBeUndefined()
+  })
+
+  it('reads linked items at once, since no list query will cover them', async () => {
+    const api = fakeApi((call) => json(item(call.path.split('/').at(-1) ?? '', 5)))
+    const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
+    s.resolveLinked(['t1'])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.calls.map((c) => c.path)).toEqual(['/v1/workspaces/w/items/t1'])
+    expect(s.linkState('t1')).toMatchObject({ access: 'read' })
+  })
+})
+
+describe('useItems: deleting (#119)', () => {
+  async function loaded(handler: (call: Call) => Response | Promise<Response>) {
+    const api = fakeApi((call) =>
+      call.method === 'GET' ? json(item('i1', 7, { title: 'Old' }, 2)) : handler(call),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
+    await s.openItem('i1')
+    return { s, calls: api.calls }
+  }
+
+  it('deletes at the version shown', async () => {
+    const { s, calls } = await loaded(() => new Response(null, { status: 204 }))
+    expect(await s.remove('i1')).toEqual({ ok: true })
+    expect(calls.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/v1/workspaces/w/items/i1?version=2',
+      body: undefined,
+    })
+  })
+
+  it('removes a deleted row from an open list', async () => {
+    const api = fakeApi((call) =>
+      call.method === 'DELETE' ? new Response(null, { status: 204 }) : page([item('i1', 1)]),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    expect(await s.remove('i1')).toEqual({ ok: true })
+    expect(s.rows.value).toEqual([])
+  })
+
+  it('shows the current item on 409 and does not delete', async () => {
+    const current = item('i1', 7, { title: 'Theirs' }, 3)
+    const { s } = await loaded(() =>
+      json({ error: 'conflict', message: 'Version mismatch', current }, 409),
+    )
+    const result = await s.remove('i1')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toContain('BLD-7 was changed by someone else')
+    expect(s.view('i1')).toEqual(current)
+  })
+
+  it('turns read-only when the server refuses with 403', async () => {
+    const { s } = await loaded(() => json({ error: 'forbidden', message: 'No' }, 403))
+    const result = await s.remove('i1')
+    expect(result.ok).toBe(false)
+    expect(s.readOnly.value).toBe(true)
+  })
+
+  it('counts a 404 as done: the item is gone either way', async () => {
+    const { s } = await loaded(() => json({ error: 'not_found', message: 'Item not found' }, 404))
+    expect(await s.remove('i1')).toEqual({ ok: true })
+  })
+
+  it('names any other failure', async () => {
+    const { s } = await loaded(() => json({ error: 'internal', message: 'Database down' }, 500))
+    expect(await s.remove('i1')).toEqual({
+      ok: false,
+      message: 'BLD-7 was not deleted. Database down.',
+    })
+  })
+
+  it('waits for an edit on its way, then deletes at the new version', async () => {
+    const answer = gate<Response>()
+    const { s, calls } = await loaded((call) =>
+      call.method === 'PATCH' ? answer.promise : new Response(null, { status: 204 }),
+    )
+    const saved = s.save('i1', { title: 'New' })
+    const removed = s.remove('i1')
+    answer.release(json(item('i1', 7, { title: 'New' }, 3)))
+    await saved
+    expect(await removed).toEqual({ ok: true })
+    expect(calls.at(-1)?.path).toBe('/v1/workspaces/w/items/i1?version=3')
   })
 })
