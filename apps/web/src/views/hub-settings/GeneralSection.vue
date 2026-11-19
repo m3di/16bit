@@ -104,6 +104,12 @@ const titleHint = computed(() =>
     : 'Items are titled with this text attribute in links, the relation picker and their page.',
 )
 
+// The prefix is chosen when the hub is created; the hub update has no field for it.
+const prefixNote = computed(
+  () =>
+    `Items are numbered ${hub.value.idPrefix}-1, ${hub.value.idPrefix}-2 and on. It is set when the hub is created and does not change.`,
+)
+
 const saveState = computed(() =>
   model.hubSaving.value > 0 ? 'Saving' : model.hubNotice.value ? '' : 'All changes saved',
 )
@@ -140,6 +146,11 @@ const saveState = computed(() =>
           @change="commitName"
           @keydown.enter.prevent="commitName"
         />
+        <div class="flex flex-col gap-1" data-hub-prefix>
+          <span class="text-secondary text-ink3">ID prefix</span>
+          <span class="font-mono text-secondary text-ink">{{ hub.idPrefix }}</span>
+          <span class="text-secondary text-ink3">{{ prefixNote }}</span>
+        </div>
         <PalettePicker :model-value="color" label="Colour" @update:model-value="onColor" />
         <BaseSelect
           :model-value="title"
@@ -157,6 +168,11 @@ const saveState = computed(() =>
           <span class="text-secondary text-ink3">Name</span>
           <span>{{ hub.name }}</span>
           <span class="text-secondary text-ink3">{{ itemTotal(hub.itemCount) }}</span>
+        </div>
+        <div class="flex flex-col gap-1" data-hub-prefix>
+          <span class="text-secondary text-ink3">ID prefix</span>
+          <span class="font-mono text-secondary text-ink">{{ hub.idPrefix }}</span>
+          <span class="text-secondary text-ink3">{{ prefixNote }}</span>
         </div>
         <PalettePicker :model-value="hub.color" label="Colour" state="no-permission" />
         <div class="flex flex-col gap-1">

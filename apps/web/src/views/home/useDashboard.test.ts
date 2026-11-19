@@ -243,4 +243,34 @@ describe('self-grant from a "no access" card (D45)', () => {
     d.dismissSelfGrant('a', 'fin')
     expect(d.selfGrants.value.has('a/fin')).toBe(false)
   })
+
+  it('says so when the hubs fail to load after the grant, and clears once they load', async () => {
+    let failHubs = false
+    const base = fakeWith(() =>
+      json({ workspaceId: 'a', hubId: 'fin', principalId: 'me-a', hubRole: 'hub_admin' }),
+    )
+    const fetchFn: Fetch = (input, init) => {
+      const path = new URL(urlOf(input), 'http://x').pathname
+      if (failHubs && path === '/v1/workspaces/a/hubs')
+        return Promise.resolve(json({ error: 'internal', message: 'Down' }, 500))
+      return base.fetchFn(input, init)
+    }
+    const d = useDashboard(fetchFn)
+    await d.load()
+    failHubs = true
+    await d.grantSelf('a', 'fin', 'me-a')
+    expect(d.selfGrants.value.get('a/fin')).toEqual({ state: 'stale' })
+    // The list stays as it was rather than turning into an error.
+    expect(hubsOf(d)?.[0]?.access).toBe('none')
+
+    // A failed reload keeps the list and the notice.
+    await d.reloadHubs('a')
+    expect(hubsOf(d)?.[0]?.access).toBe('none')
+    expect(d.selfGrants.value.get('a/fin')).toEqual({ state: 'stale' })
+
+    failHubs = false
+    await d.reloadHubs('a')
+    expect(hubsOf(d)?.[0]).toMatchObject({ access: 'granted', itemCount: 12 })
+    expect(d.selfGrants.value.has('a/fin')).toBe(false)
+  })
 })

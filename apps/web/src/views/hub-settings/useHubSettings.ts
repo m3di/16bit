@@ -1,5 +1,6 @@
 import {
   attributeConflictErrorSchema,
+  attributeUsageSchema,
   attributeSchema,
   confirmRequiredErrorSchema,
   folderAttributesConflictErrorSchema,
@@ -11,6 +12,7 @@ import {
   hubSchema,
   hubPageSchema,
   type Attribute,
+  type AttributeUsage,
   type CreateAttribute,
   type CreateFolder,
   type Folder,
@@ -326,6 +328,15 @@ export function useHubSettings(
     return result
   }
 
+  /**
+   * How many items hold each option of a select or multi-select (`hub.manageSchema`), for
+   * the options editor. Throws the request error; the caller shows it.
+   */
+  function attributeUsage(attribute: Attribute): Promise<AttributeUsage> {
+    const path = `${ws}/attributes/${encodeURIComponent(attribute.id)}/usage`
+    return getJson(path, attributeUsageSchema, fetchFn)
+  }
+
   async function deleteAttribute(attribute: Attribute, confirm?: number) {
     const query = new URLSearchParams({ version: String(attribute.version) })
     if (confirm !== undefined) query.set('confirm', String(confirm))
@@ -500,6 +511,7 @@ export function useHubSettings(
     setFolderAttributes,
     createAttribute,
     updateAttribute,
+    attributeUsage,
     deleteAttribute,
     hubNotice,
     hubSaving,

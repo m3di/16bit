@@ -34,7 +34,12 @@ const created = ref<CreatedAgentKey | null>(null)
 const copied = ref<'idle' | 'done' | 'failed'>('idle')
 
 watch(open, (isOpen) => {
-  if (!isOpen) return
+  if (!isOpen) {
+    // Drop the secret as soon as the dialog closes, so it is not kept in memory.
+    created.value = null
+    copied.value = 'idle'
+    return
+  }
   name.value = ''
   role.value = roles.includes('viewer') ? 'viewer' : (roles[0] ?? '')
   lifetime.value = '90'

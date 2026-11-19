@@ -192,6 +192,19 @@ export async function ensureBuildHub(db: Kysely<Database>): Promise<{ hubDeleted
   })
 }
 
+/**
+ * Whether the Build hub was deleted through the API. Checked before `gh` is called, so a run
+ * with nothing to import does not need GitHub. Read as the owner, like the other tombstones.
+ */
+export async function buildHubDeleted(db: Kysely<Database>): Promise<boolean> {
+  return (await tombstoned(db, 'deleted_hub', BUILD_WORKSPACE.id, [BUILD_HUB.id])).size > 0
+}
+
+/** What `seed:build-hub` says when the hub is gone (#150). */
+export const HUB_DELETED_MESSAGE =
+  'the Build hub was deleted through the API, so nothing was imported. ' +
+  'A deleted hub keeps its ID out of use, so the hub only comes back on a fresh database.'
+
 /** Upserts the hub's attributes and attaches them to the hub folder at their definition position. */
 async function upsertAttributes(
   trx: Transaction<Database>,

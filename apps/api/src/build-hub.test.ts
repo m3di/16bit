@@ -9,8 +9,10 @@ import {
   ATTR,
   BUILD_HUB,
   BUILD_WORKSPACE,
+  buildHubDeleted,
   ensureBuildHub,
   ghIssueSchema,
+  HUB_DELETED_MESSAGE,
   importIssues,
   IMPORT_ACTOR,
   parseIssues,
@@ -366,6 +368,7 @@ describe('hubs and attributes deleted through the API (#143)', () => {
   })
 
   it('does not bring back a deleted hub', async () => {
+    expect(await buildHubDeleted(db)).toBe(false)
     await withApi(async (call) => {
       expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
     })
@@ -376,6 +379,7 @@ describe('hubs and attributes deleted through the API (#143)', () => {
       .where('workspace_id', '=', WS)
       .execute()
 
+    expect(await buildHubDeleted(db)).toBe(true)
     expect(await ensureBuildHub(db)).toEqual({ hubDeleted: true })
     expect(
       await db.selectFrom('access_log').selectAll().where('workspace_id', '=', WS).execute(),
@@ -666,5 +670,19 @@ describe('seed:build-hub', () => {
     const forced = await run(['--force'])
     expect(forced.code).toBe(1)
     expect(forced.stderr).toContain('MIGRATION_DATABASE_URL is not set')
+  }, 30_000)
+
+  it('with the hub deleted, says so and never calls gh (#150)', async () => {
+    await withApi(async (call) => {
+      expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
+    })
+    const script = fileURLToPath(new URL('./seed-build-hub.ts', import.meta.url))
+    // An empty PATH: a call to gh would fail and the script would exit 1.
+    const { stdout, stderr } = await promisify(execFile)(process.execPath, [script], {
+      env: { PATH: '', MIGRATION_DATABASE_URL: dbUrl },
+    })
+    expect(stderr).toBe('')
+    expect(stdout).toContain(`seed:build-hub: ${HUB_DELETED_MESSAGE}`)
+    expect(stdout).toContain('only comes back on a fresh database')
   }, 30_000)
 })

@@ -494,3 +494,17 @@ describe('the hub itself (general settings)', () => {
     expect(data().hub.version).toBe(9)
   })
 })
+
+describe('option usage (#147)', () => {
+  it('reads the counts of an attribute from its usage route', async () => {
+    const { model, attribute } = await setup({
+      [`GET ${base}/attributes/stage/usage`]: () =>
+        json({ attributeId: 'stage', version: 0, options: [{ optionId: 'todo', items: 4 }] }),
+    })
+    expect(await model.attributeUsage(attribute('stage'))).toEqual({
+      attributeId: 'stage',
+      version: 0,
+      options: [{ optionId: 'todo', items: 4 }],
+    })
+  })
+})

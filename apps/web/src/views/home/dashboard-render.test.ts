@@ -246,6 +246,20 @@ describe('WorkspaceSection self-grant', () => {
     expect(refused).toContain('Access was not given. Boom')
     expect(refused).toContain('role="alert"')
   })
+
+  it('says when access was given but the hubs did not load again, and offers to load them', async () => {
+    const html = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hidden] }),
+      canSelfGrant: true,
+      selfGrants: new Map([['w/fin', { state: 'stale' }]]),
+    })
+    expect(html).toContain('data-self-grant-stale')
+    expect(html).toContain('You now have access to Finance')
+    expect(html).toContain('Load hubs again')
+    expect(html).toContain('role="alert"')
+    // Granting again would change nothing: the offer waits for the list.
+    expect(html).not.toContain('Give myself access')
+  })
 })
 
 describe('WorkspaceSection new hub', () => {
