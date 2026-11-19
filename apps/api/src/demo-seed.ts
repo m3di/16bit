@@ -31,8 +31,11 @@ import { createItem } from './items.ts'
 // seeded attribute marked `indexed` here but not in the database (from before #73) is switched
 // on and its item_index rows are filled from the stored values. A seeded attribute missing from
 // the database (such as `launch-design`, added in #91) is inserted and added to every folder of
-// its hub, after the columns already there; existing items keep their values. Grants
-// are only added where the principal has none; the agent key only on the first run.
+// its hub, after the columns already there; existing items keep their values. A seeded
+// hub or attribute deleted through the API is not brought back: its ID is in `deleted_hub` or
+// `deleted_attribute` (#133). New items leave a deleted attribute out, and the grants and agent
+// key on a deleted hub are skipped. Grants are only added where the principal has none; the
+// agent key only on the first run.
 
 /** `indexed`: filled into item_index, so the attribute can be filtered and sorted (D6, D20). */
 type AttributeSeed = Pick<Attribute, 'id' | 'name' | 'type' | 'config'> & {
@@ -573,6 +576,8 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
   const accounts = await ensureDevAccounts(db, [...people.values()])
 
   for (const ws of workspaces) {
+    let gone = new Set<string>()
+    let hubs: HubSeed[] = []
     await db.transaction().execute(async (trx) => {
       await trx
         .insertInto('workspace')
@@ -604,7 +609,26 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
         if (accountId !== undefined) await linkDevAccount(trx, ws.id, p.id, accountId)
       }
 
-      for (const hub of ws.hubs) {
+      // Hubs and attributes deleted through the API stay deleted (#133). A relation into a
+      // deleted hub is left out too: attribute_target_lock would refuse it.
+      const goneHubs = await tombstoned(
+        trx,
+        'deleted_hub',
+        ws.id,
+        ws.hubs.map((hub) => hub.id),
+      )
+      hubs = ws.hubs.filter((hub) => !goneHubs.has(hub.id))
+      const attributes = hubs.flatMap((hub) => definitionsOf(hub).map((d) => d.attribute))
+      gone = await tombstoned(
+        trx,
+        'deleted_attribute',
+        ws.id,
+        attributes.map((a) => a.id),
+      )
+      for (const a of attributes) {
+        if (a.type === 'relation' && goneHubs.has(a.config.targetHubId)) gone.add(a.id)
+      }
+      for (const hub of hubs) {
         const folders = flatten(hub, null)
         // Parents come before children, so the parent foreign key is satisfied row by row.
         await trx
@@ -622,52 +646,58 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
           )
           .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
           .execute()
-        await trx
-          .insertInto('attribute')
-          .values(
-            definitionsOf(hub).map(({ attribute }) => ({
-              workspace_id: ws.id,
-              id: attribute.id,
-              hub_id: hub.id,
-              name: attribute.name,
-              type: attribute.type,
-              config: JSON.stringify(attribute.config),
-              indexed: attribute.indexed,
-            })),
-          )
-          .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
-          .execute()
-        await indexSeededAttributes(trx, ws.id, hub.id, definitionsOf(hub))
-        // Every folder in a hub, the hub included, shows all of the hub's attributes.
-        await trx
-          .insertInto('folder_attribute')
-          .values(
-            folders.flatMap(({ seed }) =>
-              definitionsOf(hub).map(({ attribute, required }, position) => ({
+        const kept = definitionsOf(hub).filter(({ attribute }) => !gone.has(attribute.id))
+        if (kept.length > 0) {
+          await trx
+            .insertInto('attribute')
+            .values(
+              kept.map(({ attribute }) => ({
                 workspace_id: ws.id,
+                id: attribute.id,
                 hub_id: hub.id,
-                folder_id: seed.id,
-                attribute_id: attribute.id,
-                position,
-                required,
+                name: attribute.name,
+                type: attribute.type,
+                config: JSON.stringify(attribute.config),
+                indexed: attribute.indexed,
               })),
-            ),
-          )
-          .onConflict((oc) => oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing())
-          .execute()
+            )
+            .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
+            .execute()
+          await indexSeededAttributes(trx, ws.id, hub.id, kept)
+          // Every folder in a hub, the hub included, shows all of the hub's attributes.
+          await trx
+            .insertInto('folder_attribute')
+            .values(
+              folders.flatMap(({ seed }) =>
+                kept.map(({ attribute, required }, position) => ({
+                  workspace_id: ws.id,
+                  hub_id: hub.id,
+                  folder_id: seed.id,
+                  attribute_id: attribute.id,
+                  position,
+                  required,
+                })),
+              ),
+            )
+            .onConflict((oc) =>
+              oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing(),
+            )
+            .execute()
+        }
         await ensureHubAdmin(trx, ws.id, hub.id, devOwner.id)
       }
       for (const [principalId, hubId, hubRole] of ws.grants) {
+        if (goneHubs.has(hubId)) continue
         await seedHubGrant(trx, ws.id, { hubId, principalId, hubRole }, devOwner.id)
       }
-      if (ws.agentKey) {
+      if (ws.agentKey && !goneHubs.has(ws.agentKey.hubId)) {
         const secret = await seedAgentKey(trx, ws.id, ws.agentKey, devOwner.id)
         if (secret !== null) agentKey = { workspaceId: ws.id, ...ws.agentKey, secret }
       }
     })
 
-    for (const hub of ws.hubs) {
-      itemsCreated += await seedItems(db, ws, hub, definitionsOf(hub))
+    for (const hub of hubs) {
+      itemsCreated += await seedItems(db, ws, hub, definitionsOf(hub), gone)
     }
   }
   return {
@@ -818,11 +848,32 @@ async function seedAgentKey(
   return secret
 }
 
+/**
+ * Which of `ids` were deleted hubs or attributes (#133). Bounded by the seed definition. Read
+ * as the owner: the API role can't read the tombstones.
+ */
+async function tombstoned(
+  trx: Transaction<Database>,
+  table: 'deleted_hub' | 'deleted_attribute',
+  workspaceId: string,
+  ids: string[],
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  const rows = await trx
+    .selectFrom(table)
+    .select('id')
+    .where('workspace_id', '=', workspaceId)
+    .where('id', 'in', ids)
+    .execute()
+  return new Set(rows.map((r) => r.id))
+}
+
 async function seedItems(
   db: Kysely<Database>,
   ws: WorkspaceSeed,
   hub: HubSeed,
   definitions: FolderAttributeDefinition[],
+  gone: ReadonlySet<string>,
 ): Promise<number> {
   if (hub.items === 0) return 0
   const folders = flatten(hub, null).map(({ seed }) => seed.id)
@@ -874,7 +925,9 @@ async function seedItems(
         const targets = value.filter((target: string) => live.has(target))
         value = targets.length > 0 ? targets : undefined
       }
-      if ((required || rand() < 0.85) && value !== undefined) values[attribute.id] = value
+      if ((required || rand() < 0.85) && value !== undefined && !gone.has(attribute.id)) {
+        values[attribute.id] = value
+      }
     }
     if (used.has(id)) continue
     // createItem validates the values with the core contract against the stored attributes.
