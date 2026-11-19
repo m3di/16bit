@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test'
 import { demo, expect, test, uniqueTitle } from './support/fixtures.ts'
 
 const title = demo.hub.titleAttributeId
+const points = 'design-points'
 const hubPath = `/w/${demo.workspaceId}/hubs/${demo.hub.id}`
 
 function table(page: Page) {
@@ -82,6 +83,42 @@ test('an edit made against a stale version rolls back and says so', async ({ api
   await expect(field).toHaveValue(theirs)
   await expect(panel(page).locator('[data-item-version]')).toHaveText('2')
   expect((await api.getItem(item.id)).values[title]).toBe(theirs)
+})
+
+test('a Number value is saved from the New item form, the item panel and the item page (#155)', async ({
+  api,
+  page,
+}) => {
+  const name = uniqueTitle('points')
+
+  // New item form: the typed number is stored as a number.
+  await page.goto(hubPath)
+  await page.getByRole('button', { name: 'New item' }).click()
+  const form = page.getByRole('complementary', { name: 'New item', exact: true })
+  await form.getByLabel('Title (required)').fill(name)
+  await form.getByLabel('Points').fill('3')
+  await form.getByRole('button', { name: 'Create item' }).click()
+  await expect(page).toHaveURL(new RegExp(`/w/${demo.workspaceId}/items/[^/?]+$`))
+  const id = decodeURIComponent(new URL(page.url()).pathname.split('/').pop() ?? '')
+  expect(await api.getItem(id)).toMatchObject({ version: 1, values: { [points]: 3 } })
+
+  // Item page: Enter saves a new version.
+  const onPage = page.getByLabel('Points')
+  await expect(onPage).toHaveValue('3')
+  await onPage.fill('8')
+  await onPage.press('Enter')
+  await expect.poll(async () => (await api.getItem(id)).values[points]).toBe(8)
+  expect((await api.getItem(id)).version).toBe(2)
+
+  // Item panel: leaving the field saves it, and the table cell shows it.
+  await page.goto(`${hubPath}?item=${id}`)
+  const inPanel = panel(page).getByLabel('Points')
+  await expect(inPanel).toHaveValue('8')
+  await inPanel.fill('5')
+  await inPanel.press('Tab')
+  await expect(panel(page).locator('[data-item-version]')).toHaveText('3')
+  expect(await api.getItem(id)).toMatchObject({ version: 3, values: { [points]: 5 } })
+  await expect(table(page).getByRole('row').filter({ hasText: name })).toContainText('5')
 })
 
 test('a new row cannot be opened until the server confirms it', async ({ page }) => {
