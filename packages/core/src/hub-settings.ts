@@ -295,18 +295,31 @@ export type FolderAttributesResult = z.infer<typeof folderAttributesResultSchema
 // Grants and invites
 
 /**
- * One entry of `GET /hubs/:hubId/grants` (`grant.list`: the hub's hub admins, and owners and
- * admins with or without a grant). Names and hub roles only, nothing inside the hub
- * (docs/ROLES.md). `hubRole` is the grant as stored; the effective role also depends on
- * `workspaceRole` (`effectiveHubRole`). Agents are listed too, under their key's name.
+ * Whether an agent's key still works. The grant stays when its key is revoked or expires (D47),
+ * so the grant list marks it instead of leaving it out. `revoked` wins over `expired`.
  */
-export const hubGrantEntrySchema = z.strictObject({
+export const AGENT_KEY_STATES = ['active', 'revoked', 'expired'] as const
+export const agentKeyStateSchema = z.enum(AGENT_KEY_STATES)
+export type AgentKeyState = z.infer<typeof agentKeyStateSchema>
+
+const grantEntryFields = {
   principalId: idSchema,
-  kind: principalSchema.shape.kind,
   name: principalSchema.shape.name,
   workspaceRole: principalSchema.shape.workspaceRole,
   hubRole: hubRoleSchema,
-})
+}
+
+/**
+ * One entry of `GET /hubs/:hubId/grants` (`grant.list`: the hub's hub admins, and owners and
+ * admins with or without a grant). Names and hub roles only, nothing inside the hub
+ * (docs/ROLES.md). `hubRole` is the grant as stored; the effective role also depends on
+ * `workspaceRole` (`effectiveHubRole`). Agents are listed too, under their key's name, with
+ * `keyState` saying whether the key still works (#151); people have no `keyState`.
+ */
+export const hubGrantEntrySchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('user'), ...grantEntryFields }),
+  z.strictObject({ kind: z.literal('agent'), ...grantEntryFields, keyState: agentKeyStateSchema }),
+])
 export type HubGrantEntry = z.infer<typeof hubGrantEntrySchema>
 
 /** `GET /hubs/:hubId/grants`, by name then principal ID. Takes `pageQuerySchema`. */

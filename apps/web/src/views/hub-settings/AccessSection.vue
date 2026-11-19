@@ -19,7 +19,6 @@ import { createCommitter } from '../workspace/members.ts'
 import {
   ACCESS_HIDDEN,
   canListGrants,
-  canListKeys,
   canRevokeGrant,
   cappedNote,
   grantRoleChoices,
@@ -49,12 +48,7 @@ const lists = computed(() => canListGrants(viewer, hubRole))
 
 onMounted(() => {
   if (lists.value) void access.loadGrants()
-  // Only to say which agents' keys no longer work.
-  if (canListKeys(viewer, hubRole) && access.keys.value.state !== 'ready') void access.loadKeys()
 })
-const keyList = computed(() =>
-  access.keys.value.state === 'ready' ? access.keys.value.data : null,
-)
 
 const grants = computed(() => access.grants.value)
 const rows = computed(() => (grants.value.state === 'ready' ? grants.value.data : []))
@@ -266,7 +260,7 @@ function onAdded(person: Principal, role: HubRole) {
           }}</span>
         </template>
         <span v-else-if="column.key === 'source'" class="text-secondary text-ink2">{{
-          sourceLabel(g, keyList)
+          sourceLabel(g)
         }}</span>
         <RowActionsMenu
           v-else-if="column.key === 'actions'"

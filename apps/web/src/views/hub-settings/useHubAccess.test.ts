@@ -167,6 +167,25 @@ describe('agent keys', () => {
     )
   })
 
+  it('marks the agent grant of a revoked key in the access list', async () => {
+    const agent: HubGrantEntry = {
+      principalId: 'k1',
+      kind: 'agent',
+      name: 'k1',
+      workspaceRole: 'member',
+      hubRole: 'editor',
+      keyState: 'active',
+    }
+    const { access, rows } = await setup({
+      [`GET ${hubPath}/grants`]: () => json({ items: [...grants(), agent], nextCursor: null }),
+      [`POST ${base}/agent-keys/k1/revoke`]: () => json(key('k1', '2026-11-19T00:00:00.000Z')),
+    })
+    await access.loadGrants()
+    await access.revokeKey('k1')
+    expect(rows().find((g) => g.principalId === 'k1')).toMatchObject({ keyState: 'revoked' })
+    expect(rows().filter((g) => g.kind === 'user')).toHaveLength(3)
+  })
+
   it('a refused revoke throws and leaves the key as it was', async () => {
     const { access } = await setup({
       [`POST ${base}/agent-keys/k1/revoke`]: () => json({ error: 'forbidden', message: 'No' }, 403),
