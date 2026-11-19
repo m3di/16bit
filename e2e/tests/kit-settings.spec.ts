@@ -33,6 +33,13 @@ async function focusSettled(locator: import('@playwright/test').Locator) {
   await locator.evaluate(twoFrames)
 }
 
+/** The same for a click: Playwright scrolls the target into view first, with the same late event. */
+async function clickSettled(locator: import('@playwright/test').Locator) {
+  await locator.scrollIntoViewIfNeeded()
+  await locator.evaluate(twoFrames)
+  await locator.click()
+}
+
 test('tabs are one tab stop; arrow keys, Home, and End move and select', async ({ page }) => {
   const kit = light(page)
   const list = kit.getByRole('tablist', { name: 'Attribute settings, light' })
@@ -162,7 +169,7 @@ test('a scroll from before the menu opened does not close it (#157)', async ({ p
 
 test('a disabled menu item says why and does nothing', async ({ page }) => {
   const kit = light(page)
-  await kit.getByRole('button', { name: 'Actions for Tomas, light' }).click()
+  await clickSettled(kit.getByRole('button', { name: 'Actions for Tomas, light' }))
   const item = kit.getByRole('menuitem', { name: /Make owner/ })
   await expect(item).toHaveAttribute('aria-disabled', 'true')
   await expect(item).toHaveAccessibleDescription('Only the owner can do this')
@@ -222,14 +229,14 @@ test('the options editor adds, confirms a used removal, and moves focus on', asy
   await page.keyboard.type('Blocked')
 
   // Done is unused: it goes at once, and focus moves to the option that took its place.
-  await list.getByRole('button', { name: 'Actions for option 4, Done' }).click()
+  await clickSettled(list.getByRole('button', { name: 'Actions for option 4, Done' }))
   await kit.getByRole('menuitem', { name: 'Remove option' }).click()
   await expect(list.getByRole('listitem')).toHaveCount(5)
   await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toHaveValue("Won't do")
   await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toBeFocused()
 
   // Backlog is used by 372 items: removing it asks first (D51).
-  await list.getByRole('button', { name: 'Actions for option 1, Backlog' }).click()
+  await clickSettled(list.getByRole('button', { name: 'Actions for option 1, Backlog' }))
   await kit.getByRole('menuitem', { name: 'Remove option' }).click()
   const confirm = page.getByRole('dialog', { name: 'Remove Backlog?' })
   await expect(confirm).toHaveAccessibleDescription(/372 items use this option/)
@@ -259,6 +266,9 @@ test('a static table never selects a row; its controls work by keyboard', async 
   await expect(table.locator('[aria-selected]')).toHaveCount(0)
   // The role select and the row menu are real controls, reached with Tab.
   const role = table.getByRole('combobox', { name: 'Role for Kofi' })
+  // Focusing the select scrolls the table into view. Tab then reaches the menu button in the
+  // same row (no new scroll), and Enter below opens the menu, so a late scroll from this focus
+  // could still close it (#157). Settle it here.
   await focusSettled(role)
   await page.keyboard.press('Tab')
   const menu = table.getByRole('button', { name: 'Actions for Kofi, light' })
