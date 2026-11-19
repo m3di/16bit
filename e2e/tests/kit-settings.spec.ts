@@ -11,35 +11,6 @@ test.beforeEach(async ({ page }) => {
 const light = (page: import('@playwright/test').Page) =>
   page.getByRole('region', { name: 'Light theme' })
 
-/** Resolves after two animation frames, so scroll events from the frame before have run. */
-function twoFrames(): Promise<void> {
-  // Runs in the page (`evaluate`), so it uses nothing from this file.
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        resolve()
-      })
-    })
-  })
-}
-
-/**
- * Focuses a control far down the kit and waits until the scroll that brought it into view has
- * been delivered. The browser dispatches that scroll event a frame later, and an open row menu
- * closes on scroll (#157): without this, a slow frame let it close the menu Enter just opened.
- */
-async function focusSettled(locator: import('@playwright/test').Locator) {
-  await locator.focus()
-  await locator.evaluate(twoFrames)
-}
-
-/** The same for a click: Playwright scrolls the target into view first, with the same late event. */
-async function clickSettled(locator: import('@playwright/test').Locator) {
-  await locator.scrollIntoViewIfNeeded()
-  await locator.evaluate(twoFrames)
-  await locator.click()
-}
-
 test('tabs are one tab stop; arrow keys, Home, and End move and select', async ({ page }) => {
   const kit = light(page)
   const list = kit.getByRole('tablist', { name: 'Attribute settings, light' })
@@ -126,7 +97,7 @@ test('the row menu opens from the keyboard, wraps, and closes back to its button
   const kit = light(page)
   const button = kit.getByRole('button', { name: 'Actions for Tomas, light' })
   await expect(button).toHaveAttribute('aria-haspopup', 'menu')
-  await focusSettled(button)
+  await button.focus()
   await page.keyboard.press('Enter')
   await expect(button).toHaveAttribute('aria-expanded', 'true')
   const menu = kit.getByRole('menu', { name: 'Actions for Tomas, light' })
@@ -147,8 +118,6 @@ test('the row menu opens from the keyboard, wraps, and closes back to its button
 })
 
 test('a scroll from before the menu opened does not close it (#157)', async ({ page }) => {
-  // Known bug #157. Remove this line when it is fixed.
-  test.fail()
   const button = light(page).getByRole('button', { name: 'Actions for Tomas, light' })
   await expect(button).toBeVisible()
   // Focus scrolls the button into view; Enter opens the menu before that scroll is delivered.
@@ -167,9 +136,22 @@ test('a scroll from before the menu opened does not close it (#157)', async ({ p
   expect(expanded).toBe('true')
 })
 
+test('a wheel scroll under an open menu still closes it (#157)', async ({ page }) => {
+  const kit = light(page)
+  const button = kit.getByRole('button', { name: 'Actions for Tomas, light' })
+  await button.click()
+  await expect(button).toHaveAttribute('aria-expanded', 'true')
+  const menu = kit.getByRole('menu', { name: 'Actions for Tomas, light' })
+  await expect(menu).toBeVisible()
+  // The page moves the button, so the menu closes rather than drift away from it.
+  await page.mouse.wheel(0, 200)
+  await expect(button).toHaveAttribute('aria-expanded', 'false')
+  await expect(menu).toBeHidden()
+})
+
 test('a disabled menu item says why and does nothing', async ({ page }) => {
   const kit = light(page)
-  await clickSettled(kit.getByRole('button', { name: 'Actions for Tomas, light' }))
+  await kit.getByRole('button', { name: 'Actions for Tomas, light' }).click()
   const item = kit.getByRole('menuitem', { name: /Make owner/ })
   await expect(item).toHaveAttribute('aria-disabled', 'true')
   await expect(item).toHaveAccessibleDescription('Only the owner can do this')
@@ -229,14 +211,14 @@ test('the options editor adds, confirms a used removal, and moves focus on', asy
   await page.keyboard.type('Blocked')
 
   // Done is unused: it goes at once, and focus moves to the option that took its place.
-  await clickSettled(list.getByRole('button', { name: 'Actions for option 4, Done' }))
+  await list.getByRole('button', { name: 'Actions for option 4, Done' }).click()
   await kit.getByRole('menuitem', { name: 'Remove option' }).click()
   await expect(list.getByRole('listitem')).toHaveCount(5)
   await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toHaveValue("Won't do")
   await expect(list.getByRole('textbox', { name: 'Name of option 4' })).toBeFocused()
 
   // Backlog is used by 372 items: removing it asks first (D51).
-  await clickSettled(list.getByRole('button', { name: 'Actions for option 1, Backlog' }))
+  await list.getByRole('button', { name: 'Actions for option 1, Backlog' }).click()
   await kit.getByRole('menuitem', { name: 'Remove option' }).click()
   const confirm = page.getByRole('dialog', { name: 'Remove Backlog?' })
   await expect(confirm).toHaveAccessibleDescription(/372 items use this option/)
@@ -266,10 +248,9 @@ test('a static table never selects a row; its controls work by keyboard', async 
   await expect(table.locator('[aria-selected]')).toHaveCount(0)
   // The role select and the row menu are real controls, reached with Tab.
   const role = table.getByRole('combobox', { name: 'Role for Kofi' })
-  // Focusing the select scrolls the table into view. Tab then reaches the menu button in the
-  // same row (no new scroll), and Enter below opens the menu, so a late scroll from this focus
-  // could still close it (#157). Settle it here.
-  await focusSettled(role)
+  // Focusing the select scrolls the table into view, and that scroll event arrives a frame late.
+  // The menu Enter opens below must not close on it (#157).
+  await role.focus()
   await page.keyboard.press('Tab')
   const menu = table.getByRole('button', { name: 'Actions for Kofi, light' })
   await expect(menu).toBeFocused()
