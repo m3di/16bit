@@ -940,6 +940,67 @@ describe('GET /attributes/:attributeId/usage (#141)', () => {
     })
   })
 
+  it('matches confirm_required for one option, and does not add up across options', async () => {
+    await createItem(db, 'w1', 'own', {
+      id: 'i4',
+      folderId: 'build',
+      values: { title: 'Four', tags: ['b', 'c'] },
+    })
+    const tags = Object.fromEntries(counts(await usage('ha', 'tags'))) as Record<string, number>
+    const stage = Object.fromEntries(counts(await usage('ha', 'stage'))) as Record<string, number>
+    expect(tags).toEqual({ a: 1, b: 2, c: 1 })
+    /** `affected` of an option removal sent without `confirm`, which writes nothing. */
+    const affected = async (attributeId: string, keep: string[]) => {
+      const res = await person('ha', 'PATCH', `/attributes/${attributeId}`, {
+        version: 0,
+        options: keep.map((id) => ({ id, label: id })),
+      })
+      expect(res.statusCode, res.body).toBe(409)
+      return confirmRequiredErrorSchema.parse(res.json()).affected
+    }
+    // One option: exactly its count, for a select and a multi-select.
+    expect(await affected('stage', ['todo', 'doing'])).toBe(stage['done'])
+    expect(await affected('tags', ['a', 'c'])).toBe(tags['b'])
+    // Two options: i1 holds a and b, so it counts once in `affected` and once under each here.
+    const both = await affected('tags', ['c'])
+    expect(both).toBe(2)
+    expect(both).toBeLessThan((tags['a'] ?? 0) + (tags['b'] ?? 0))
+  })
+
+  it('is 404 for another workspace’s attribute with the same ID', async () => {
+    await db.insertInto('workspace').values({ id: 'w2', name: 'Beta' }).execute()
+    await db
+      .insertInto('folder')
+      .values({
+        workspace_id: 'w2',
+        id: 'build',
+        hub_id: 'build',
+        parent_id: null,
+        name: 'build',
+        color: 'blue',
+        id_prefix: 'H',
+      })
+      .execute()
+    await db
+      .insertInto('attribute')
+      .values({
+        workspace_id: 'w2',
+        id: 'stage',
+        hub_id: 'build',
+        name: 'stage',
+        type: 'select',
+        config: { options: [{ id: 'todo', label: 'todo' }] },
+        indexed: false,
+      })
+      .execute()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/workspaces/w2/attributes/stage/usage',
+      headers: await as('own'),
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
   it('is 400 for an attribute without options', async () => {
     const res = await person('ha', 'GET', '/attributes/title/usage')
     expect(res.statusCode).toBe(400)

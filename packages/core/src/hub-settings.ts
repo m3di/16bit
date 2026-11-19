@@ -180,8 +180,12 @@ export type DeleteAttributeQuery = z.infer<typeof deleteAttributeQuerySchema>
  * `GET /attributes/:attributeId/usage` (`hub.manageSchema`), select and multi-select only (400
  * otherwise): for each of the attribute's options, in option order, the number of the hub's
  * items that hold it, zero included. `version` is the attribute's, so a client can tell whether
- * the counts belong to the options it shows. For the options editor (D51); a removal still
- * answers 409 `confirm_required` with its own count.
+ * the counts belong to the options it shows. For the options editor (D51).
+ *
+ * Counts are per option and do not add up across a multi-select's options: an item holding
+ * several counts once under each. Removing one option affects exactly its `items`; removing
+ * several affects each item once, so `confirm_required.affected` can be less than their sum.
+ * Always send `affected` from the 409 as `confirm`, never a sum of these counts.
  */
 export const attributeUsageSchema = z.strictObject({
   attributeId: idSchema,

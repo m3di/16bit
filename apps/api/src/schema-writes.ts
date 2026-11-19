@@ -651,8 +651,10 @@ export async function createAttribute(
  * `GET /attributes/:attributeId/usage` (`hub.manageSchema`): per option, how many of the hub's
  * items hold it (#141). Read from `item_index` when the attribute is indexed (select and
  * multi-select rows hold the option ID in `txt`), else from `item.values`, where `@>` matches
- * both a select's string and a multi-select's list. One statement, so the counts come from one
- * snapshot. The answer has one entry per option (at most 500); the count reads every item in the
+ * both a select's string and a multi-select's list. The counts are one statement, so they agree
+ * with each other; the options and `version` are read just before (READ COMMITTED), so a removal
+ * committing in between can show the old `version` with 0 for the removed option, which a client
+ * comparing `version` refetches anyway. The answer has one entry per option (at most 500); the count reads every item in the
  * hub that holds a value, like the strip it precedes. Takes no locks: it only reads.
  */
 export async function attributeUsage(
@@ -661,9 +663,6 @@ export async function attributeUsage(
   me: Subject,
   attributeId: string,
 ): Promise<AttributeUsage> {
-  const hubId = await hubOfAttribute(trx, workspaceId, attributeId)
-  const hubGrant = await ownGrant(trx, workspaceId, hubId, me.id)
-  enforce(can(me, 'hub.manageSchema', { hubGrant }), 'Attribute')
   const row = await trx
     .selectFrom('attribute')
     .selectAll()
@@ -671,6 +670,9 @@ export async function attributeUsage(
     .where('id', '=', attributeId)
     .executeTakeFirst()
   if (!row) throw notFound('Attribute')
+  const hubId = row.hub_id
+  const hubGrant = await ownGrant(trx, workspaceId, hubId, me.id)
+  enforce(can(me, 'hub.manageSchema', { hubGrant }), 'Attribute')
   const attribute = toAttribute(row)
   if (attribute.type !== 'select' && attribute.type !== 'multi_select') {
     throw invalid('Only select and multi-select attributes have options')
