@@ -10,6 +10,7 @@ import { withScope } from './db/scope.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { createItem, patchItem } from './items.ts'
 import { HttpError } from './http.ts'
+import { revokeInvite } from './invites.ts'
 import { changeMemberRole, createHub, removeMember } from './members.ts'
 
 // Lock order of concurrent access changes (#92, #96, the comment at the top of members.ts),
@@ -217,6 +218,7 @@ async function untilBlocked(r: Run): Promise<void> {
 }
 
 type Result = Awaited<Run['done']>
+type Trx = Transaction<Database>
 
 /** Runs B up to the gate, then A until it waits, then opens the gate. Returns [B, A]. */
 async function interleaveResults(
@@ -448,6 +450,61 @@ describe('concurrent access changes (#92)', () => {
     expect(await accessLog()).toEqual([{ actor: 'own', action: 'member.role', target: 'own2' }])
   })
 
+  // #127: the same, demoting to member, and removing. A's owner lock passes RLS on its snapshot
+  // from before B commits, then waits. Its next statement has a fresh snapshot in which own2 is
+  // no longer an owner or admin, so the principal_update policy, which FOR NO KEY UPDATE must
+  // pass, hid the target and A got 404. A now reads its own role after the owner lock: 403.
+  // own2's hub_admin grant would also pass that policy (rls_hubs(4)), so it goes first.
+  for (const [label, change] of [
+    [
+      'demote to member',
+      (trx: Trx, actor: Subject, target: string) =>
+        changeMemberRole(trx, 'w1', actor, target, 'member'),
+    ],
+    [
+      'remove',
+      (trx: Trx, actor: Subject, target: string) => removeMember(trx, 'w1', actor, target),
+    ],
+  ] as const) {
+    it(`two owners ${label} each other: the second gets 403, not 404`, async () => {
+      await db.deleteFrom('hub_grant').where('principal_id', '=', 'own2').execute()
+      const [b, a] = await interleaveResults(
+        'access_log',
+        () => run('own', (trx) => change(trx, own, 'own2')),
+        () => run('own2', (trx) => change(trx, own2, 'own')),
+      )
+      expect(b).toEqual({ ok: true })
+      expectForbidden(a)
+      const owners = await db
+        .selectFrom('principal')
+        .select('id')
+        .where('workspace_id', '=', 'w1')
+        .where('workspace_role', '=', 'owner')
+        .where('removed_at', 'is', null)
+        .execute()
+      expect(owners).toEqual([{ id: 'own' }])
+    })
+  }
+
+  // #127, an admin demoted while changing someone else's role. The demotion holds the owner
+  // rows, so the admin's change waits there, then reads its new role and refuses.
+  it('an admin whose demotion commits first gets 403 for a role change in flight', async () => {
+    const [demotion, change] = await interleaveResults(
+      'access_log',
+      () => run('own', (trx) => changeMemberRole(trx, 'w1', own, 'adm', 'member')),
+      () => run('adm', (trx) => changeMemberRole(trx, 'w1', adm, 'ed', 'viewer')),
+    )
+    expect(demotion).toEqual({ ok: true })
+    expectForbidden(change)
+    const ed = await db
+      .selectFrom('principal')
+      .select('workspace_role')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'ed')
+      .executeTakeFirstOrThrow()
+    expect(ed.workspace_role).toBe('member')
+  })
+
   // #96, the creation first. createHub locks its creator FOR SHARE, so removal waits at its lock
   // on the target and its grant DELETE then sees the new grant. Without that lock, removal's NO
   // KEY UPDATE on adm doesn't wait, the DELETE misses the uncommitted grant, removal then waits
@@ -580,4 +637,142 @@ describe('concurrent access changes (#92)', () => {
     release()
     expectForbidden(await b.done)
   })
+})
+
+// Revoking an invite (#113, invites.ts): it locks its actor FOR SHARE, then the invite FOR UPDATE,
+// then appends to access_log, and ends the invite by setting expires_at to created_at.
+describe('concurrent invite revocations (#113)', () => {
+  /** A pending member invite from `own`, with a known token hash. */
+  async function pendingInvite() {
+    await db
+      .insertInto('invite')
+      .values({
+        workspace_id: 'w1',
+        id: 'inv-113',
+        token_hash: 'hash-113',
+        workspace_role: 'member',
+        created_by: 'own',
+        expires_at: sql<Date>`now() + interval '7 days'`,
+        used_at: null,
+      })
+      .execute()
+  }
+
+  /** An account in no workspace, to redeem with. No password matches its hash. */
+  async function account() {
+    await db
+      .insertInto('account')
+      .values({
+        id: 'acct-113',
+        email: 'acct-113@test.invalid',
+        password_hash: `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'A'.repeat(43)}`,
+        name: 'New',
+      })
+      .execute()
+  }
+
+  async function inviteState() {
+    return db
+      .selectFrom('invite')
+      .select([
+        'used_at',
+        'expires_at',
+        sql<boolean>`used_at IS NULL AND expires_at > now()`.as('pending'),
+      ])
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'inv-113')
+      .executeTakeFirstOrThrow()
+  }
+
+  const revocations = () =>
+    db
+      .selectFrom('access_log')
+      .select(['actor', 'target'])
+      .where('workspace_id', '=', 'w1')
+      .where('action', '=', 'invite.revoke')
+      .execute()
+
+  /** What POST /v1/auth/invites/:token does for a signed-in account. */
+  const redeem = (trx: Transaction<Database>) =>
+    sql`SELECT * FROM redeem_invite('hash-113', 'acct-113')`.execute(trx)
+
+  // The redeem's transaction starts before the revoke's, then waits on the invite row the revoke
+  // holds. redeem_invite checks `expires_at > now()` with its own, earlier, start time, so a
+  // revoke that set `expires_at = now()` would let this redeem through once it committed. With
+  // `expires_at = created_at` the redeem finds no invite: 16B01, a 404.
+  it('a redeem that started before a revoke and waited for it finds no invite', async () => {
+    await pendingInvite()
+    await account()
+    const { open } = await openGate('access_log')
+    try {
+      let go!: () => void
+      const started = new Promise<void>((resolve) => (go = resolve))
+      const a = run('gk', async (trx) => {
+        await started
+        await redeem(trx)
+      })
+      await a.pid // A's transaction, and so its now(), has started.
+      const b = run('own', (trx) => revokeInvite(trx, 'w1', own, 'inv-113'))
+      await untilBlocked(b) // At the gate, holding the invite.
+      go()
+      await untilBlocked(a) // On the invite row.
+      await open()
+      const [revoked, redeemed] = await Promise.all([b.done, a.done])
+      expect(revoked).toEqual({ ok: true })
+      expect(redeemed.ok).toBe(false)
+      if (!redeemed.ok) expect((redeemed.error as { code?: unknown }).code).toBe('16B01')
+    } finally {
+      await open()
+    }
+    expect((await inviteState()).used_at).toBeNull()
+    expect(await revocations()).toEqual([{ actor: 'own', target: 'inv-113' }])
+    const joined = await db
+      .selectFrom('principal')
+      .select('id')
+      .where('account_id', '=', 'acct-113')
+      .execute()
+    expect(joined).toEqual([])
+  })
+
+  // The revoke waits on a redeem that holds the invite (held at the gate before its member.join
+  // log row). Once the redeem commits, the revoke re-reads the row: no longer pending, so it
+  // changes nothing and logs nothing (a 204).
+  it('a revoke that waited for a redeem to commit changes and logs nothing', async () => {
+    await pendingInvite()
+    await account()
+    const before = await inviteState()
+    const [redeemed, revoked] = await interleaveResults(
+      'access_log',
+      () => run('gk', redeem),
+      () => run('own', (trx) => revokeInvite(trx, 'w1', own, 'inv-113')),
+    )
+    expect(redeemed).toEqual({ ok: true })
+    expect(revoked).toEqual({ ok: true })
+    const after = await inviteState()
+    expect(after.used_at).not.toBeNull()
+    expect(after.expires_at).toEqual(before.expires_at)
+    expect(await revocations()).toEqual([])
+  })
+
+  // The admin's demotion or removal holds adm FOR NO KEY UPDATE, so the revoke waits at its actor
+  // lock, then reads adm's new role (or finds adm removed) on the locked row and refuses: 403, no
+  // log row, and the invite stays pending. The early check had passed on the stale role.
+  const changes = [
+    ['demotion', (trx: Transaction<Database>) => changeMemberRole(trx, 'w1', own, 'adm', 'member')],
+    ['removal', (trx: Transaction<Database>) => removeMember(trx, 'w1', own, 'adm')],
+  ] as const
+  for (const [change, b] of changes) {
+    it(`an admin whose ${change} commits first gets 403 for a revoke in flight`, async () => {
+      await pendingInvite()
+      const [changed, revoked] = await interleaveResults(
+        'access_log',
+        () => run('own', b),
+        () => run('adm', (trx) => revokeInvite(trx, 'w1', adm, 'inv-113')),
+      )
+      expect(changed).toEqual({ ok: true })
+      expectForbidden(revoked)
+      expect((await inviteState()).pending).toBe(true)
+      expect(await revocations()).toEqual([])
+    })
+  }
 })

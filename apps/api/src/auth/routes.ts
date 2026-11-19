@@ -7,9 +7,12 @@ import {
   inviteTokenSchema,
   loginRequestSchema,
   MAX_ME_MEMBERSHIPS,
+  pageQuerySchema,
   type AcceptedInvite,
   type CreatedInvite,
+  type Invite,
   type Me,
+  type Page,
 } from '@16bit/core'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { sql, type Kysely } from 'kysely'
@@ -19,6 +22,7 @@ import type { Database } from '../db/database.ts'
 import { withScope } from '../db/scope.ts'
 import { DEV_PASSWORD, DEV_PASSWORD_REFUSED } from '../dev-accounts.ts'
 import { HttpError, parse } from '../http.ts'
+import { listInvites, revokeInvite } from '../invites.ts'
 import {
   accountMemberships,
   clearSessionCookie,
@@ -45,6 +49,7 @@ export interface AuthRouteOptions extends AuthOptions {
 const optional = { config: { auth: 'optional' as const } }
 const tokenParams = z.object({ token: inviteTokenSchema })
 const workspaceParams = z.object({ workspaceId: idSchema })
+const inviteParams = z.object({ workspaceId: idSchema, inviteId: idSchema })
 
 /** Postgres error code, from the custom SQLSTATEs raised by `redeem_invite`. */
 const pgCode = (error: unknown) => (error as { code?: unknown }).code
@@ -222,6 +227,20 @@ async function redeem(
 
 /** `POST /v1/workspaces/:workspaceId/invites`. Registered inside the workspace scope. */
 export function registerInviteRoutes(ws: FastifyInstance, db: Kysely<Database>): void {
+  ws.get('/invites', async (request): Promise<Page<Invite>> => {
+    const { workspaceId } = parse(workspaceParams, request.params)
+    const query = parse(pageQuerySchema, request.query)
+    const scope = { workspaceId, principalId: request.principal.id }
+    return withScope(db, scope, (trx) => listInvites(trx, workspaceId, request.principal, query))
+  })
+
+  ws.post('/invites/:inviteId/revoke', async (request, reply) => {
+    const { workspaceId, inviteId } = parse(inviteParams, request.params)
+    const scope = { workspaceId, principalId: request.principal.id }
+    await withScope(db, scope, (trx) => revokeInvite(trx, workspaceId, request.principal, inviteId))
+    return reply.status(204).send()
+  })
+
   ws.post('/invites', async (request, reply): Promise<CreatedInvite> => {
     const { workspaceId } = parse(workspaceParams, request.params)
     const input = parse(createInviteSchema, request.body)
