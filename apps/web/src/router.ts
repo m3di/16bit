@@ -34,12 +34,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('./views/InviteView.vue'),
     meta: { public: true },
   },
-  {
-    // Hub settings : folders and attributes so far; the general, access and key sections come next. Every reader
-    // with a grant may open it; only hub admins change anything (`hub.manageSchema`).
-    path: '/w/:workspaceId/hubs/:hubId/settings',
-    redirect: (to) => ({ name: 'hub-settings-folders', params: to.params }),
-  },
+  // Hub settings: folders and attributes so far; general, access and keys come next. Every
+  // reader with a grant may open it; only hub admins change anything (`hub.manageSchema`).
+  // There is no bare `/settings` path: it would shadow a folder whose ID is `settings` on the
+  // hub route below, and clients may choose folder IDs.
   {
     path: '/w/:workspaceId/hubs/:hubId/settings/folders',
     name: 'hub-settings-folders',

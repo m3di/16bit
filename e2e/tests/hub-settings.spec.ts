@@ -108,6 +108,8 @@ test('a hub admin creates, nests, renames and deletes folders; a folder with ite
   await expect(confirm).toBeHidden()
   await expect(folderRow(page, 'Iteration 1')).toHaveCount(0)
   await expect(page.getByRole('status').filter({ hasText: 'Deleted Iteration 1.' })).toBeFocused()
+  // The server agrees: the folder is gone.
+  expect((await describeHub(owner, hub.id)).folders.some((f) => f.id === sprint?.id)).toBe(false)
 })
 
 test('a folder changed elsewhere is not overwritten: the dialog shows their version', async ({
@@ -139,10 +141,13 @@ test('a folder changed elsewhere is not overwritten: the dialog shows their vers
   const theirs = page.getByRole('dialog', { name: 'Edit Queue' })
   await expect(theirs.getByRole('alert')).toContainText('your change was not saved')
   await expect(theirs.getByLabel('Name')).toHaveValue('Queue')
+  // Not overwritten: the server still has their name, not ours.
+  const stored = (await describeHub(owner, hub.id)).folders.find((f) => f.id === folder.id)
+  expect(stored?.name).toBe('Queue')
   await expect(folderRow(page, 'Queue')).toBeVisible()
 })
 
-test('attributes of every kind; options removed from items ask with the count (D51)', async ({
+test('select, currency and relation attributes; options removed from items ask with the count (D51)', async ({
   page,
   as,
 }) => {
@@ -260,14 +265,18 @@ test('deleting an attribute items use asks again with the count', async ({ page,
 
   await page.goto(settings(hub.id, 'attributes'))
   await menu(page, 'Points', 'Delete attribute')
-  const confirm = page.getByRole('dialog', { name: 'Delete Points?' })
+  const confirm = page.getByRole('dialog', { name: 'Delete Points?', exact: true })
   await expect(confirm).toContainText(`It leaves ${hub.name}.`)
   await confirm.getByRole('button', { name: 'Delete attribute' }).click()
-  // Nothing is cleared yet: the server answered with the count.
-  await expect(confirm).toContainText('2 items hold a value for Points.')
-  expect((await describeHub(owner, hub.id)).attributes).toHaveLength(1)
-  await confirm.getByRole('button', { name: 'Clear values and delete' }).click()
+  // Nothing is cleared yet: the server answered with the count. It comes in a dialog of its
+  // own, so the count is read as it opens, and Cancel, not the destructive action, has focus.
   await expect(confirm).toBeHidden()
+  const count = page.getByRole('dialog', { name: 'Clear values and delete Points?' })
+  await expect(count).toHaveAccessibleDescription(/^2 items hold a value for Points\./)
+  await expect(count.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  expect((await describeHub(owner, hub.id)).attributes).toHaveLength(1)
+  await count.getByRole('button', { name: 'Clear values and delete' }).click()
+  await expect(count).toBeHidden()
   await expect(page.getByText('No attributes yet')).toBeVisible()
   expect((await describeHub(owner, hub.id)).attributes).toHaveLength(0)
 })
@@ -285,16 +294,24 @@ test('a folder shows the count of items a new required attribute leaves empty, b
   })
   await expectStatus(made, 201)
   const note = attributeSchema.parse(await made.json())
-  const size = attributeSchema.parse(
-    await (
-      await owner.post(`/hubs/${hub.id}/attributes`, { name: 'Size', type: 'boolean', config: {} })
-    ).json(),
-  )
+  const sized = await owner.post(`/hubs/${hub.id}/attributes`, {
+    name: 'Size',
+    type: 'boolean',
+    config: {},
+  })
+  await expectStatus(sized, 201)
+  const size = attributeSchema.parse(await sized.json())
   for (let i = 0; i < 3; i++) {
     await expectStatus(await owner.post('/items', { folderId: hub.id, values: {} }), 201)
   }
 
   await page.goto(settings(hub.id, 'folders'))
+  // Count the dry runs: only a change to which attributes are required sends one (D51).
+  const dryRuns: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'PUT' && (r.postDataJSON() as { dryRun?: boolean } | null)?.dryRun === true)
+      dryRuns.push(r.url())
+  })
   await menu(page, hub.name, 'Attributes')
   const dialog = page.getByRole('dialog', { name: `Attributes in ${hub.name}` })
   await expect(dialog.getByText('This folder shows no attributes yet.')).toBeVisible()
@@ -305,8 +322,11 @@ test('a folder shows the count of items a new required attribute leaves empty, b
   // Reorder: Size first.
   await dialog.getByRole('button', { name: 'Actions for Size' }).click()
   await page.getByRole('menuitem', { name: 'Move up' }).click()
+  await page.waitForTimeout(400)
+  expect(dryRuns).toHaveLength(0)
   await dialog.getByRole('switch', { name: 'Owner note is required' }).click()
   await expect(dialog.getByText(`3 items in ${hub.name} leave it empty.`)).toBeVisible()
+  expect(dryRuns).toHaveLength(1)
   // The dry run saved nothing.
   expect((await describeHub(owner, hub.id)).folderAttributes).toHaveLength(0)
 

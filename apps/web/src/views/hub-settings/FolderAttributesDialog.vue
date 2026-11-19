@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Folder, FolderAttributesResult, HubDescription } from '@16bit/core'
-import { computed, nextTick, ref, useId, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, useTemplateRef, watch } from 'vue'
 import {
   BaseButton,
   BaseDialog,
@@ -81,37 +81,57 @@ const unattached = computed(() => {
     .map((a) => ({ value: a.id, label: `${a.name} (${typeLabel(a.type)})` }))
 })
 
-// Every change asks the server, without saving, how many items would leave each required
-// attribute empty, so the count is on screen before the reader saves (D51).
-let seq = 0
-watch(
-  [draft, open],
-  async () => {
-    if (!open.value || !folder.value) return
-    const mine = ++seq
-    if (!draft.value.some((r) => r.required)) {
-      empty.value = {}
-      countsNote.value = ''
-      return
-    }
-    const result = await model.setFolderAttributes(folder.value, draft.value, true)
-    if (mine !== seq) return
-    if (result.ok) {
-      empty.value = Object.fromEntries(
-        result.data.requiredEmpty.map((e) => [e.attributeId, e.items]),
-      )
-      countsNote.value = ''
-    } else if (result.kind === 'conflict') {
-      error.value = result.message
-      reset()
-    } else {
-      empty.value = {}
-      countsNote.value =
-        `How many items leave a required attribute empty could not be counted. ${result.kind === 'refused' ? result.message : ''}`.trim()
-    }
-  },
-  { deep: true },
+// When the set of required attributes changes, ask the server, without saving, how many items
+// would leave each one empty, so the count is on screen before the reader saves (D51). Order
+// and optional attributes do not change the counts, so they send nothing. A short wait lets a
+// few quick toggles end in one request.
+const DRY_RUN_WAIT = 250
+const requiredKey = computed(() =>
+  draft.value
+    .filter((r) => r.required)
+    .map((r) => r.attributeId)
+    .sort()
+    .join(','),
 )
+let seq = 0
+let timer: ReturnType<typeof setTimeout> | undefined
+
+function scheduleDryRun() {
+  clearTimeout(timer)
+  const mine = ++seq
+  if (!open.value || !requiredKey.value) {
+    empty.value = {}
+    countsNote.value = ''
+    return
+  }
+  timer = setTimeout(() => void dryRun(mine), DRY_RUN_WAIT)
+}
+
+async function dryRun(mine: number) {
+  const f = folder.value
+  if (!f) return
+  const result = await model.setFolderAttributes(f, draft.value, true)
+  if (mine !== seq) return
+  if (result.ok) {
+    empty.value = Object.fromEntries(result.data.requiredEmpty.map((e) => [e.attributeId, e.items]))
+    countsNote.value = ''
+  } else if (result.kind === 'conflict') {
+    // The reader's draft stays: they are still editing. The page now holds the newer version,
+    // so count again against it, and say that saving will replace the other change.
+    error.value =
+      'Someone else changed the attributes of this folder while you were editing. Saving now replaces their version with yours; cancel to see theirs.'
+    scheduleDryRun()
+  } else {
+    empty.value = {}
+    countsNote.value =
+      `How many items leave a required attribute empty could not be counted. ${result.message}`.trim()
+  }
+}
+
+watch([requiredKey, open], scheduleDryRun)
+onBeforeUnmount(() => {
+  clearTimeout(timer)
+})
 
 function actionsFor(index: number): RowAction[] {
   return [
@@ -157,7 +177,7 @@ async function save() {
     emit('saved', result.data)
     return
   }
-  error.value = result.kind === 'confirm' ? 'The server asked for a confirmation.' : result.message
+  error.value = result.message
   if (result.kind === 'conflict') reset()
 }
 

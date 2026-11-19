@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Attribute, HubDescription } from '@16bit/core'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import {
   BaseButton,
   ConfirmDialog,
@@ -34,6 +34,12 @@ const deleteBusy = ref(false)
 const deleteError = ref('')
 /** The server's count of items holding a value, once it has asked for one (D51). */
 const deleteAffected = ref<number | null>(null)
+/**
+ * The second question, with the count. It is its own dialog, opened when the count arrives, so
+ * a screen reader reads the count as the dialog opens and Cancel, not the destructive action,
+ * takes focus.
+ */
+const countOpen = ref(false)
 
 const actions: RowAction[] = [
   { key: 'edit', label: 'Edit' },
@@ -61,22 +67,28 @@ function onSaved(attribute: Attribute, created: boolean) {
   emit('status', created ? `Created ${attribute.name}.` : `Saved ${attribute.name}.`, false)
 }
 
+const titleNote = (a: Attribute) =>
+  isTitle(a) ? ' It is the title attribute, so items will show only their ID.' : ''
+
 const deleteMessage = computed(() => {
   const a = deleteTarget.value
   if (!a) return ''
-  const title = isTitle(a) ? ' It is the title attribute, so items will show only their ID.' : ''
-  if (deleteAffected.value !== null) {
-    return strippedValuesMessage('attribute', a.name, deleteAffected.value) + title
-  }
   const places = usedIn(description, a.id)
   const where = places.length ? ` It leaves ${places.join(', ')}.` : ''
-  return `This cannot be undone.${where}${title} If items hold a value for it, you will see how many before anything is cleared.`
+  return `This cannot be undone.${where}${titleNote(a)} If items hold a value for it, you will see how many before anything is cleared.`
+})
+
+const countMessage = computed(() => {
+  const a = deleteTarget.value
+  if (!a || deleteAffected.value === null) return ''
+  return strippedValuesMessage('attribute', a.name, deleteAffected.value) + titleNote(a)
 })
 
 async function confirmDelete() {
   const target = description.attributes.find((a) => a.id === deleteTarget.value?.id)
   if (!target) {
     deleteOpen.value = false
+    countOpen.value = false
     return
   }
   deleteBusy.value = true
@@ -85,12 +97,18 @@ async function confirmDelete() {
   deleteBusy.value = false
   if (result.ok) {
     deleteOpen.value = false
+    countOpen.value = false
     emit('status', `Deleted ${target.name}.`, true)
     return
   }
   if (result.kind === 'confirm') {
-    // Items hold a value: ask again with the count (or the new count, if it moved).
+    // Items hold a value: ask again with the count, in a dialog that opens fresh. If the count
+    // moved while the second question was open, it closes and opens again with the new one.
     deleteAffected.value = result.affected
+    deleteOpen.value = false
+    countOpen.value = false
+    await nextTick()
+    countOpen.value = true
     return
   }
   deleteError.value = result.message
@@ -178,7 +196,16 @@ async function confirmDelete() {
     v-model:open="deleteOpen"
     :title="`Delete ${deleteTarget?.name ?? 'this attribute'}?`"
     :message="deleteMessage"
-    :confirm-label="deleteAffected ? 'Clear values and delete' : 'Delete attribute'"
+    confirm-label="Delete attribute"
+    :busy="deleteBusy"
+    :error="deleteError"
+    @confirm="confirmDelete"
+  />
+  <ConfirmDialog
+    v-model:open="countOpen"
+    :title="`Clear values and delete ${deleteTarget?.name ?? 'this attribute'}?`"
+    :message="countMessage"
+    confirm-label="Clear values and delete"
     :busy="deleteBusy"
     :error="deleteError"
     @confirm="confirmDelete"

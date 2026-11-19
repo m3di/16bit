@@ -33,15 +33,20 @@ import type { Load } from '../home/useDashboard.ts'
 import { READ_ONLY_REASON } from './schema.ts'
 
 /**
- * How a schema write ended. `confirm`: the write would clear values on `affected` items and
- * must be sent again with that count (D51). `conflict`: someone else changed the thing first;
- * the page already shows their version. `refused`: anything else, with a sentence to show.
+ * How a schema write ended. `conflict`: someone else changed the thing first; the page already
+ * shows their version. `refused`: anything else, with a sentence to show.
  */
 export type WriteResult<T> =
   | { ok: true; data: T }
-  | { ok: false; kind: 'confirm'; affected: number }
   | { ok: false; kind: 'conflict'; message: string }
   | { ok: false; kind: 'refused'; message: string }
+
+/**
+ * A write that can clear item values: changing an attribute's options or deleting it. It may
+ * also end in `confirm`: the write would clear values on `affected` items and must be sent
+ * again with that count (D51). No other schema route answers `confirm_required`.
+ */
+export type ConfirmableResult<T> = WriteResult<T> | { ok: false; kind: 'confirm'; affected: number }
 
 const CONFLICT = {
   folder:
@@ -140,16 +145,17 @@ export function useHubSettings(
   }
 
   /** Runs a write; maps 409s and refusals. A 404 reads the hub again: the thing is gone. */
-  async function write<T>(
+  async function attempt<T>(
     thing: 'folder' | 'attribute',
     run: () => Promise<T>,
     onConflict: (body: unknown) => string | null,
-  ): Promise<WriteResult<T>> {
+    confirmable: boolean,
+  ): Promise<ConfirmableResult<T>> {
     try {
       return { ok: true, data: await run() }
     } catch (raw) {
       const error = asRequestError(raw)
-      if (error.code === 'confirm_required') {
+      if (confirmable && error.code === 'confirm_required') {
         const parsed = confirmRequiredErrorSchema.safeParse(error.body)
         if (parsed.success) return { ok: false, kind: 'confirm', affected: parsed.data.affected }
       }
@@ -161,6 +167,19 @@ export function useHubSettings(
       return { ok: false, kind: 'refused', message: refusalMessage(error, thing) }
     }
   }
+
+  /** A write that never needs a confirm: a stray `confirm_required` is a plain refusal. */
+  const write = <T>(
+    thing: 'folder' | 'attribute',
+    run: () => Promise<T>,
+    onConflict: (body: unknown) => string | null,
+  ) => attempt(thing, run, onConflict, false) as Promise<WriteResult<T>>
+
+  const writeConfirmable = <T>(
+    thing: 'folder' | 'attribute',
+    run: () => Promise<T>,
+    onConflict: (body: unknown) => string | null,
+  ) => attempt(thing, run, onConflict, true)
 
   const folderConflict = (body: unknown) => {
     const parsed = folderConflictErrorSchema.safeParse(body)
@@ -271,7 +290,7 @@ export function useHubSettings(
       ...change,
       ...(confirm === undefined ? {} : { confirm }),
     }
-    const result = await write(
+    const result = await writeConfirmable(
       'attribute',
       () => sendJson('PATCH', path, body, attributeSchema, fetchFn),
       attributeConflict,
@@ -284,7 +303,7 @@ export function useHubSettings(
     const query = new URLSearchParams({ version: String(attribute.version) })
     if (confirm !== undefined) query.set('confirm', String(confirm))
     const path = `${ws}/attributes/${encodeURIComponent(attribute.id)}?${query.toString()}`
-    const result = await write(
+    const result = await writeConfirmable(
       'attribute',
       () => sendJson('DELETE', path, undefined, noContent, fetchFn),
       attributeConflict,

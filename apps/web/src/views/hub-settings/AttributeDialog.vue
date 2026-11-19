@@ -135,8 +135,7 @@ async function create() {
     open.value = false
     emit('saved', result.data, true)
   } else {
-    error.value =
-      result.kind === 'confirm' ? 'The server asked for a confirmation.' : result.message
+    error.value = result.message
   }
 }
 

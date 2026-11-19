@@ -90,7 +90,7 @@ async function submit() {
     emit('saved', result.data, !f)
     return
   }
-  error.value = result.kind === 'confirm' ? 'The server asked for a confirmation.' : result.message
+  error.value = result.message
   if (result.kind === 'conflict' && folder.value) {
     // Show their version, so saving again is a choice made on what is there now.
     name.value = folder.value.name

@@ -215,7 +215,7 @@ async function submitCreate(values: ItemValues) {
       <RouterLink
         v-if="managesSchema"
         :to="{ name: 'hub-settings-folders', params: { workspaceId, hubId } }"
-        class="border-b border-line2 text-secondary text-ink3 no-underline hover:border-line3 hover:text-ink"
+        class="border-b border-line2 text-secondary text-ink no-underline hover:border-line3"
         data-hub-settings-link
         >Hub settings</RouterLink
       >

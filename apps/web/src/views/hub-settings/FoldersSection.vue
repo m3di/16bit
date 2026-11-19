@@ -106,8 +106,7 @@ async function confirmDelete() {
     emit('status', `Deleted ${target.name}.`, true)
     return
   }
-  deleteError.value =
-    result.kind === 'confirm' ? 'The server asked for a confirmation.' : result.message
+  deleteError.value = result.message
 }
 </script>
 
