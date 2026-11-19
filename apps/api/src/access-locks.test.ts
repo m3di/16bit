@@ -217,6 +217,7 @@ async function untilBlocked(r: Run): Promise<void> {
 }
 
 type Result = Awaited<Run['done']>
+type Trx = Transaction<Database>
 
 /** Runs B up to the gate, then A until it waits, then opens the gate. Returns [B, A]. */
 async function interleaveResults(
@@ -446,6 +447,61 @@ describe('concurrent access changes (#92)', () => {
       .execute()
     expect(owners).toEqual([{ id: 'own' }])
     expect(await accessLog()).toEqual([{ actor: 'own', action: 'member.role', target: 'own2' }])
+  })
+
+  // #127: the same, demoting to member, and removing. A's owner lock passes RLS on its snapshot
+  // from before B commits, then waits. Its next statement has a fresh snapshot in which own2 is
+  // no longer an owner or admin, so the principal_update policy, which FOR NO KEY UPDATE must
+  // pass, hid the target and A got 404. A now reads its own role after the owner lock: 403.
+  // own2's hub_admin grant would also pass that policy (rls_hubs(4)), so it goes first.
+  for (const [label, change] of [
+    [
+      'demote to member',
+      (trx: Trx, actor: Subject, target: string) =>
+        changeMemberRole(trx, 'w1', actor, target, 'member'),
+    ],
+    [
+      'remove',
+      (trx: Trx, actor: Subject, target: string) => removeMember(trx, 'w1', actor, target),
+    ],
+  ] as const) {
+    it(`two owners ${label} each other: the second gets 403, not 404`, async () => {
+      await db.deleteFrom('hub_grant').where('principal_id', '=', 'own2').execute()
+      const [b, a] = await interleaveResults(
+        'access_log',
+        () => run('own', (trx) => change(trx, own, 'own2')),
+        () => run('own2', (trx) => change(trx, own2, 'own')),
+      )
+      expect(b).toEqual({ ok: true })
+      expectForbidden(a)
+      const owners = await db
+        .selectFrom('principal')
+        .select('id')
+        .where('workspace_id', '=', 'w1')
+        .where('workspace_role', '=', 'owner')
+        .where('removed_at', 'is', null)
+        .execute()
+      expect(owners).toEqual([{ id: 'own' }])
+    })
+  }
+
+  // #127, an admin demoted while changing someone else's role. The demotion holds the owner
+  // rows, so the admin's change waits there, then reads its new role and refuses.
+  it('an admin whose demotion commits first gets 403 for a role change in flight', async () => {
+    const [demotion, change] = await interleaveResults(
+      'access_log',
+      () => run('own', (trx) => changeMemberRole(trx, 'w1', own, 'adm', 'member')),
+      () => run('adm', (trx) => changeMemberRole(trx, 'w1', adm, 'ed', 'viewer')),
+    )
+    expect(demotion).toEqual({ ok: true })
+    expectForbidden(change)
+    const ed = await db
+      .selectFrom('principal')
+      .select('workspace_role')
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', 'ed')
+      .executeTakeFirstOrThrow()
+    expect(ed.workspace_role).toBe('member')
   })
 
   // #96, the creation first. createHub locks its creator FOR SHARE, so removal waits at its lock
