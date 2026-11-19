@@ -106,6 +106,13 @@ The reviewer checks, in order: does it do what the issue asks, is it tested, doe
 - **Cleanup per confirmed merge.** Remove a worktree and its branch only after confirming that pull request is `MERGED`, one pull request at a time.
 - **QA inside the pull request.** Each user-visible pull request adds or extends an end-to-end test before it merges. Use `qa:not-needed` only when nothing is user-visible.
 
+## Practices added during M2
+
+- **Pin known bugs with `test.fail()`.** When QA finds a bug the exit test can't pass yet, the test stays in with `test.fail()` and a link to the issue. The PR that fixes the bug removes the pin, so the fix is proven by the same test. The pinning PR merges first; the fixing PR merges `main` and flips the pin, or `main` goes red.
+- **Agents use only their own containers.** Each agent starts its Postgres and dev containers with the issue number in their names (`db-155`, `dev-155`) and removes them by name when done. No agent runs `docker compose` against the shared project or touches the maintainer's compose database.
+- **No `#NNN` in web source.** The no-raw-colours test reads `#151` as a hex colour. Write "issue 151" in comments under `apps/web`.
+- **Merge `main` before merging a PR that shares files with one merged since.** When two open PRs touch the same file, the lead merges the first, updates the second's branch, and merges only after CI runs on the combined code.
+
 ## Human gates
 
 The lead never merges these without the maintainer's explicit yes in the conversation or on the pull request:
