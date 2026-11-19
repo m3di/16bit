@@ -119,6 +119,10 @@ test('a new row cannot be opened until the server confirms it', async ({ page })
   await expect(page).toHaveURL(new RegExp(`/w/${demo.workspaceId}/items/[^/?]+$`))
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
   await expect(page.getByLabel('Title (required)')).toBeEnabled()
+
+  // Back in the folder, the confirmed row has its link.
+  await page.goBack()
+  await expect(row.getByRole('link', { name: /^DSN-\d+$/ })).toBeVisible()
 })
 
 test('?item= for an item from another hub shows that it could not be found', async ({

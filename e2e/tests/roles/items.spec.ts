@@ -116,17 +116,23 @@ test('an editor adds an item and edits it in the browser', async ({ pageAs, as }
   const stored = await getItem(as('owner'), id)
   expect(stored).toMatchObject({ updatedBy: people.leo.id, values: { [TITLE]: name } })
 
-  // Leo renames it there.
+  // Back in the folder, Leo opens it in the side panel and renames it there, as an editor.
+  await page.goBack()
+  const row = itemsTable(page, 'Launch').getByRole('row').filter({ hasText: name })
+  await row.getByRole('link', { name: /^LCH-\d+$/ }).click()
   const edited = uniqueTitle('leo edits')
-  const field = page.getByLabel('Title (required)')
+  const field = itemPanel(page).getByLabel('Title (required)')
   await expect(field).toHaveValue(name)
   await field.fill(edited)
   await field.press('Enter')
+  await expect(
+    itemsTable(page, 'Launch').getByRole('row').filter({ hasText: edited }),
+  ).toBeVisible()
   await expect
     .poll(async () => getItem(as('owner'), id))
     .toMatchObject({ version: 2, updatedBy: people.leo.id, values: { [TITLE]: edited } })
   await page.reload()
-  await expect(page.getByLabel('Title (required)')).toHaveValue(edited)
+  await expect(itemPanel(page).getByLabel('Title (required)')).toHaveValue(edited)
 })
 
 test.describe('read-only from the hub role', () => {

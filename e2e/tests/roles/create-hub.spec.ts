@@ -1,4 +1,10 @@
-import { hubDescriptionSchema, hubPageSchema, itemSchema, type HubListEntry } from '@16bit/core'
+import {
+  hubDescriptionSchema,
+  hubListEntrySchema,
+  hubPageSchema,
+  itemSchema,
+  type HubListEntry,
+} from '@16bit/core'
 import type { Page } from '@playwright/test'
 import {
   expect,
@@ -57,30 +63,41 @@ for (const person of ['owner', 'mina'] as const) {
     // The prefix follows the name ("Zz e2e ui owner ...": initials) until it is typed over.
     await expect(dialog.getByLabel('ID prefix')).toHaveValue(person === 'owner' ? 'ZEUO' : 'ZEUM')
     await dialog.getByLabel('ID prefix').fill('zq1')
+    // Permanent, so it shows in capitals as typed: what is stored.
+    await expect(dialog.getByLabel('ID prefix')).toHaveValue('ZQ1')
     await dialog.getByRole('radio', { name: 'Violet' }).check()
+    const answer = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && r.url().endsWith(`/v1/workspaces/${WS}/hubs`),
+    )
     await dialog.getByRole('button', { name: 'Create hub' }).click()
+    const response = await answer
+    expect(response.status()).toBe(201)
+    const hubId = hubListEntrySchema.parse(await response.json()).id
+    try {
+      await expect(page).toHaveURL(
+        new RegExp(`/w/${WS}/hubs/${encodeURIComponent(hubId)}/settings/general$`),
+      )
+      await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
 
-    await expect(page).toHaveURL(new RegExp(`/w/${WS}/hubs/[^/]+/settings/general$`))
-    await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
-    const hubId = decodeURIComponent(new URL(page.url()).pathname.split('/')[4] ?? '')
+      // Created as asked, with the creator as its hub admin.
+      const listed = (await hubList(client)).find((h) => h.id === hubId)
+      expect(listed).toMatchObject({
+        access: 'granted',
+        hubRole: 'hub_admin',
+        name,
+        color: 'violet',
+        idPrefix: 'ZQ1',
+      })
+      const described = await client.get(`/hubs/${hubId}`)
+      await expectStatus(described, 200)
+      expect(hubDescriptionSchema.parse(await described.json()).hubRole).toBe('hub_admin')
 
-    // Created as asked, with the creator as its hub admin.
-    const listed = (await hubList(client)).find((h) => h.id === hubId)
-    expect(listed).toMatchObject({
-      access: 'granted',
-      hubRole: 'hub_admin',
-      name,
-      color: 'violet',
-      idPrefix: 'ZQ1',
-    })
-    const described = await client.get(`/hubs/${hubId}`)
-    await expectStatus(described, 200)
-    expect(hubDescriptionSchema.parse(await described.json()).hubRole).toBe('hub_admin')
-
-    // The settings page lets them change it, as hub admin.
-    await expect(page.getByLabel('Name', { exact: true })).toBeEditable()
-
-    await removeHub(client, hubId)
+      // The settings page lets them change it, as hub admin.
+      await expect(page.getByLabel('Name', { exact: true })).toBeEditable()
+    } finally {
+      // The hub is empty, so it can go again (D52), even when an assertion above failed.
+      await removeHub(client, hubId)
+    }
   })
 }
 

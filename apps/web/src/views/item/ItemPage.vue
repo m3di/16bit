@@ -9,7 +9,8 @@ import type { Load } from '../home/useDashboard.ts'
 import { provideValueContext } from '../hub/context.ts'
 import FolderSidebar from '../hub/FolderSidebar.vue'
 import { displayId } from '../hub/relations.ts'
-import { canEditItems, folderColumns, folderTree } from '../hub/useHub.ts'
+import { canWriteItems } from '../hub/newItem.ts'
+import { folderColumns, folderTree } from '../hub/useHub.ts'
 import { useHubDirectory } from '../hub/useHubDirectory.ts'
 import { useItems } from '../hub/useItems.ts'
 import { usePrincipals } from '../hub/usePrincipals.ts'
@@ -109,9 +110,15 @@ function retry() {
   else if (hubId.value) directory.retry(hubId.value)
 }
 
+// `item.write` from `can()`. Read-only once the role is known to refuse, or after the server
+// refused a write; not while the reader or the hub is still loading.
 const readOnly = computed(
   () =>
-    (description.value ? !canEditItems(description.value.hubRole) : false) || items.readOnly.value,
+    canWriteItems(
+      session.me.value.state === 'ready' ? session.me.value.data : undefined,
+      workspaceId,
+      description.value?.hubRole,
+    ) === false || items.readOnly.value,
 )
 const tree = computed(() =>
   description.value

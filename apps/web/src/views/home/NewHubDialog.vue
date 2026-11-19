@@ -62,8 +62,9 @@ watch(name, (next) => {
   if (!prefixEdited.value) idPrefix.value = suggestPrefix(next)
 })
 
+// Shown in capitals as typed: the prefix is permanent, so the field shows what is stored.
 function onPrefix(value: string) {
-  idPrefix.value = value
+  idPrefix.value = value.toUpperCase()
   // Clearing the field hands it back to the name.
   prefixEdited.value = value.trim() !== ''
 }
