@@ -212,6 +212,55 @@ describe('ensureBuildHub', () => {
   })
 })
 
+describe('ensureBuildHub title (D50, #120)', () => {
+  const hub = () =>
+    db
+      .selectFrom('folder')
+      .select(['title_attribute_id', 'version'])
+      .where('workspace_id', '=', WS)
+      .where('id', '=', BUILD_HUB.id)
+      .executeTakeFirstOrThrow()
+  /** As `PATCH /hubs/build` writes it: the title and a version bump. */
+  const editTitle = (titleAttributeId: string | null) =>
+    db
+      .updateTable('folder')
+      .set({ title_attribute_id: titleAttributeId, version: sql<number>`version + 1` })
+      .where('workspace_id', '=', WS)
+      .where('id', '=', BUILD_HUB.id)
+      .execute()
+
+  it('names Title as the hub’s title when it creates the hub, and keeps it on a re-run', async () => {
+    expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 0 })
+    await ensureBuildHub(db)
+    expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 0 })
+  })
+
+  it('leaves a title a hub admin changed', async () => {
+    await editTitle(ATTR.milestone)
+    await ensureBuildHub(db)
+    expect(await hub()).toEqual({ title_attribute_id: ATTR.milestone, version: 1 })
+  })
+
+  it('leaves a title a hub admin cleared', async () => {
+    await editTitle(null)
+    await ensureBuildHub(db)
+    expect(await hub()).toEqual({ title_attribute_id: null, version: 1 })
+  })
+
+  it('names the title of a hub created before #120 and never edited, bumping its version', async () => {
+    await db
+      .updateTable('folder')
+      .set({ title_attribute_id: null })
+      .where('workspace_id', '=', WS)
+      .where('id', '=', BUILD_HUB.id)
+      .execute()
+    await ensureBuildHub(db)
+    expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 1 })
+    await ensureBuildHub(db)
+    expect(await hub()).toEqual({ title_attribute_id: ATTR.title, version: 1 })
+  })
+})
+
 describe('importIssues', () => {
   it('creates one item per issue with revisions and the hub count', async () => {
     const result = await importIssues(db, [issue(1), issue(2), issue(3, { state: 'CLOSED' })])

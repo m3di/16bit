@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import {
   attributeTypes,
+  hubDescriptionSchema,
   hubPageSchema,
   indexEntries,
   itemQueryResultSchema,
@@ -156,6 +157,30 @@ describe('demo seed', () => {
       .whereRef('parent.id', '!=', 'parent.hub_id')
       .execute()
     expect(nested.map((f) => f.id)).toContain('product-triage')
+  })
+
+  it('names each hub’s first text attribute as its title, at version 0 (D50, #120)', async () => {
+    const expected = demoSeed().flatMap((ws) =>
+      ws.hubs.map((hub) => ({
+        workspace_id: ws.id,
+        id: hub.id,
+        title_attribute_id: hub.attributes.find((a) => a.type === 'text')?.id ?? null,
+        version: 0,
+      })),
+    )
+    expect(expected.every((h) => h.title_attribute_id !== null)).toBe(true)
+    expect(await hubTitles()).toEqual(sortHubs(expected))
+    // The API serves it.
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/workspaces/acme/hubs/operations',
+      headers: auth,
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(hubDescriptionSchema.parse(res.json()).hub).toMatchObject({
+      titleAttributeId: 'ops-title',
+      version: 0,
+    })
   })
 
   it('keeps counters, seq ids, and the revision log consistent', async () => {
@@ -591,6 +616,65 @@ describe('demo seed', () => {
     })
   })
 
+  it('leaves a title a hub admin changed or cleared, and sets none after its attribute is deleted (#120)', async () => {
+    const patchHub = async (ws: string, hubId: string, payload: Record<string, unknown>) => {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workspaces/${ws}/hubs/${hubId}`,
+        headers: auth,
+        payload,
+      })
+      expect(res.statusCode, res.body).toBe(200)
+    }
+    // Hiring: a hub admin picks another text attribute.
+    const added = await app.inject({
+      method: 'POST',
+      url: '/v1/workspaces/demo/hubs/hiring/attributes',
+      headers: auth,
+      payload: { id: 'hiring-candidate', name: 'Candidate', type: 'text', config: {} },
+    })
+    expect(added.statusCode, added.body).toBe(201)
+    await patchHub('demo', 'hiring', { version: 0, titleAttributeId: 'hiring-candidate' })
+    // Sales: a hub admin clears the title.
+    await patchHub('acme', 'sales', { version: 0, titleAttributeId: null })
+    // Archive: a hub admin deletes the title attribute, which clears the title (D50).
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: '/v1/workspaces/demo/attributes/archive-title?version=0',
+      headers: auth,
+    })
+    expect(deleted.statusCode, deleted.body).toBe(204)
+
+    const before = await hubTitles()
+    const pick = (rows: typeof before, id: string) => rows.find((h) => h.id === id)
+    expect(pick(before, 'hiring')).toMatchObject({
+      title_attribute_id: 'hiring-candidate',
+      version: 1,
+    })
+    expect(pick(before, 'sales')).toMatchObject({ title_attribute_id: null, version: 1 })
+    expect(pick(before, 'archive')).toMatchObject({ title_attribute_id: null, version: 1 })
+
+    const counts = await tableCounts()
+    await applySeed(db)
+    expect(await hubTitles()).toEqual(before)
+    expect(await tableCounts()).toEqual(counts)
+  }, 60_000)
+
+  it('names the title of a hub seeded before #120 and never edited, bumping its version', async () => {
+    await db
+      .updateTable('folder')
+      .set({ title_attribute_id: null })
+      .where('workspace_id', '=', 'demo')
+      .where('id', '=', 'support')
+      .execute()
+    await applySeed(db)
+    const support = () => hubTitles().then((rows) => rows.find((h) => h.id === 'support'))
+    // Clients that read the hub at version 0 see a conflict and reload it.
+    expect(await support()).toMatchObject({ title_attribute_id: 'support-title', version: 1 })
+    await applySeed(db)
+    expect(await support()).toMatchObject({ title_attribute_id: 'support-title', version: 1 })
+  }, 60_000)
+
   // Must stay the last test: it leaves the hub's next_seq ahead of its item count.
   it('fills in a workspace that is only partly seeded', async () => {
     await db.transaction().execute(async (trx) => {
@@ -785,6 +869,27 @@ describe('demo seed', () => {
     expect((await hubs('acme')).map((h) => h.id)).not.toContain('legal')
   }, 60_000)
 })
+
+type HubTitle = {
+  workspace_id: string
+  id: string
+  title_attribute_id: string | null
+  version: number
+}
+
+const sortHubs = (rows: HubTitle[]): HubTitle[] =>
+  [...rows].sort((a, b) => `${a.workspace_id}/${a.id}`.localeCompare(`${b.workspace_id}/${b.id}`))
+
+/** Every seeded hub's title attribute and version (D50, #120). */
+async function hubTitles(): Promise<HubTitle[]> {
+  const rows = await db
+    .selectFrom('folder')
+    .select(['workspace_id', 'id', 'title_attribute_id', 'version'])
+    .where('workspace_id', 'in', ['demo', 'acme'])
+    .where('parent_id', 'is', null)
+    .execute()
+  return sortHubs(rows)
+}
 
 async function launchDesignColumns() {
   return db

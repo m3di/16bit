@@ -15,6 +15,7 @@ import { hashAgentSecret, newAgentSecret } from './auth/agent-key.ts'
 import type { Database, PrincipalTable } from './db/database.ts'
 import { DEV_OWNER, ensureDevAccounts, linkDevAccount, type DevPerson } from './dev-accounts.ts'
 import { createItem } from './items.ts'
+import { seedHubTitle } from './seed-hub-title.ts'
 
 // `pnpm seed`: two demo workspaces whose hubs cover every size-meter step in docs/DESIGN.md
 // (0, 1 to 9, 10 to 99, 100 to 999, 1,000 or more items), people who can sign in with the
@@ -35,7 +36,9 @@ import { createItem } from './items.ts'
 // hub or attribute deleted through the API is not brought back: its ID is in `deleted_hub` or
 // `deleted_attribute` (#133). New items leave a deleted attribute out, and the grants and agent
 // key on a deleted hub are skipped. Grants are only added where the principal has none; the
-// agent key only on the first run.
+// agent key only on the first run. Each hub's first text attribute is its title (D50), set only
+// on a hub with no title at version 0, that is one nobody has edited through the API
+// (seed-hub-title.ts, #120): a title a hub admin changed or cleared is never set back.
 
 /** `indexed`: filled into item_index, so the attribute can be filtered and sorted (D6, D20). */
 type AttributeSeed = Pick<Attribute, 'id' | 'name' | 'type' | 'config'> & {
@@ -631,7 +634,7 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
       for (const hub of hubs) {
         const folders = flatten(hub, null)
         // Parents come before children, so the parent foreign key is satisfied row by row.
-        await trx
+        const inserted = await trx
           .insertInto('folder')
           .values(
             folders.map(({ seed, parentId }) => ({
@@ -645,6 +648,7 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
             })),
           )
           .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
+          .returning('id')
           .execute()
         const kept = definitionsOf(hub).filter(({ attribute }) => !gone.has(attribute.id))
         if (kept.length > 0) {
@@ -683,6 +687,13 @@ export async function applySeed(db: Kysely<Database>): Promise<SeedResult> {
               oc.columns(['workspace_id', 'folder_id', 'attribute_id']).doNothing(),
             )
             .execute()
+          // The hub's first text attribute is its title (D50), set only on a hub nobody has
+          // edited, so a title a hub admin changed or cleared stays (#120).
+          const title = kept.find(({ attribute }) => attribute.type === 'text')
+          if (title) {
+            const created = inserted.some((r) => r.id === hub.id)
+            await seedHubTitle(trx, ws.id, hub.id, title.attribute.id, created)
+          }
         }
         await ensureHubAdmin(trx, ws.id, hub.id, devOwner.id)
       }
