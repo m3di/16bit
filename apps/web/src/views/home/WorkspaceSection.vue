@@ -13,6 +13,13 @@ const headingId = computed(() => `workspace-${entry.workspace.id}`)
   <section :aria-labelledby="headingId" class="flex flex-col gap-3.5" data-workspace>
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2">
       <h2 :id="headingId" class="m-0 text-body font-medium">{{ entry.workspace.name }}</h2>
+      <!-- Every person in the workspace may see its members; what they can change follows the role. -->
+      <RouterLink
+        :to="{ name: 'workspace-members', params: { workspaceId: entry.workspace.id } }"
+        class="border-b border-line2 text-secondary text-ink3 no-underline hover:border-line3 hover:text-ink"
+        data-members-link
+        >Members and roles<span class="sr-only"> of {{ entry.workspace.name }}</span></RouterLink
+      >
     </div>
 
     <StateBlock v-if="entry.hubs.state === 'loading'" state="loading" title="Loading hubs" />

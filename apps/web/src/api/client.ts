@@ -99,6 +99,17 @@ export function sendJson<T>(
   return requestJson(method, path, body, schema, fetchFn, options)
 }
 
+/** PUTs `body` as JSON to `path` (a whole list, such as a folder's attributes). */
+export function putJson<T>(
+  path: string,
+  body: unknown,
+  schema: Schema<T>,
+  fetchFn: Fetch = fetch,
+  options: RequestOptions = {},
+) {
+  return requestJson('PUT', path, body, schema, fetchFn, options)
+}
+
 async function requestJson<T>(
   method: string,
   path: string,

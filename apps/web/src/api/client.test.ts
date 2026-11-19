@@ -139,6 +139,17 @@ describe('sendJson', () => {
     expect(init?.headers).toMatchObject({ 'Content-Type': 'application/json' })
   })
 
+  it('sends a DELETE without a body', async () => {
+    const fetchFn = vi.fn<Fetch>(() => Promise.resolve(new Response(null, { status: 204 })))
+    await expect(sendJson('DELETE', '/v1/m', undefined, noContent, fetchFn)).resolves.toBe(
+      undefined,
+    )
+    const init = fetchFn.mock.calls[0]?.[1]
+    expect(init?.method).toBe('DELETE')
+    expect(init?.body).toBeUndefined()
+    expect(init?.headers).not.toHaveProperty('Content-Type')
+  })
+
   it('keeps the error body, so a conflict carries the current item', async () => {
     const fetchFn: Fetch = () =>
       Promise.resolve(json({ error: 'conflict', message: 'Changed', current: item }, 409))

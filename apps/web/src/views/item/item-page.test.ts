@@ -1,5 +1,7 @@
 import type { Attribute, HubDescription } from '@16bit/core'
+import { createMemoryHistory } from 'vue-router'
 import { describe, expect, it } from 'vitest'
+import { makeRouter } from '../../router.ts'
 import { ApiRequestError } from '../../api/client.ts'
 import { description, fakeApi, item, json } from '../hub/fixtures.test-utils.ts'
 import { folderColumns } from '../hub/useHub.ts'
@@ -165,5 +167,16 @@ describe('useBacklinks', () => {
     const b = useBacklinks('w', 'i1', api.fetchFn)
     await b.load()
     expect(b.list.value).toMatchObject({ state: 'error', error: { status: 500 } })
+  })
+})
+
+describe('item route', () => {
+  it('opens an item by ID beside the hub and settings routes', () => {
+    const router = makeRouter(createMemoryHistory())
+    const to = router.resolve('/w/w1/items/i1')
+    expect(to.name).toBe('item')
+    expect(to.params).toEqual({ workspaceId: 'w1', itemId: 'i1' })
+    expect(router.resolve(itemPageLink('w1', { id: 'i1' })).fullPath).toBe('/w/w1/items/i1')
+    expect(router.resolve('/w/w1/settings/members').name).toBe('workspace-members')
   })
 })
