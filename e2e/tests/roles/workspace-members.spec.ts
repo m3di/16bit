@@ -11,6 +11,7 @@ import type { Page } from '@playwright/test'
 import {
   expect,
   expectStatus,
+  listAll,
   NO_STATE,
   people,
   test,
@@ -34,10 +35,8 @@ function memberRow(page: Page, name: string) {
 }
 
 async function roleOf(client: Client, principalId: string): Promise<WorkspaceRole | undefined> {
-  const res = await client.get('/members?limit=200')
-  await expectStatus(res, 200)
-  return memberPageSchema.parse(await res.json()).items.find((m) => m.id === principalId)
-    ?.workspaceRole
+  const members = await listAll(client, '/members', memberPageSchema)
+  return members.find((m) => m.id === principalId)?.workspaceRole
 }
 
 async function createInvite(client: Client, workspaceRole: WorkspaceRole): Promise<Invite> {
@@ -55,10 +54,8 @@ function countRoleChanges(page: Page): () => number {
   return () => n
 }
 
-async function pendingInvites(client: Client): Promise<Invite[]> {
-  const res = await client.get('/invites?limit=200')
-  await expectStatus(res, 200)
-  return invitePageSchema.parse(await res.json()).items
+function pendingInvites(client: Client): Promise<Invite[]> {
+  return listAll(client, '/invites', invitePageSchema)
 }
 
 test('an owner opens members from the dashboard, changes a role and removes a person', async ({

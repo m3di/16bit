@@ -68,7 +68,9 @@ async function deleteHubAndContents(client: Client, hubId: string) {
       }
       for (const item of body.items) {
         await expectStatus(
-          await client.delete(`/items/${item.id}?version=${String(item.version)}`),
+          await client.delete(
+            `/items/${encodeURIComponent(item.id)}?version=${String(item.version)}`,
+          ),
           204,
         )
       }
@@ -89,6 +91,22 @@ async function deleteHubAndContents(client: Client, hubId: string) {
   }
   const { hub } = await describeHub(client, hubId)
   await expectStatus(await client.delete(`/hubs/${hubId}?version=${String(hub.version)}`), 204)
+}
+
+/**
+ * Runs a test's cleanup in its `finally`. A cleanup error is recorded as an annotation instead
+ * of thrown, so it never replaces the error that failed the test, or counts as a `test.fail`'s
+ * expected failure.
+ */
+async function cleanUp(step: () => Promise<void>) {
+  try {
+    await step()
+  } catch (error) {
+    test.info().annotations.push({
+      type: 'cleanup failed',
+      description: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 /** A member by principal ID, following the cursor: never only the first page (#158). */
@@ -381,7 +399,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
     }
     expect((await describeHub(owner, hubId)).folders).toHaveLength(2)
   } finally {
-    if (hubId) await deleteHubAndContents(owner, hubId)
+    if (hubId) await cleanUp(() => deleteHubAndContents(owner, hubId))
   }
 })
 
@@ -398,27 +416,29 @@ test('an invited person joins with the link, is granted a hub, and as its editor
   })
   await expectStatus(created, 201)
   const hub = hubListEntrySchema.parse(await created.json())
-
-  // The owner makes an invite link in workspace settings.
-  await page.goto(`/w/${WS}/settings/members`)
-  await page.getByRole('button', { name: 'Invite people' }).click()
-  await page
-    .getByRole('dialog', { name: 'Invite people' })
-    .getByLabel('Role')
-    .selectOption('member')
-  await page.getByRole('button', { name: 'Create invite link' }).click()
-  const linkDialog = page.getByRole('dialog', { name: 'Invite link' })
-  const link = new URL(await linkDialog.getByRole('textbox', { name: 'Invite link' }).inputValue())
-  await linkDialog.getByRole('button', { name: 'Done' }).click()
-
-  const tag = crypto.randomUUID().slice(0, 8)
-  const person = {
-    name: `E2E joiner ${tag}`,
-    email: `e2e-joiner-${tag}@example.com`,
-    password: `e2e-password-${crypto.randomUUID()}`,
-  }
   let principalId = ''
   try {
+    // The owner makes an invite link in workspace settings.
+    await page.goto(`/w/${WS}/settings/members`)
+    await page.getByRole('button', { name: 'Invite people' }).click()
+    await page
+      .getByRole('dialog', { name: 'Invite people' })
+      .getByLabel('Role')
+      .selectOption('member')
+    await page.getByRole('button', { name: 'Create invite link' }).click()
+    const linkDialog = page.getByRole('dialog', { name: 'Invite link' })
+    const link = new URL(
+      await linkDialog.getByRole('textbox', { name: 'Invite link' }).inputValue(),
+    )
+    await linkDialog.getByRole('button', { name: 'Done' }).click()
+
+    const tag = crypto.randomUUID().slice(0, 8)
+    const person = {
+      name: `E2E joiner ${tag}`,
+      email: `e2e-joiner-${tag}@example.com`,
+      password: `e2e-password-${crypto.randomUUID()}`,
+    }
+
     // They open it signed out, create their account, and land on their workspaces signed in.
     const joiner = await pageWithSession(null)
     await joiner.goto(link.pathname)
@@ -510,10 +530,12 @@ test('an invited person joins with the link, is granted a hub, and as its editor
     // Removing them revokes their grants (docs/ROLES.md); then the hub goes, with any item
     // they made in it. Nothing outlives the test.
     if (principalId) {
-      const res = await owner.delete(`/members/${encodeURIComponent(principalId)}`)
-      expect([204, 404]).toContain(res.status())
+      await cleanUp(async () => {
+        const res = await owner.delete(`/members/${encodeURIComponent(principalId)}`)
+        expect([204, 404]).toContain(res.status())
+      })
     }
-    await deleteHubAndContents(owner, hub.id)
+    await cleanUp(() => deleteHubAndContents(owner, hub.id))
   }
 })
 
@@ -563,6 +585,6 @@ test('a Number value is saved from the New item form and the item page (#155)', 
     await field.press('Enter')
     await expect.poll(async () => (await getItem(owner, id)).values[points]).toBe(8)
   } finally {
-    await deleteHubAndContents(owner, hub.id)
+    await cleanUp(() => deleteHubAndContents(owner, hub.id))
   }
 })
