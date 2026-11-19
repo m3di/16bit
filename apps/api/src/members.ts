@@ -16,7 +16,7 @@ import { hubExists, ownGrant } from './access.ts'
 import { appendAccessLog } from './access-log.ts'
 import type { Database } from './db/database.ts'
 import { inTransaction } from './db/scope.ts'
-import { decodeCursor, encodeCursor, enforce, HttpError, notFound } from './http.ts'
+import { decodeCursor, encodeCursor, enforce, HttpError, notFound, sqlState } from './http.ts'
 import { toFolder } from './mappers.ts'
 
 // Members, hub grants and hub creation (#43, docs/ROLES.md). Every change is an access change,
@@ -248,9 +248,12 @@ export async function removeMember(
       .execute()
     // After the UPDATE above, which waited for every in-flight invite insert by the target
     // (their foreign key holds the target FOR KEY SHARE), so this statement sees them all.
+    // Ended at created_at, not now(): a redeem waiting on the invite row compares expires_at
+    // with its own transaction's start, which can be earlier than ours but never earlier than
+    // the invite's creation, since the token only exists from then (#130).
     const invites = await trx
       .updateTable('invite')
-      .set({ expires_at: sql`now()` })
+      .set({ expires_at: sql`created_at` })
       .where('workspace_id', '=', workspaceId)
       .where('created_by', '=', targetId)
       .where('used_at', 'is', null)
@@ -418,6 +421,11 @@ export async function createHub(
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .returningAll()
       .executeTakeFirst()
+      // hub_id_check (migration 0009): a deleted hub had this ID (D52).
+      .catch((error: unknown) => {
+        if (sqlState(error) === '23505') return undefined
+        throw error
+      })
     if (!row) throw new HttpError('id_taken', 'This folder ID is already used')
     await trx
       .insertInto('hub_grant')

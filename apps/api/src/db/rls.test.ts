@@ -131,6 +131,8 @@ async function fixtures(): Promise<void> {
              ('w1', 'ag2', 'hash-ag2', 'own');
     INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at)
       VALUES ('w1', 'inv', 'tok', 'member', 'own', now() + interval '1 day'),
+             ('w1', 'inv-own', 'tok-own', 'owner', 'own', now() + interval '1 day'),
+             ('w1', 'inv-gone', 'tok-gone', 'owner', 'gone', now() + interval '1 day'),
              ('w2', 'inv', 'tok2', 'member', 'own2', now() + interval '1 day');
     INSERT INTO access_log (workspace_id, seq, actor, action, target) VALUES
       ('w1', 1, 'own', 'grant.set', 'mem'), ('w2', 1, 'own2', 'grant.set', 'mem');
@@ -808,6 +810,32 @@ describe('the role matrix in the database', () => {
     ],
     // No WHERE, so invite_read (which an UPDATE's WHERE also needs) can't hide this row.
     ['member expires an invite', 'mem', `UPDATE invite SET expires_at = now()`, 0],
+    // Footnote 1 for ending an invite (#130, migration 0010): an admin may lock an owner-role
+    // invite but not end it, unless its creator has been removed (removeMember expires them).
+    [
+      'owner ends an owner-role invite',
+      'own',
+      `UPDATE invite SET expires_at = created_at WHERE id = 'inv-own'`,
+      1,
+    ],
+    [
+      'admin ends an owner-role invite',
+      'adm',
+      `UPDATE invite SET expires_at = created_at WHERE id = 'inv-own'`,
+      DENIED,
+    ],
+    [
+      'admin locks an owner-role invite',
+      'adm',
+      `SELECT 1 FROM invite WHERE id = 'inv-own' FOR UPDATE`,
+      1,
+    ],
+    [
+      'admin ends an owner-role invite of a removed member',
+      'adm',
+      `UPDATE invite SET expires_at = created_at WHERE id = 'inv-gone'`,
+      1,
+    ],
 
     // The access log: as the caller, for an action the caller may take.
     [

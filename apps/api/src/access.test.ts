@@ -863,6 +863,42 @@ describe('removing a member', () => {
     expect(hubPageSchema.parse(hubs.json()).items).toEqual([])
   })
 
+  // An admin can't end an owner-role invite (footnote 1, migration 0010), except as part of
+  // removing its creator: here an owner who invited an owner and was then demoted (#130).
+  it('expires an owner-role invite when an admin removes its demoted creator', async () => {
+    const invite = await call('own2', 'POST', '/v1/workspaces/w1/invites', {
+      workspaceRole: 'owner',
+    })
+    expect(invite.statusCode).toBe(201)
+    const inviteId = invite.json<{ invite: { id: string } }>().invite.id
+    const demoted = await call('own', 'PATCH', '/v1/workspaces/w1/members/own2', {
+      workspaceRole: 'admin',
+    })
+    expect(demoted.statusCode).toBe(200)
+
+    expect((await call('adm', 'DELETE', '/v1/workspaces/w1/members/own2')).statusCode).toBe(204)
+
+    const row = await db
+      .selectFrom('invite')
+      .select(['used_at', sql<boolean>`expires_at = created_at`.as('ended')])
+      .where('workspace_id', '=', 'w1')
+      .where('id', '=', inviteId)
+      .executeTakeFirstOrThrow()
+    expect(row).toEqual({ used_at: null, ended: true })
+    const [entry] = await db
+      .selectFrom('access_log')
+      .select('detail')
+      .where('action', '=', 'member.remove')
+      .execute()
+    expect(entry?.detail).toMatchObject({ expiredInvites: [inviteId] })
+    const redeem = await app.inject({
+      method: 'POST',
+      url: `/v1/auth/invites/${invite.json<{ token: string }>().token}`,
+      payload: { name: 'Late', email: 'late@example.com', password: 'long enough password' },
+    })
+    expect(redeem.statusCode).toBe(404)
+  })
+
   it('keeps the database from linking a removed principal to an account', async () => {
     await call('own', 'DELETE', '/v1/workspaces/w1/members/nog')
     await db

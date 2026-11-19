@@ -97,6 +97,7 @@ describe('useItems: sorting', () => {
     const relation: Attribute = {
       ...title,
       indexed: true,
+      version: 0,
       type: 'relation',
       config: { targetHubId: 'bld', crossHub: false, multiple: true },
     }

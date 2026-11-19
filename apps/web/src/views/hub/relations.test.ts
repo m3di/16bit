@@ -93,6 +93,7 @@ describe('multi-select commits (#50)', () => {
         hubId: 'bld',
         name: 'Tags',
         indexed: false,
+        version: 0,
         type: 'multi_select',
         config: { options },
       },

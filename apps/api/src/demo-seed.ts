@@ -543,7 +543,13 @@ export interface SeedResult {
 /** The seed's attributes parsed with the core contract, with the seed-only `required` flag. */
 function hubDefinitions(ws: WorkspaceSeed, hub: HubSeed): FolderAttributeDefinition[] {
   return hub.attributes.map(({ required = false, indexed = false, ...a }) => ({
-    attribute: attributeSchema.parse({ ...a, workspaceId: ws.id, hubId: hub.id, indexed }),
+    attribute: attributeSchema.parse({
+      ...a,
+      workspaceId: ws.id,
+      hubId: hub.id,
+      indexed,
+      version: 0,
+    }),
     required,
   }))
 }

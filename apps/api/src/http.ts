@@ -48,6 +48,16 @@ export function enforce(decision: Decision, what: string): void {
 export const conflict = (current: Item) =>
   new HttpError('conflict', 'The item has changed since this version', { current })
 
+/** 409 `conflict` for schema writes: `current` is the hub, folder or attribute as it is now. */
+export const schemaConflict = (what: string, current: unknown) =>
+  new HttpError('conflict', `The ${what} has changed since this version`, { current })
+
+/** The SQLSTATE of a database error, if it is one. */
+export const sqlState = (error: unknown): string | undefined => {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : undefined
+}
+
 /** Parses request input with a shared schema from packages/core, or throws a 400. */
 export function parse<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   const result = schema.safeParse(input ?? {})

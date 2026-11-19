@@ -171,6 +171,7 @@ describe('api contracts', () => {
       idPrefix: 'HUB',
       itemCount: 0,
       version: 1,
+      titleAttributeId: null,
     }
     const body = {
       hub,

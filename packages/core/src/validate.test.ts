@@ -7,7 +7,7 @@ import {
   type FolderAttributeDefinition,
 } from './index.ts'
 
-const base = { workspaceId: 'w1', hubId: 'h1', indexed: false }
+const base = { workspaceId: 'w1', hubId: 'h1', indexed: false, version: 0 }
 
 const attr = (a: Record<string, unknown>): Attribute => attributeSchema.parse({ ...base, ...a })
 
