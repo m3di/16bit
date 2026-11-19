@@ -84,9 +84,12 @@ export function getJson<T>(
   return requestJson('GET', path, undefined, schema, fetchFn, options)
 }
 
-/** POSTs or PATCHes `body` as JSON to `path` and checks the response against `schema`. */
+/**
+ * POSTs, PATCHes or DELETEs `body` as JSON to `path` and checks the response against `schema`.
+ * An `undefined` body sends none, as for a DELETE.
+ */
 export function sendJson<T>(
-  method: 'POST' | 'PATCH',
+  method: 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body: unknown,
   schema: Schema<T>,
@@ -94,6 +97,17 @@ export function sendJson<T>(
   options: RequestOptions = {},
 ) {
   return requestJson(method, path, body, schema, fetchFn, options)
+}
+
+/** PUTs `body` as JSON to `path` (a whole list, such as a folder's attributes). */
+export function putJson<T>(
+  path: string,
+  body: unknown,
+  schema: Schema<T>,
+  fetchFn: Fetch = fetch,
+  options: RequestOptions = {},
+) {
+  return requestJson('PUT', path, body, schema, fetchFn, options)
 }
 
 async function requestJson<T>(
