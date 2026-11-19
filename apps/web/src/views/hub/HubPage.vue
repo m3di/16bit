@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useSession } from '../../session/session.ts'
 import { canManageSchema } from '../hub-settings/schema.ts'
+import { viewerOf } from '../hub-settings/access.ts'
 import ShellUser from '../../session/ShellUser.vue'
 import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -78,6 +79,12 @@ const managesSchema = computed(() => {
   const d = description.value
   const me = session.me.value
   return !!d && me.state === 'ready' && canManageSchema(me.data, workspaceId, d.hubRole)
+})
+// Owners and admins also manage access, agent keys and deletion there (docs/ROLES.md).
+const opensSettings = computed(() => {
+  const me = session.me.value
+  const role = me.state === 'ready' ? viewerOf(me.data, workspaceId)?.workspaceRole : undefined
+  return managesSchema.value || role === 'owner' || role === 'admin'
 })
 
 const openFolderId = computed(() => folderId ?? hubId)
@@ -211,10 +218,10 @@ async function submitCreate(values: ItemValues) {
 <template>
   <AppShell>
     <template #actions>
-      <!-- Hub admins change folders and attributes in hub settings (hub.manageSchema). -->
+      <!-- Hub admins, owners and admins manage the hub in its settings. -->
       <RouterLink
-        v-if="managesSchema"
-        :to="{ name: 'hub-settings-folders', params: { workspaceId, hubId } }"
+        v-if="opensSettings"
+        :to="{ name: 'hub-settings-general', params: { workspaceId, hubId } }"
         class="border-b border-line2 text-secondary text-ink no-underline hover:border-line3"
         data-hub-settings-link
         >Hub settings</RouterLink
@@ -316,6 +323,13 @@ async function submitCreate(values: ItemValues) {
       >
         <ItemPanelBody :item="panelItem" @retry="retryPanel">
           <template #default="{ item }">
+            <RouterLink
+              v-if="!items.isCreating(item.id)"
+              :to="{ name: 'item', params: { workspaceId, itemId: item.id } }"
+              class="self-start border-b border-line2 text-ink no-underline hover:border-line3"
+              data-item-page-link
+              >Open page</RouterLink
+            >
             <ItemDetails
               :key="item.id"
               :item="item"

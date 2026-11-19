@@ -1,4 +1,4 @@
-import type { FolderAttributeDefinition, HubDescription, Item, LinkedItem } from '@16bit/core'
+import type { HubDescription, Item, LinkedItem } from '@16bit/core'
 import type { RelationTarget } from '../../ui/index.ts'
 import { folderColumns } from './useHub.ts'
 
@@ -19,18 +19,24 @@ export type ChipView =
   | null
 
 /**
- * The title of an item: the value of the first text attribute its folder shows, in position
- * order. Core has no title of its own (raised on #50). Empty when there is no such value.
+ * The title of an item: its value for the hub's title attribute (D50), trimmed. `''` when the
+ * hub names none or the value is empty; the item then shows only its mono ID. Every place that
+ * titles an item uses this: relation chips, the relation picker and the item page.
  */
-export function itemTitle(item: Item, columns: readonly FolderAttributeDefinition[]): string {
-  const first = columns.find((c) => c.attribute.type === 'text')
-  const value = first ? item.values[first.attribute.id] : undefined
+export function itemTitle(item: Item, hub: HubDescription): string {
+  const id = hub.hub.titleAttributeId
+  const value = id ? item.values[id] : undefined
   return typeof value === 'string' ? value.trim() : ''
 }
 
-/** The first text attribute of a folder, which item titles come from and the picker searches. */
-export function titleAttribute(columns: readonly FolderAttributeDefinition[]) {
-  return columns.find((c) => c.attribute.type === 'text')?.attribute ?? null
+/**
+ * The hub's title attribute when `folderId` shows it, else `null`. The relation picker searches
+ * it on the server (`contains`) when it is indexed, and among the loaded items otherwise.
+ */
+export function titleAttribute(hub: HubDescription, folderId: string) {
+  const id = hub.hub.titleAttributeId
+  if (!id) return null
+  return folderColumns(hub, folderId).find((c) => c.attribute.id === id)?.attribute ?? null
 }
 
 /** `BLD-12` for an item, given its hub. */
@@ -43,7 +49,7 @@ export const displayId = (hub: HubDescription, item: Item) =>
  */
 export function readableTarget(item: Item, hub: HubDescription): RelationTarget {
   const id = displayId(hub, item)
-  const title = itemTitle(item, folderColumns(hub, item.folderId))
+  const title = itemTitle(item, hub)
   return title
     ? { access: 'ok', id: item.id, title, displayId: id }
     : { access: 'ok', id: item.id, title: id }

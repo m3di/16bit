@@ -2,10 +2,28 @@
 import { computed, onMounted } from 'vue'
 import ShellUser from '../session/ShellUser.vue'
 import { AppShell } from '../ui/index.ts'
+import { useSession } from '../session/session.ts'
+import { viewerOf } from './hub-settings/access.ts'
 import { useDashboard } from './home/useDashboard.ts'
 import WorkspaceList from './home/WorkspaceList.vue'
 
-const { workspaces, totals, load, reloadHubs } = useDashboard()
+const { workspaces, totals, selfGrants, load, reloadHubs, grantSelf, dismissSelfGrant } =
+  useDashboard()
+const session = useSession()
+
+// Owners and admins may grant themselves access to a hub they see as "no access" (D45).
+const selfIn = (workspaceId: string) => {
+  const me = session.me.value
+  const viewer = viewerOf(me.state === 'ready' ? me.data : null, workspaceId)
+  return viewer && (viewer.workspaceRole === 'owner' || viewer.workspaceRole === 'admin')
+    ? viewer
+    : null
+}
+const selfGrantIn = (workspaceId: string) => selfIn(workspaceId) !== null
+function onGrantSelf(workspaceId: string, hubId: string) {
+  const viewer = selfIn(workspaceId)
+  if (viewer) void grantSelf(workspaceId, hubId, viewer.id)
+}
 
 onMounted(() => {
   void load()
@@ -32,7 +50,15 @@ const summary = computed(() =>
         <span v-if="summary" class="text-ink2" data-summary>{{ summary }}</span>
       </div>
 
-      <WorkspaceList :workspaces="workspaces" @retry="load()" @retry-hubs="reloadHubs" />
+      <WorkspaceList
+        :workspaces="workspaces"
+        :self-grant-in="selfGrantIn"
+        :self-grants="selfGrants"
+        @retry="load()"
+        @retry-hubs="reloadHubs"
+        @grant-self="onGrantSelf"
+        @dismiss-self-grant="dismissSelfGrant"
+      />
     </main>
   </AppShell>
 </template>

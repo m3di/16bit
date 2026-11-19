@@ -1,4 +1,4 @@
-import { validateItemValues, type FolderAttributeDefinition } from '@16bit/core'
+import { validateItemValues, type Attribute, type FolderAttributeDefinition } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { description, item } from './fixtures.test-utils.ts'
 import {
@@ -8,18 +8,43 @@ import {
   multiSelectToggled,
   readableTarget,
   showsLoadedOnlyNote,
+  titleAttribute,
   toggled,
 } from './relations.ts'
-import { folderColumns } from './useHub.ts'
 
 const hubOf = () => description
 
 describe('item titles', () => {
-  it('uses the first text attribute of the folder', () => {
-    const columns = folderColumns(description, 'bld')
-    expect(itemTitle(item('i1', 4, { title: ' Ship it ', points: 3 }), columns)).toBe('Ship it')
-    expect(itemTitle(item('i1', 4, { points: 3 }), columns)).toBe('')
-    expect(itemTitle(item('i1', 4, { title: 'x' }), [])).toBe('')
+  it("uses the hub's title attribute (D50), whatever the folder shows", () => {
+    expect(itemTitle(item('i1', 4, { title: ' Ship it ', points: 3 }), description)).toBe('Ship it')
+    expect(itemTitle(item('i1', 4, { points: 3 }), description)).toBe('')
+  })
+
+  it('is empty when the hub names no title attribute, even with a text value', () => {
+    const untitled = { ...description, hub: { ...description.hub, titleAttributeId: null } }
+    expect(itemTitle(item('i1', 4, { title: 'Ship it' }), untitled)).toBe('')
+    expect(readableTarget(item('i1', 4, { title: 'Ship it' }), untitled)).toEqual({
+      access: 'ok',
+      id: 'i1',
+      title: 'BLD-4',
+    })
+  })
+
+  it('is not the first text attribute when the hub names another one', () => {
+    const summary = { ...description.attributes[0], id: 'summary', name: 'Summary' } as Attribute
+    const hub = {
+      ...description,
+      hub: { ...description.hub, titleAttributeId: 'summary' },
+      attributes: [...description.attributes, summary],
+    }
+    expect(itemTitle(item('i1', 4, { title: 'First', summary: 'Chosen' }), hub)).toBe('Chosen')
+  })
+
+  it('offers the title attribute to search only in folders that show it', () => {
+    expect(titleAttribute(description, 'bld')?.id).toBe('title')
+    expect(titleAttribute(description, 'nowhere')).toBeNull()
+    const untitled = { ...description, hub: { ...description.hub, titleAttributeId: null } }
+    expect(titleAttribute(untitled, 'bld')).toBeNull()
   })
 
   it('makes a chip with the display ID and title, or the display ID alone', () => {
