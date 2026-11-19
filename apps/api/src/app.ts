@@ -63,6 +63,7 @@ import {
   setHubGrant,
 } from './members.ts'
 import {
+  attributeUsage,
   createAttribute,
   createFolder,
   deleteAttribute,
@@ -536,6 +537,13 @@ export function buildApp(options: AppOptions): FastifyInstance {
               createAttribute(trx, workspaceId, request.principal, hubId, body),
             )
             return reply.status(201).send(attribute)
+          })
+
+          ws.get('/attributes/:attributeId/usage', async (request) => {
+            const { workspaceId, attributeId } = parse(attributeParams, request.params)
+            return scoped(request, (trx) =>
+              attributeUsage(trx, workspaceId, request.principal, attributeId),
+            )
           })
 
           ws.patch('/attributes/:attributeId', async (request) => {

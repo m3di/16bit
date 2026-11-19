@@ -1,7 +1,12 @@
 import { z } from 'zod'
 import { pageSchema } from './api.ts'
 import { inviteSchema } from './auth.ts'
-import { attributeTypes, selectConfigSchema, type SelectConfig } from './attribute-types/index.ts'
+import {
+  attributeTypes,
+  selectConfigSchema,
+  selectOptionSchema,
+  type SelectConfig,
+} from './attribute-types/index.ts'
 import {
   type Attribute,
   attributeSchema,
@@ -170,6 +175,23 @@ export const deleteAttributeQuerySchema = z.strictObject({
   confirm: z.coerce.number().int().min(0).optional(),
 })
 export type DeleteAttributeQuery = z.infer<typeof deleteAttributeQuerySchema>
+
+/**
+ * `GET /attributes/:attributeId/usage` (`hub.manageSchema`), select and multi-select only (400
+ * otherwise): for each of the attribute's options, in option order, the number of the hub's
+ * items that hold it, zero included. `version` is the attribute's, so a client can tell whether
+ * the counts belong to the options it shows. For the options editor (D51); a removal still
+ * answers 409 `confirm_required` with its own count.
+ */
+export const attributeUsageSchema = z.strictObject({
+  attributeId: idSchema,
+  version: attributeVersionSchema,
+  options: z
+    .array(z.strictObject({ optionId: selectOptionSchema.shape.id, items: z.int().min(0) }))
+    // As many as a select config holds (selectConfigSchema).
+    .max(500),
+})
+export type AttributeUsage = z.infer<typeof attributeUsageSchema>
 
 export type ApplyAttributeUpdateResult =
   | {

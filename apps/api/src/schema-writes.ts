@@ -5,6 +5,7 @@ import {
   can,
   indexEntries,
   type Attribute,
+  type AttributeUsage,
   type CreateAttribute,
   type CreateFolder,
   type DeleteAttributeQuery,
@@ -643,6 +644,61 @@ export async function createAttribute(
     // attribute_target_lock: the target hub was deleted after the grant check.
     if (crossHub && sqlState(error) === '42501') throw notFound('Hub')
     throw error
+  }
+}
+
+/**
+ * `GET /attributes/:attributeId/usage` (`hub.manageSchema`): per option, how many of the hub's
+ * items hold it (#141). Read from `item_index` when the attribute is indexed (select and
+ * multi-select rows hold the option ID in `txt`), else from `item.values`, where `@>` matches
+ * both a select's string and a multi-select's list. One statement, so the counts come from one
+ * snapshot. The answer has one entry per option (at most 500); the count reads every item in the
+ * hub that holds a value, like the strip it precedes. Takes no locks: it only reads.
+ */
+export async function attributeUsage(
+  trx: Trx,
+  workspaceId: string,
+  me: Subject,
+  attributeId: string,
+): Promise<AttributeUsage> {
+  const hubId = await hubOfAttribute(trx, workspaceId, attributeId)
+  const hubGrant = await ownGrant(trx, workspaceId, hubId, me.id)
+  enforce(can(me, 'hub.manageSchema', { hubGrant }), 'Attribute')
+  const row = await trx
+    .selectFrom('attribute')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('id', '=', attributeId)
+    .executeTakeFirst()
+  if (!row) throw notFound('Attribute')
+  const attribute = toAttribute(row)
+  if (attribute.type !== 'select' && attribute.type !== 'multi_select') {
+    throw invalid('Only select and multi-select attributes have options')
+  }
+  const ids = attribute.config.options.map((o) => o.id)
+  const counts = new Map<string, number>()
+  if (ids.length > 0) {
+    const { rows } = attribute.indexed
+      ? await sql<{ option_id: string; items: number }>`
+          SELECT txt AS option_id, count(DISTINCT item_id)::int AS items
+          FROM item_index
+          WHERE workspace_id = ${workspaceId} AND attribute_id = ${attributeId}
+            AND txt = ANY(${ids}::text[])
+          GROUP BY txt`.execute(trx)
+      : await sql<{ option_id: string; items: number }>`
+          SELECT o.id AS option_id, count(*)::int AS items
+          FROM item i
+          JOIN unnest(${ids}::text[]) AS o (id)
+            ON (i.values -> ${attributeId}::text) @> to_jsonb(o.id)
+          WHERE i.workspace_id = ${workspaceId} AND i.hub_id = ${hubId}
+            AND i.values ? ${attributeId}::text
+          GROUP BY o.id`.execute(trx)
+    for (const r of rows) counts.set(r.option_id, r.items)
+  }
+  return {
+    attributeId,
+    version: attribute.version,
+    options: ids.map((optionId) => ({ optionId, items: counts.get(optionId) ?? 0 })),
   }
 }
 
