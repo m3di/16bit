@@ -362,3 +362,135 @@ describe('attributes', () => {
     expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2)
   })
 })
+
+describe('the hub itself (general settings)', () => {
+  const hubPath = `${base}/hubs/${HUB}`
+  const saved = (body: Record<string, unknown>) => ({
+    ...description().hub,
+    ...body,
+    version: Number(body['version']) + 1,
+  })
+
+  it('shows a rename at once and sends it with the version', async () => {
+    const { model, writes, data } = await setup({
+      [`PATCH ${hubPath}`]: (call) => json(saved(call.body as Record<string, unknown>)),
+    })
+    const done = model.updateHub({ name: 'Platform' })
+    expect(data().hub.name).toBe('Platform')
+    expect(model.hubSaving.value).toBe(1)
+    const result = await done
+    expect(result.ok).toBe(true)
+    expect(writes()).toEqual([
+      { method: 'PATCH', path: hubPath, body: { version: 2, name: 'Platform' } },
+    ])
+    expect(data().hub).toMatchObject({ name: 'Platform', version: 3 })
+    expect(model.hubSaving.value).toBe(0)
+  })
+
+  it('sends changes one at a time, each with the version the last answer left', async () => {
+    const { model, writes, data } = await setup({
+      [`PATCH ${hubPath}`]: (call) => json(saved(call.body as Record<string, unknown>)),
+    })
+    await Promise.all([
+      model.updateHub({ color: 'red' }),
+      model.updateHub({ titleAttributeId: null }),
+    ])
+    expect(writes().map((w) => w.body)).toEqual([
+      { version: 2, color: 'red' },
+      { version: 3, titleAttributeId: null },
+    ])
+    expect(data().hub).toMatchObject({ color: 'red', titleAttributeId: null, version: 4 })
+  })
+
+  it('puts the saved value back and says why when the API refuses', async () => {
+    const { model, data } = await setup({
+      [`PATCH ${hubPath}`]: () =>
+        json({ error: 'invalid_request', message: 'Not a text attribute' }, 400),
+    })
+    const result = await model.updateHub({ titleAttributeId: 'stage' })
+    expect(result).toMatchObject({ ok: false, kind: 'refused' })
+    expect(data().hub.titleAttributeId).toBe('title')
+    expect(model.hubNotice.value).toBe('Your change was not saved. Not a text attribute')
+  })
+
+  it('keeps a newer choice when an older change to the same field is refused', async () => {
+    let n = 0
+    const { model, data } = await setup({
+      [`PATCH ${hubPath}`]: (call) =>
+        ++n === 1
+          ? json({ error: 'internal', message: 'Boom' }, 500)
+          : json(saved(call.body as Record<string, unknown>)),
+    })
+    const first = model.updateHub({ name: 'One' })
+    const second = model.updateHub({ name: 'Two' })
+    await first
+    // The refused first change does not undo the second, which is still on its way.
+    expect(data().hub.name).toBe('Two')
+    await second
+    expect(data().hub.name).toBe('Two')
+  })
+
+  it('a 403 rolls back with the reason and reads the hub again', async () => {
+    const { model, data, calls } = await setup({
+      [`PATCH ${hubPath}`]: () => json({ error: 'forbidden', message: 'No' }, 403),
+    })
+    await model.updateHub({ name: 'Mine' })
+    expect(data().hub.name).toBe('Build')
+    expect(model.hubNotice.value).toBe(
+      'Only hub admins can change this hub. Your change was not saved.',
+    )
+    await flush()
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2)
+  })
+
+  it('a conflict shows the server hub and drops the changes queued behind it', async () => {
+    const theirs = { ...description().hub, name: 'Theirs', color: 'pink', version: 7 }
+    const { model, writes, data } = await setup({
+      [`PATCH ${hubPath}`]: () => conflict(theirs),
+    })
+    const [first, second] = await Promise.all([
+      model.updateHub({ name: 'Mine' }),
+      model.updateHub({ color: 'red' }),
+    ])
+    expect(first).toMatchObject({ ok: false, kind: 'conflict' })
+    expect(second).toMatchObject({ ok: false, kind: 'conflict' })
+    expect(writes()).toHaveLength(1)
+    expect(data().hub).toMatchObject({ name: 'Theirs', color: 'pink', version: 7 })
+    expect(model.hubNotice.value).toContain('your change was not saved')
+  })
+
+  it('deletes the hub with its version', async () => {
+    const { model, writes } = await setup({
+      [`DELETE ${hubPath}?version=2`]: () => new Response(null, { status: 204 }),
+    })
+    expect(await model.deleteHub()).toEqual({ ok: true, data: undefined })
+    expect(writes()).toEqual([{ method: 'DELETE', path: `${hubPath}?version=2`, body: undefined }])
+  })
+
+  it('says why a delete was refused (D52)', async () => {
+    const cases: [Response, string][] = [
+      [
+        json({ error: 'not_empty', message: 'x' }, 409),
+        'The hub still holds items or folders, so it was not deleted.',
+      ],
+      [json({ error: 'in_use', message: 'x' }, 409), 'A relation attribute in another hub'],
+      [json({ error: 'forbidden', message: 'x' }, 403), 'Your role does not allow deleting'],
+    ]
+    for (const [answer, text] of cases) {
+      const { model } = await setup({ [`DELETE ${hubPath}?version=2`]: () => answer.clone() })
+      const result = await model.deleteHub()
+      expect(result.ok).toBe(false)
+      expect(!result.ok && result.message).toContain(text)
+    }
+  })
+
+  it('a stale delete shows the current hub and refuses', async () => {
+    const current = { ...description().hub, itemCount: 1, version: 9 }
+    const { model, data } = await setup({
+      [`DELETE ${hubPath}?version=2`]: () => conflict(current),
+    })
+    const result = await model.deleteHub()
+    expect(result).toMatchObject({ ok: false, kind: 'conflict' })
+    expect(data().hub.version).toBe(9)
+  })
+})

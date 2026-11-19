@@ -1,10 +1,21 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { BaseButton, HubCard, StateBlock } from '../../ui/index.ts'
-import type { WorkspaceEntry } from './useDashboard.ts'
+import { BaseButton, FormNotice, HubCard, StateBlock } from '../../ui/index.ts'
+import { selfGrantKey, type SelfGrant, type WorkspaceEntry } from './useDashboard.ts'
 
-const { entry } = defineProps<{ entry: WorkspaceEntry }>()
-defineEmits<{ retry: [] }>()
+const {
+  entry,
+  canSelfGrant,
+  selfGrants = new Map<string, SelfGrant>(),
+} = defineProps<{
+  entry: WorkspaceEntry
+  /** The reader is an owner or admin here, so may grant themselves access (D45). */
+  canSelfGrant?: boolean
+  selfGrants?: ReadonlyMap<string, SelfGrant>
+}>()
+defineEmits<{ retry: []; grantSelf: [hubId: string]; dismissSelfGrant: [hubId: string] }>()
+
+const ask = (hubId: string) => selfGrants.get(selfGrantKey(entry.workspace.id, hubId))
 
 const headingId = computed(() => `workspace-${entry.workspace.id}`)
 </script>
@@ -60,8 +71,30 @@ const headingId = computed(() => `workspace-${entry.workspace.id}`)
           :to="{ name: 'hub', params: { workspaceId: hub.workspaceId, hubId: hub.id } }"
           class="flex-1"
         />
-        <!-- Owners and admins without a grant: name only. Self-granting is API-only in M1. -->
-        <HubCard v-else :name="hub.name" :color="hub.color" no-access class="flex-1" />
+        <!-- Owners and admins without a grant: name only, and a way to grant themselves access. -->
+        <template v-else>
+          <HubCard :name="hub.name" :color="hub.color" no-access class="flex-1" />
+          <div v-if="canSelfGrant" class="flex flex-col gap-1 pt-1.5" data-self-grant>
+            <span>
+              <BaseButton
+                size="sm"
+                variant="quiet"
+                :disabled="ask(hub.id)?.state === 'busy'"
+                @click="$emit('grantSelf', hub.id)"
+                >{{ ask(hub.id)?.state === 'busy' ? 'Giving access' : 'Give myself access'
+                }}<span class="sr-only"> to {{ hub.name }}</span></BaseButton
+              >
+            </span>
+            <FormNotice v-if="ask(hub.id)?.state === 'error'" data-self-grant-error>
+              {{ (ask(hub.id) as { message: string }).message }}
+              <template #action>
+                <BaseButton size="sm" variant="quiet" @click="$emit('dismissSelfGrant', hub.id)"
+                  >Dismiss</BaseButton
+                >
+              </template>
+            </FormNotice>
+          </div>
+        </template>
       </li>
     </ul>
   </section>

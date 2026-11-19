@@ -179,3 +179,68 @@ describe('useDashboard', () => {
     expect(hubCalls).toBe(1)
   })
 })
+
+describe('self-grant from a "no access" card (D45)', () => {
+  const none = { access: 'none', workspaceId: 'a', id: 'fin', name: 'Finance', color: 'amber' }
+  const granted = { ...hub('a', 'fin', 12), access: 'granted', hubRole: 'hub_admin' }
+
+  function fakeWith(answer: () => Response) {
+    let grantedNow = false
+    const calls: { method: string; path: string; body: unknown }[] = []
+    const fetchFn: Fetch = (input, init) => {
+      const path = new URL(urlOf(input), 'http://x').pathname
+      const method = init?.method ?? 'GET'
+      calls.push({
+        method,
+        path,
+        body: typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined,
+      })
+      if (path === '/v1/workspaces') return Promise.resolve(page([ws('a')]))
+      if (path === '/v1/workspaces/a/hubs')
+        return Promise.resolve(page([grantedNow ? granted : none]))
+      if (method === 'PUT' && path === '/v1/workspaces/a/hubs/fin/grants/me-a') {
+        const res = answer()
+        grantedNow = res.ok
+        return Promise.resolve(res)
+      }
+      return Promise.resolve(json({ error: 'not_found', message: 'x' }, 404))
+    }
+    return { fetchFn, calls }
+  }
+
+  const hubsOf = (d: ReturnType<typeof useDashboard>) => {
+    const v = d.workspaces.value
+    const h = v.state === 'ready' ? v.data[0]?.hubs : undefined
+    return h?.state === 'ready' ? h.data : null
+  }
+
+  it('grants hub admin to the reader, then shows the hub with its count', async () => {
+    const { fetchFn, calls } = fakeWith(() =>
+      json({ workspaceId: 'a', hubId: 'fin', principalId: 'me-a', hubRole: 'hub_admin' }),
+    )
+    const d = useDashboard(fetchFn)
+    await d.load()
+    const done = d.grantSelf('a', 'fin', 'me-a')
+    expect(d.selfGrants.value.get('a/fin')).toEqual({ state: 'busy' })
+    // The list stays on screen while it is read again.
+    expect(hubsOf(d)?.[0]?.access).toBe('none')
+    await done
+    expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ hubRole: 'hub_admin' })
+    expect(hubsOf(d)?.[0]).toMatchObject({ access: 'granted', itemCount: 12 })
+    expect(d.selfGrants.value.has('a/fin')).toBe(false)
+  })
+
+  it('says why when refused, and keeps the card as it was', async () => {
+    const { fetchFn } = fakeWith(() => json({ error: 'forbidden', message: 'No' }, 403))
+    const d = useDashboard(fetchFn)
+    await d.load()
+    await d.grantSelf('a', 'fin', 'me-a')
+    expect(d.selfGrants.value.get('a/fin')).toEqual({
+      state: 'error',
+      message: 'Your role does not allow giving yourself access.',
+    })
+    expect(hubsOf(d)?.[0]?.access).toBe('none')
+    d.dismissSelfGrant('a', 'fin')
+    expect(d.selfGrants.value.has('a/fin')).toBe(false)
+  })
+})

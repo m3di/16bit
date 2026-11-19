@@ -9,16 +9,6 @@ import type { RouteLocationRaw } from 'vue-router'
 import type { ApiRequestError } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
 
-/**
- * An item's title: its value for the hub's title attribute (D50), trimmed. `''` when the hub
- * names none or the value is empty; the page then shows only the item's mono ID.
- */
-export function pageTitle(item: Item, hub: HubDescription): string {
-  const id = hub.hub.titleAttributeId
-  const value = id ? item.values[id] : undefined
-  return typeof value === 'string' ? value.trim() : ''
-}
-
 /** The relation attributes of the item's folder that its read expands, in position order. */
 export const expandFor = (columns: readonly FolderAttributeDefinition[]): string[] =>
   columns

@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { BaseButton, StateBlock } from '../../ui/index.ts'
-import type { Load, WorkspaceEntry } from './useDashboard.ts'
+import type { Load, SelfGrant, WorkspaceEntry } from './useDashboard.ts'
 import WorkspaceSection from './WorkspaceSection.vue'
 
-defineProps<{ workspaces: Load<WorkspaceEntry[]> }>()
-defineEmits<{ retry: []; retryHubs: [workspaceId: string] }>()
+const { selfGrantIn = () => false, selfGrants = new Map<string, SelfGrant>() } = defineProps<{
+  workspaces: Load<WorkspaceEntry[]>
+  /** Whether the reader may grant themselves access to hubs in a workspace. */
+  selfGrantIn?: (workspaceId: string) => boolean
+  selfGrants?: ReadonlyMap<string, SelfGrant>
+}>()
+defineEmits<{
+  retry: []
+  retryHubs: [workspaceId: string]
+  grantSelf: [workspaceId: string, hubId: string]
+  dismissSelfGrant: [workspaceId: string, hubId: string]
+}>()
 </script>
 
 <template>
@@ -40,7 +50,11 @@ defineEmits<{ retry: []; retryHubs: [workspaceId: string] }>()
       v-for="entry in workspaces.data"
       :key="entry.workspace.id"
       :entry="entry"
+      :can-self-grant="selfGrantIn(entry.workspace.id)"
+      :self-grants="selfGrants"
       @retry="$emit('retryHubs', entry.workspace.id)"
+      @grant-self="$emit('grantSelf', entry.workspace.id, $event)"
+      @dismiss-self-grant="$emit('dismissSelfGrant', entry.workspace.id, $event)"
     />
   </template>
 </template>

@@ -10,8 +10,13 @@ import {
 } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import { truncatedNote } from '../hub/useHub.ts'
+import AccessSection from './AccessSection.vue'
+import { canEditGeneral, viewerOf } from './access.ts'
 import AttributesSection from './AttributesSection.vue'
+import DangerSection from './DangerSection.vue'
 import FoldersSection from './FoldersSection.vue'
+import GeneralSection from './GeneralSection.vue'
+import KeysSection from './KeysSection.vue'
 import {
   canManageSchema,
   READ_ONLY_REASON,
@@ -19,13 +24,16 @@ import {
   SECTION_ROUTES,
   type HubSettingsSection,
 } from './schema.ts'
+import type { HubAccess } from './useHubAccess.ts'
 import type { HubSettings } from './useHubSettings.ts'
 
-const { workspaceId, hubId, section, model, me } = defineProps<{
+const { workspaceId, hubId, section, model, access, me } = defineProps<{
   workspaceId: string
   hubId: string
   section: HubSettingsSection
   model: HubSettings
+  /** Grants, members and agent keys, for the access and key sections. */
+  access: HubAccess
   /** The session, for the reader's workspace role. */
   me: Load<Me | null>
 }>()
@@ -71,6 +79,11 @@ const stateText = computed(() => {
   }
 })
 
+const viewer = computed(() => viewerOf(me.state === 'ready' ? me.data : null, workspaceId))
+const editsGeneral = computed(
+  () => !!description.value && canEditGeneral(viewer.value, description.value.hubRole),
+)
+
 const manages = computed(() => {
   const d = description.value
   return !!d && canManageSchema(me.state === 'ready' ? me.data : null, workspaceId, d.hubRole)
@@ -106,12 +119,14 @@ const sections = computed((): SettingsNavEntry[] =>
     key,
     label: SECTION_LABELS[key],
     to: { name: SECTION_ROUTES[key], params: { workspaceId, hubId } },
+    danger: key === 'danger',
   })),
 )
 
 const title = computed(() => (pageState.value === 'ready' ? hubName.value : 'Hub settings'))
+const schemaSection = computed(() => section === 'folders' || section === 'attributes')
 const pageDescription = computed(() =>
-  pageState.value === 'ready' && !manages.value
+  pageState.value === 'ready' && schemaSection.value && !manages.value
     ? `You can see this hub's folders and attributes. ${READ_ONLY_REASON}`
     : '',
 )
@@ -165,19 +180,49 @@ async function onStatus(text: string, focus: boolean) {
     <p v-if="truncated" class="m-0 text-secondary text-ink3" data-truncated>{{ truncated }}</p>
 
     <template v-if="description">
+      <GeneralSection
+        v-if="section === 'general'"
+        :description="description"
+        :manages="editsGeneral"
+        :model="model"
+      />
+      <AccessSection
+        v-else-if="section === 'access'"
+        :viewer="viewer"
+        :hub-role="description.hubRole"
+        :hub-name="description.hub.name"
+        :access="access"
+        @status="onStatus"
+        @self-change="model.load({ keep: true })"
+      />
       <FoldersSection
-        v-if="section === 'folders'"
+        v-else-if="section === 'folders'"
         :description="description"
         :manages="manages"
         :model="model"
         @status="onStatus"
       />
       <AttributesSection
-        v-else
+        v-else-if="section === 'attributes'"
         :description="description"
         :manages="manages"
         :model="model"
         @status="onStatus"
+      />
+      <KeysSection
+        v-else-if="section === 'keys'"
+        :viewer="viewer"
+        :hub-role="description.hubRole"
+        :hub-name="description.hub.name"
+        :access="access"
+        @status="onStatus"
+      />
+      <DangerSection
+        v-else
+        :viewer="viewer"
+        :description="description"
+        :model="model"
+        :access="access"
       />
     </template>
   </SettingsLayout>

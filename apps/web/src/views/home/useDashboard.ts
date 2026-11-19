@@ -1,6 +1,18 @@
-import { hubPageSchema, workspacePageSchema, type HubListEntry, type Workspace } from '@16bit/core'
+import {
+  hubGrantSchema,
+  hubPageSchema,
+  workspacePageSchema,
+  type HubListEntry,
+  type Workspace,
+} from '@16bit/core'
 import { computed, ref } from 'vue'
-import { asRequestError, getAllPages, type ApiRequestError, type Fetch } from '../../api/client.ts'
+import {
+  asRequestError,
+  getAllPages,
+  putJson,
+  type ApiRequestError,
+  type Fetch,
+} from '../../api/client.ts'
 
 export type Load<T> =
   { state: 'loading' } | { state: 'ready'; data: T } | { state: 'error'; error: ApiRequestError }
@@ -10,6 +22,11 @@ export interface WorkspaceEntry {
   /** Hubs the caller can open, and for owners and admins also those they cannot (`access: 'none'`). */
   hubs: Load<HubListEntry[]>
 }
+
+/** A self-grant on its way, or why it was refused. Keyed by `selfGrantKey`. */
+export type SelfGrant = { state: 'busy' } | { state: 'error'; message: string }
+
+export const selfGrantKey = (workspaceId: string, hubId: string) => `${workspaceId}/${hubId}`
 
 /**
  * The main dashboard's data: the caller's workspaces, then each workspace's hubs in parallel.
@@ -22,14 +39,19 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
   let loading: Promise<void> | null = null
   const loadingHubs = new Map<string, Promise<void>>()
 
-  async function loadHubs(entry: WorkspaceEntry, gen: number) {
-    entry.hubs = { state: 'loading' }
+  /** Self-grants by owners and admins from a "no access" card. */
+  const selfGrants = ref(new Map<string, SelfGrant>())
+
+  async function loadHubs(entry: WorkspaceEntry, gen: number, keep = false) {
+    if (!(keep && entry.hubs.state === 'ready')) entry.hubs = { state: 'loading' }
     const path = `/v1/workspaces/${encodeURIComponent(entry.workspace.id)}/hubs`
     try {
       const hubs = await getAllPages(path, hubPageSchema, fetchFn)
       if (gen === generation) entry.hubs = { state: 'ready', data: hubs }
     } catch (error) {
-      if (gen === generation) entry.hubs = { state: 'error', error: asRequestError(error) }
+      if (gen === generation && !(keep && entry.hubs.state === 'ready')) {
+        entry.hubs = { state: 'error', error: asRequestError(error) }
+      }
     }
   }
 
@@ -71,6 +93,42 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
     await running
   }
 
+  /**
+   * An owner or admin gives themselves hub admin access to a hub they see as "no access"
+   * (docs/ROLES.md, D45). The API logs it in `access_log` (D48). The card turns into a link once
+   * the hub list is read again, since only that read carries the hub's item count.
+   */
+  async function grantSelf(workspaceId: string, hubId: string, principalId: string) {
+    const key = selfGrantKey(workspaceId, hubId)
+    if (selfGrants.value.get(key)?.state === 'busy') return
+    selfGrants.value.set(key, { state: 'busy' })
+    const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/hubs/${encodeURIComponent(hubId)}/grants/${encodeURIComponent(principalId)}`
+    try {
+      await putJson(path, { hubRole: 'hub_admin' }, hubGrantSchema, fetchFn)
+    } catch (raw) {
+      const error = asRequestError(raw)
+      selfGrants.value.set(key, {
+        state: 'error',
+        message: error.isNoPermission
+          ? 'Your role does not allow giving yourself access.'
+          : error.isNotFound
+            ? 'This hub is no longer available.'
+            : `Access was not given. ${error.message}`,
+      })
+      return
+    }
+    const entry =
+      workspaces.value.state === 'ready'
+        ? workspaces.value.data.find((e) => e.workspace.id === workspaceId)
+        : undefined
+    if (entry) await loadHubs(entry, generation, true)
+    selfGrants.value.delete(key)
+  }
+
+  function dismissSelfGrant(workspaceId: string, hubId: string) {
+    selfGrants.value.delete(selfGrantKey(workspaceId, hubId))
+  }
+
   /** Hub and workspace totals, once every workspace's hubs have loaded. */
   const totals = computed(() => {
     const value = workspaces.value
@@ -83,5 +141,5 @@ export function useDashboard(fetchFn: Fetch = (...args) => fetch(...args)) {
     return { hubs, workspaces: value.data.length }
   })
 
-  return { workspaces, totals, load, reloadHubs }
+  return { workspaces, totals, selfGrants, load, reloadHubs, grantSelf, dismissSelfGrant }
 }

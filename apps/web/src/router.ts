@@ -6,6 +6,11 @@ import {
   type RouterHistory,
 } from 'vue-router'
 import HomeView from './views/HomeView.vue'
+import {
+  SECTION_PATHS,
+  SECTION_ROUTES,
+  type HubSettingsSection,
+} from './views/hub-settings/sections.ts'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -34,22 +39,15 @@ const routes: RouteRecordRaw[] = [
     component: () => import('./views/InviteView.vue'),
     meta: { public: true },
   },
-  // Hub settings: folders and attributes so far; general, access and keys come next. Every
-  // reader with a grant may open it; only hub admins change anything (`hub.manageSchema`).
-  // There is no bare `/settings` path: it would shadow a folder whose ID is `settings` on the
-  // hub route below, and clients may choose folder IDs.
-  {
-    path: '/w/:workspaceId/hubs/:hubId/settings/folders',
-    name: 'hub-settings-folders',
+  // Hub settings, one route per section. Every reader with a grant may open it; what they
+  // can change follows `can()`. There is no bare `/settings` path: it would shadow a folder
+  // whose ID is `settings` on the hub route below, and clients may choose folder IDs.
+  ...(Object.keys(SECTION_ROUTES) as HubSettingsSection[]).map((section): RouteRecordRaw => ({
+    path: `/w/:workspaceId/hubs/:hubId/settings/${SECTION_PATHS[section]}`,
+    name: SECTION_ROUTES[section],
     component: () => import('./views/HubSettingsView.vue'),
-    props: (to) => ({ ...hubParams(to), section: 'folders' }),
-  },
-  {
-    path: '/w/:workspaceId/hubs/:hubId/settings/attributes',
-    name: 'hub-settings-attributes',
-    component: () => import('./views/HubSettingsView.vue'),
-    props: (to) => ({ ...hubParams(to), section: 'attributes' }),
-  },
+    props: (to) => ({ ...hubParams(to), section }),
+  })),
   {
     // The selected folder is optional: without it the hub's own items show. `?item=` opens
     // the item panel, so a selected item can be linked and survives a reload.

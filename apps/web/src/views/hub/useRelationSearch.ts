@@ -3,7 +3,6 @@ import { computed, ref } from 'vue'
 import { asRequestError, sendJson, type ApiRequestError, type Fetch } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
 import { displayId, itemTitle, titleAttribute } from './relations.ts'
-import { folderColumns } from './useHub.ts'
 
 /** Items per page of picker results. */
 export const PICKER_PAGE = 20
@@ -19,7 +18,8 @@ export interface Results {
  * Candidates for a relation, read through `POST /query` on one folder of the target hub. The
  * query only answers with items the reader can read, so the picker never offers others.
  *
- * Search runs on the server when the folder's title attribute is indexed (`contains`).
+ * Search runs on the server when the folder shows the hub's title attribute (D50) and it is
+ * indexed (`contains`).
  * Otherwise the loaded pages are filtered here, and `local` says so, so the picker can say it
  * searched only what was loaded.
  */
@@ -39,7 +39,7 @@ export function useRelationSearch(
   const folder = computed(() => folderId.value ?? target()?.hub.id ?? null)
   const title = computed(() => {
     const hub = target()
-    return hub && folder.value ? titleAttribute(folderColumns(hub, folder.value)) : null
+    return hub && folder.value ? titleAttribute(hub, folder.value) : null
   })
   /** The server cannot filter on the title, so results are filtered among loaded pages. */
   const local = computed(() => !title.value?.indexed)
@@ -109,7 +109,7 @@ export function useRelationSearch(
     return r.data.items.filter((item) => {
       if (skip.has(item.id)) return false
       if (!local.value || !query) return true
-      const name = itemTitle(item, folderColumns(hub, item.folderId)).toLowerCase()
+      const name = itemTitle(item, hub).toLowerCase()
       return name.includes(query) || displayId(hub, item).toLowerCase().includes(query)
     })
   }
