@@ -10,7 +10,9 @@ import {
   folderLink,
   hiddenNote,
   itemFolder,
+  afterExpandRead,
   itemPageLink,
+  malformedItemId,
   pageState,
 } from './item-page.ts'
 import { itemTitle } from '../hub/relations.ts'
@@ -121,6 +123,40 @@ describe('pageState', () => {
       item: ready.data,
       hub: description,
     })
+  })
+})
+
+describe('malformedItemId (#145)', () => {
+  it('is not found, with no retry, for an ID the API would refuse', () => {
+    for (const id of ['has space', 'a/b', '', 'x'.repeat(65), 'é']) {
+      const load = malformedItemId(id)
+      expect(load).toMatchObject({ state: 'error', error: { status: 404 } })
+      expect(pageState(load ?? { state: 'loading' }, null).state).toBe('not-found')
+    }
+  })
+
+  it('lets a well-formed ID through to the API', () => {
+    expect(malformedItemId('i1')).toBeNull()
+    expect(malformedItemId('0b8f_A-9')).toBeNull()
+  })
+})
+
+describe('afterExpandRead (#145)', () => {
+  const first = { state: 'ready' as const, data: item('i1', 1) }
+  const failed = (status: number) => ({
+    state: 'error' as const,
+    error: new ApiRequestError(status === 404 ? 'not_found' : 'internal', 'x', status),
+  })
+
+  it('shows not found or no permission when the item went away between the reads', () => {
+    expect(pageState(afterExpandRead(first, failed(404)), null).state).toBe('not-found')
+    expect(pageState(afterExpandRead(first, failed(403)), null).state).toBe('no-permission')
+  })
+
+  it('keeps the first copy when the second read works or fails for another reason', () => {
+    expect(afterExpandRead(first, { state: 'ready', data: item('i1', 2) })).toBe(first)
+    expect(afterExpandRead(first, failed(500))).toBe(first)
+    expect(afterExpandRead(first, failed(0))).toBe(first)
   })
 })
 
