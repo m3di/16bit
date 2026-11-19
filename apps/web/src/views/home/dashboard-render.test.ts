@@ -254,7 +254,8 @@ describe('WorkspaceSection self-grant', () => {
       selfGrants: new Map([['w/fin', { state: 'stale' }]]),
     })
     expect(html).toContain('data-self-grant-stale')
-    expect(html).toContain('You now have access to Finance')
+    // The failure comes first: the notice is an error.
+    expect(html).toContain('The hubs could not be loaded again. You now have access to Finance;')
     expect(html).toContain('Load hubs again')
     expect(html).toContain('role="alert"')
     // Granting again would change nothing: the offer waits for the list.

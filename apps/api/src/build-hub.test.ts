@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import pg from 'pg'
 import { execFile } from 'node:child_process'
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -673,16 +676,29 @@ describe('seed:build-hub', () => {
   }, 30_000)
 
   it('with the hub deleted, says so and never calls gh (#150)', async () => {
-    await withApi(async (call) => {
-      expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
-    })
     const script = fileURLToPath(new URL('./seed-build-hub.ts', import.meta.url))
-    // An empty PATH: a call to gh would fail and the script would exit 1.
-    const { stdout, stderr } = await promisify(execFile)(process.execPath, [script], {
-      env: { PATH: '', MIGRATION_DATABASE_URL: dbUrl },
-    })
-    expect(stderr).toBe('')
-    expect(stdout).toContain(`seed:build-hub: ${HUB_DELETED_MESSAGE}`)
-    expect(stdout).toContain('only comes back on a fresh database')
+    // A fake gh, the only command on PATH, that leaves a marker file and fails.
+    const bin = await mkdtemp(join(tmpdir(), 'build-hub-gh-'))
+    const marker = join(bin, 'gh-was-called')
+    await writeFile(join(bin, 'gh'), '#!/bin/sh\n: > "$GH_MARKER"\nexit 1\n', { mode: 0o755 })
+    const env = { PATH: bin, GH_MARKER: marker, MIGRATION_DATABASE_URL: dbUrl }
+    const run = () => promisify(execFile)(process.execPath, [script], { env })
+    try {
+      // Control: with the hub in place the script reaches the fake gh.
+      await expect(run()).rejects.toMatchObject({ code: 1 })
+      await expect(access(marker)).resolves.toBeUndefined()
+      await rm(marker)
+
+      await withApi(async (call) => {
+        expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
+      })
+      const { stdout, stderr } = await run()
+      expect(stderr).toBe('')
+      expect(stdout).toContain(`seed:build-hub: ${HUB_DELETED_MESSAGE}`)
+      expect(stdout).toContain('only comes back on a fresh database')
+      await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
   }, 30_000)
 })

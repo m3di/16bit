@@ -398,7 +398,8 @@ describe('HubSettingsPage, general', () => {
     expect(html).toContain('All changes saved')
     // The prefix shows, read-only: it is not a field.
     expect(html).toContain('data-hub-prefix')
-    expect(html).toMatch(/ID prefix<\/span><span class="font-mono[^"]*">BLD<\/span>/)
+    // A term and its value, so the label is read with the prefix.
+    expect(html).toMatch(/<dt[^>]*>ID prefix<\/dt><dd class="[^"]*font-mono[^"]*">BLD<\/dd>/)
     expect(html).toContain('Items are numbered BLD-1, BLD-2 and on.')
     expect(html).not.toMatch(/<input[^>]*value="BLD"/)
   })

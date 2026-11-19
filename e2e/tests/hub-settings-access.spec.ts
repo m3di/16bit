@@ -315,7 +315,9 @@ test('a self-grant whose hub list fails to reload says so, and loads it again (#
   )
   await page.getByRole('button', { name: `Give myself access to ${hub.name}` }).click()
   const notice = page.locator('[data-self-grant-stale]')
-  await expect(notice).toContainText(`You now have access to ${hub.name}`)
+  await expect(notice).toContainText(
+    `The hubs could not be loaded again. You now have access to ${hub.name}`,
+  )
   await expect(page.getByRole('button', { name: `Give myself access to ${hub.name}` })).toHaveCount(
     0,
   )

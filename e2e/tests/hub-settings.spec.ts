@@ -230,7 +230,9 @@ test('select, currency and relation attributes; options removed from items ask w
   await dialog.getByRole('button', { name: 'Actions for option 2, Done' }).click()
   await page.getByRole('menuitem', { name: 'Remove option' }).click()
   const ask = page.getByRole('dialog', { name: 'Remove Done?' })
-  await expect(ask).toContainText('1 item uses this option')
+  await expect(ask).toHaveAccessibleDescription(
+    '1 item uses this option. Saving clears it from that item, with a revision each.',
+  )
   await ask.getByRole('button', { name: 'Remove option' }).click()
   await expect(ask).toBeHidden()
   await dialog.getByRole('button', { name: 'Save attribute' }).click()

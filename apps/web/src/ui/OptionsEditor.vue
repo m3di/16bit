@@ -15,7 +15,7 @@ import {
   nextOptionColor,
   optionErrors,
   itemCount,
-  usageText,
+  removeOptionMessage,
 } from './settings.ts'
 import StateBlock from './StateBlock.vue'
 
@@ -127,7 +127,7 @@ async function remove(option: SelectOption) {
 const pendingMessage = computed(() => {
   const option = pendingRemove.value
   if (!option) return ''
-  return `${usageText(usage[option.id] ?? 0)}. Those items will show "Deleted option" until someone picks another.`
+  return removeOptionMessage(usage[option.id] ?? 0)
 })
 </script>
 

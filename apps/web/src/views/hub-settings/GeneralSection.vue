@@ -146,11 +146,6 @@ const saveState = computed(() =>
           @change="commitName"
           @keydown.enter.prevent="commitName"
         />
-        <div class="flex flex-col gap-1" data-hub-prefix>
-          <span class="text-secondary text-ink3">ID prefix</span>
-          <span class="font-mono text-secondary text-ink">{{ hub.idPrefix }}</span>
-          <span class="text-secondary text-ink3">{{ prefixNote }}</span>
-        </div>
         <PalettePicker :model-value="color" label="Colour" @update:model-value="onColor" />
         <BaseSelect
           :model-value="title"
@@ -169,17 +164,19 @@ const saveState = computed(() =>
           <span>{{ hub.name }}</span>
           <span class="text-secondary text-ink3">{{ itemTotal(hub.itemCount) }}</span>
         </div>
-        <div class="flex flex-col gap-1" data-hub-prefix>
-          <span class="text-secondary text-ink3">ID prefix</span>
-          <span class="font-mono text-secondary text-ink">{{ hub.idPrefix }}</span>
-          <span class="text-secondary text-ink3">{{ prefixNote }}</span>
-        </div>
         <PalettePicker :model-value="hub.color" label="Colour" state="no-permission" />
         <div class="flex flex-col gap-1">
           <span class="text-secondary text-ink3">Item title</span>
           <span>{{ titleName || 'None: items show their ID only' }}</span>
         </div>
       </div>
+
+      <!-- Read-only for everyone: the hub update has no field for it. -->
+      <dl class="m-0 flex flex-col gap-1" data-hub-prefix>
+        <dt class="text-secondary text-ink3">ID prefix</dt>
+        <dd class="m-0 font-mono text-secondary text-ink">{{ hub.idPrefix }}</dd>
+        <dd class="m-0 text-secondary text-ink3">{{ prefixNote }}</dd>
+      </dl>
     </div>
   </SettingsSection>
 </template>

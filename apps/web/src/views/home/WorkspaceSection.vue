@@ -115,8 +115,8 @@ const offersNewHub = computed(
           <div v-if="canSelfGrant" class="flex flex-col gap-1 pt-1.5" data-self-grant>
             <!-- Access was given, but the list could not be read again to open the hub. -->
             <FormNotice v-if="ask(hub.id)?.state === 'stale'" data-self-grant-stale>
-              You now have access to {{ hub.name }}, but the hubs could not be loaded again to open
-              it.
+              The hubs could not be loaded again. You now have access to {{ hub.name }}; load them
+              to open it.
               <template #action>
                 <BaseButton size="sm" variant="quiet" @click="$emit('retry')"
                   >Load hubs again</BaseButton
