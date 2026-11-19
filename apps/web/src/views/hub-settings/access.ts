@@ -87,7 +87,7 @@ export function lockedGrantReason(
   if (target.kind === 'agent') return 'Set by its key'
   if (target.principalId === viewer.id) return 'Your own access'
   if (target.workspaceRole === 'owner') return 'Only owners change owners'
-  if (target.workspaceRole === 'admin') return 'Workspace admin'
+  if (target.workspaceRole === 'admin') return 'Only owners and admins change admins'
   return ''
 }
 

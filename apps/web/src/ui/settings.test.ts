@@ -17,6 +17,7 @@ import {
   newOptionId,
   nextOptionColor,
   optionErrors,
+  removeOptionMessage,
   usageText,
 } from './settings.ts'
 
@@ -126,6 +127,13 @@ describe('options', () => {
 
   it('usageText counts items in words', () => {
     expect(usageText(1)).toBe('1 item uses this option')
+    // Saving clears the value, it does not leave a "Deleted option" behind (D55).
+    expect(removeOptionMessage(1)).toBe(
+      '1 item uses this option. Saving clears it from that item, with a revision each.',
+    )
+    expect(removeOptionMessage(1280)).toBe(
+      '1,280 items use this option. Saving clears it from those items, with a revision each.',
+    )
     expect(usageText(1280)).toBe('1,280 items use this option')
   })
 })

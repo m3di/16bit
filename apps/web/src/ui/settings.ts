@@ -113,3 +113,11 @@ export function usageText(count: number): string {
   if (count === 1) return '1 item uses this option'
   return `${formatCount(count)} items use this option`
 }
+
+/**
+ * The confirm before removing an option that items use (D51). Saving strips the option from every
+ * item holding it, with a revision each (D55), so that is what it says will happen.
+ */
+export function removeOptionMessage(count: number): string {
+  return `${usageText(count)}. Saving clears it from ${count === 1 ? 'that item' : 'those items'}, with a revision each.`
+}

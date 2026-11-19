@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import pg from 'pg'
 import { execFile } from 'node:child_process'
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,8 +12,10 @@ import {
   ATTR,
   BUILD_HUB,
   BUILD_WORKSPACE,
+  buildHubDeleted,
   ensureBuildHub,
   ghIssueSchema,
+  HUB_DELETED_MESSAGE,
   importIssues,
   IMPORT_ACTOR,
   parseIssues,
@@ -366,6 +371,7 @@ describe('hubs and attributes deleted through the API (#143)', () => {
   })
 
   it('does not bring back a deleted hub', async () => {
+    expect(await buildHubDeleted(db)).toBe(false)
     await withApi(async (call) => {
       expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
     })
@@ -376,6 +382,7 @@ describe('hubs and attributes deleted through the API (#143)', () => {
       .where('workspace_id', '=', WS)
       .execute()
 
+    expect(await buildHubDeleted(db)).toBe(true)
     expect(await ensureBuildHub(db)).toEqual({ hubDeleted: true })
     expect(
       await db.selectFrom('access_log').selectAll().where('workspace_id', '=', WS).execute(),
@@ -666,5 +673,32 @@ describe('seed:build-hub', () => {
     const forced = await run(['--force'])
     expect(forced.code).toBe(1)
     expect(forced.stderr).toContain('MIGRATION_DATABASE_URL is not set')
+  }, 30_000)
+
+  it('with the hub deleted, says so and never calls gh (#150)', async () => {
+    const script = fileURLToPath(new URL('./seed-build-hub.ts', import.meta.url))
+    // A fake gh, the only command on PATH, that leaves a marker file and fails.
+    const bin = await mkdtemp(join(tmpdir(), 'build-hub-gh-'))
+    const marker = join(bin, 'gh-was-called')
+    await writeFile(join(bin, 'gh'), '#!/bin/sh\n: > "$GH_MARKER"\nexit 1\n', { mode: 0o755 })
+    const env = { PATH: bin, GH_MARKER: marker, MIGRATION_DATABASE_URL: dbUrl }
+    const run = () => promisify(execFile)(process.execPath, [script], { env })
+    try {
+      // Control: with the hub in place the script reaches the fake gh.
+      await expect(run()).rejects.toMatchObject({ code: 1 })
+      await expect(access(marker)).resolves.toBeUndefined()
+      await rm(marker)
+
+      await withApi(async (call) => {
+        expect(await call('DELETE', `/hubs/${BUILD_HUB.id}?version=0`)).toBe(204)
+      })
+      const { stdout, stderr } = await run()
+      expect(stderr).toBe('')
+      expect(stdout).toContain(`seed:build-hub: ${HUB_DELETED_MESSAGE}`)
+      expect(stdout).toContain('only comes back on a fresh database')
+      await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
   }, 30_000)
 })
