@@ -22,6 +22,25 @@ export function menuOpenFocus(key: string): 'first' | 'last' | null {
   return null
 }
 
+/** The parts of a button's `getBoundingClientRect()` a popup menu is placed from. */
+export interface AnchorRect {
+  top: number
+  left: number
+  bottom: number
+  right: number
+}
+
+/**
+ * Whether a menu's button has moved since the menu was placed. A scroll or resize event that
+ * leaves the button where it was (such as the late event from the scroll that brought the button
+ * into view before the menu opened, issue 157) must not close the menu. Sub-pixel jitter is ignored.
+ */
+export function anchorMoved(placed: AnchorRect, now: AnchorRect): boolean {
+  return (['top', 'left', 'bottom', 'right'] as const).some(
+    (side) => Math.abs(placed[side] - now[side]) >= 1,
+  )
+}
+
 /** Names and one-line descriptions for the attribute type picker. Every core type has one. */
 export const ATTRIBUTE_TYPE_INFO: Record<AttributeTypeName, { label: string; hint: string }> = {
   text: { label: 'Text', hint: 'A short line of text, such as a title.' },

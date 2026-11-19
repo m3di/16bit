@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, useId, useTemplateRef } from 'vue'
 import { rovingIndex } from './roving.ts'
-import { menuOpenFocus } from './settings.ts'
+import { anchorMoved, menuOpenFocus, type AnchorRect } from './settings.ts'
 
 export interface RowAction {
   key: string
@@ -46,6 +46,8 @@ const position = ref({ top: 0, left: 0 })
 const button = useTemplateRef<HTMLButtonElement>('button')
 const menu = useTemplateRef<HTMLElement>('menu')
 const entries = useTemplateRef<HTMLElement[]>('entries')
+// Where the button was when the menu was last placed.
+let placedAt: AnchorRect | null = null
 
 // The menu sits in the top layer (popover), so table rows and scroll boxes never clip it. It is
 // placed under the button's right edge, and above it when there is no room below.
@@ -53,6 +55,7 @@ function place() {
   const b = button.value?.getBoundingClientRect()
   const m = menu.value?.getBoundingClientRect()
   if (!b) return
+  placedAt = { top: b.top, left: b.left, bottom: b.bottom, right: b.right }
   const height = m?.height ?? 0
   const width = m?.width ?? 0
   const below = b.bottom + 4
@@ -76,15 +79,23 @@ function hide(returnFocus = false) {
   if (!open.value) return
   if (menu.value?.matches(':popover-open')) menu.value.hidePopover()
   open.value = false
+  placedAt = null
   window.removeEventListener('resize', onViewportChange)
   window.removeEventListener('scroll', onViewportChange, true)
   document.removeEventListener('pointerdown', onOutside, true)
   if (returnFocus) button.value?.focus()
 }
 
-// The menu is placed once; when the page moves under it, it closes rather than drift.
+// The menu is placed once; when the page moves the button, it closes rather than drift. A scroll
+// or resize that leaves the button where it was cannot have moved it: the late scroll event from
+// focusing a button below the fold arrives a frame after Enter opened the menu (issue 157). Then the
+// menu stays, placed again in case the viewport changed size.
+// Not covered: under `scroll-behavior: smooth` the focus scroll is still animating when the menu
+// is placed, so the next frame moves the button and closes the menu. Nothing here sets it today.
 function onViewportChange() {
-  hide()
+  const b = button.value?.getBoundingClientRect()
+  if (!b || !placedAt || anchorMoved(placedAt, b)) hide()
+  else place()
 }
 
 function onOutside(event: PointerEvent) {

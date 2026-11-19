@@ -7,6 +7,7 @@ import {
 import { describe, expect, it } from 'vitest'
 import { rovingIndex } from './roving.ts'
 import {
+  anchorMoved,
   ATTRIBUTE_TYPE_INFO,
   ATTRIBUTE_TYPE_ORDER,
   confirmTextMatches,
@@ -51,6 +52,29 @@ describe('menuOpenFocus', () => {
     ['a', null],
   ])('%j opens on the %s item', (key, expected) => {
     expect(menuOpenFocus(key)).toBe(expected)
+  })
+})
+
+describe('anchorMoved', () => {
+  const placed = { top: 400, left: 900, bottom: 428, right: 928 }
+
+  it('a scroll event that left the button in place does not count (#157)', () => {
+    expect(anchorMoved(placed, { ...placed })).toBe(false)
+  })
+
+  it('ignores sub-pixel jitter', () => {
+    expect(anchorMoved(placed, { top: 400.4, left: 899.6, bottom: 428.4, right: 927.6 })).toBe(
+      false,
+    )
+  })
+
+  it.each([
+    ['scrolled down', { top: 360, left: 900, bottom: 388, right: 928 }],
+    ['scrolled sideways', { top: 400, left: 880, bottom: 428, right: 908 }],
+    ['resized wider', { top: 400, left: 900, bottom: 428, right: 940 }],
+    ['scrolled out of view', { top: -40, left: 900, bottom: -12, right: 928 }],
+  ])('a button that %s has moved', (_, now) => {
+    expect(anchorMoved(placed, now)).toBe(true)
   })
 })
 
