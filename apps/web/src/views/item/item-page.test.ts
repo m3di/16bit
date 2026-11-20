@@ -13,6 +13,7 @@ import {
   afterExpandRead,
   itemPageLink,
   malformedItemId,
+  livePageState,
   pageState,
 } from './item-page.ts'
 import { itemTitle } from '../hub/relations.ts'
@@ -219,5 +220,35 @@ describe('item route', () => {
     expect(to.params).toEqual({ workspaceId: 'w1', itemId: 'i1' })
     expect(router.resolve(itemPageLink('w1', { id: 'i1' })).fullPath).toBe('/w/w1/items/i1')
     expect(router.resolve('/w/w1/settings/members').name).toBe('workspace-members')
+  })
+})
+
+describe('livePageState (D58)', () => {
+  const ready = pageState(
+    { state: 'ready', data: item('i1', 7) },
+    { state: 'ready', data: description },
+  )
+  const quiet = { lost: false, deleted: false, deletingHere: false }
+
+  it('passes the page through while nothing happened', () => {
+    expect(livePageState(ready, quiet)).toBe(ready)
+  })
+
+  it('shows no permission once the grant is lost', () => {
+    expect(livePageState(ready, { ...quiet, lost: true })).toMatchObject({
+      state: 'no-permission',
+      error: { status: 403 },
+    })
+    expect(livePageState({ state: 'loading' }, { ...quiet, lost: true }).state).toBe(
+      'no-permission',
+    )
+  })
+
+  it('shows not available for an item deleted elsewhere, but not for its own delete', () => {
+    expect(livePageState(ready, { ...quiet, deleted: true })).toMatchObject({
+      state: 'not-found',
+      error: { status: 404 },
+    })
+    expect(livePageState(ready, { ...quiet, deleted: true, deletingHere: true })).toBe(ready)
   })
 })

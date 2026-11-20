@@ -38,6 +38,25 @@ export function useHubDirectory(workspaceId: string, fetchFn: Fetch = (...args) 
     ensure([id])
   }
 
+  /**
+   * Reads a known hub again after a schema change, keeping the description shown until the
+   * answer arrives. A hub now out of reach becomes an error; other failures keep what is shown.
+   */
+  function refresh(id: string) {
+    const known = hubs.value[id]
+    if (known?.state !== 'ready') return
+    const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/hubs/${encodeURIComponent(id)}`
+    getJson(path, hubDescriptionSchema, fetchFn).then(
+      (data) => {
+        hubs.value[id] = { state: 'ready', data }
+      },
+      (thrown: unknown) => {
+        const error = asRequestError(thrown)
+        if (error.isNotFound || error.isNoPermission) hubs.value[id] = { state: 'error', error }
+      },
+    )
+  }
+
   /** A hub as `chipView` wants it. Unknown hubs count as loading; call `ensure` for them. */
   function lookup(id: string): HubDescription | 'loading' | 'error' {
     const hub = hubs.value[id]
@@ -47,7 +66,7 @@ export function useHubDirectory(workspaceId: string, fetchFn: Fetch = (...args) 
 
   const get = (id: string): Load<HubDescription> => hubs.value[id] ?? { state: 'loading' }
 
-  return { hubs, seed, ensure, retry, lookup, get }
+  return { hubs, seed, ensure, retry, refresh, lookup, get }
 }
 
 export type HubDirectory = ReturnType<typeof useHubDirectory>

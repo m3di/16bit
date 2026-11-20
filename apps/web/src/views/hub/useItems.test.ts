@@ -1,7 +1,8 @@
 import type { Attribute, Item } from '@16bit/core'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { attributes, fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
 import { ApiRequestError } from '../../api/client.ts'
+import { resetWorkspaceStores } from '../../sync/store.ts'
 import {
   canSort,
   inHub,
@@ -13,6 +14,9 @@ import {
   valueErrors,
   withoutSeq,
 } from './useItems.ts'
+
+// The store is one per workspace and tab; every test starts with an empty one.
+beforeEach(resetWorkspaceStores)
 
 const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
 
@@ -599,7 +603,12 @@ describe('useItems: creating', () => {
     expect(s.rows.value).toHaveLength(2)
     expect(s.isCreating(id)).toBe(true)
     const body = calls.at(-1)?.body as { id: string; folderId: string; values: unknown }
-    expect(body).toEqual({ id, folderId: 'bld', values: { title: 'Fresh' } })
+    expect(body).toEqual({
+      id,
+      folderId: 'bld',
+      values: { title: 'Fresh' },
+      clientMutationId: expect.stringMatching(/^[0-9a-f-]{36}$/) as unknown,
+    })
     answer.release(json(item(id, 2, { title: 'Fresh' }), 201))
     expect(await created).toMatchObject({ ok: true, item: { id, seqId: 2 } })
     expect(s.isCreating(id)).toBe(false)
@@ -858,11 +867,10 @@ describe('useItems: deleting (#119)', () => {
   it('deletes at the version shown', async () => {
     const { s, calls } = await loaded(() => new Response(null, { status: 204 }))
     expect(await s.remove('i1')).toEqual({ ok: true })
-    expect(calls.at(-1)).toMatchObject({
-      method: 'DELETE',
-      path: '/v1/workspaces/w/items/i1?version=2',
-      body: undefined,
-    })
+    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', body: undefined })
+    expect(calls.at(-1)?.path).toMatch(
+      /^\/v1\/workspaces\/w\/items\/i1\?version=2&clientMutationId=[0-9a-f-]{36}$/,
+    )
   })
 
   it('removes a deleted row from an open list', async () => {
@@ -916,7 +924,7 @@ describe('useItems: deleting (#119)', () => {
     answer.release(json(item('i1', 7, { title: 'New' }, 3)))
     await saved
     expect(await removed).toEqual({ ok: true })
-    expect(calls.at(-1)?.path).toBe('/v1/workspaces/w/items/i1?version=3')
+    expect(calls.at(-1)?.path).toMatch(/^\/v1\/workspaces\/w\/items\/i1\?version=3&/)
   })
 })
 

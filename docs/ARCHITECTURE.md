@@ -236,6 +236,8 @@ A normalised store keyed by item ID sits between the server and every component.
 
 **M0 scope:** plain fetch with an optimistic edit and rollback on 409 in the item panel. No WebSocket.
 
+**M3 (#175):** `apps/web/src/sync/store.ts` keeps one store per workspace and tab: `shallowReactive` maps of frozen server items, tombstones for deleted IDs, and a pending layer of the reader's own creates, patches and deletes keyed by `clientMutationId`. Every item from a read, a write response or the feed goes through `apply`, which keeps it only if its version is newer and never revives a tombstoned ID. A view holds its hub; a read or write response with a `seq` subscribes the held hub after that `seq`, and a read older than where the subscription started restarts it from that read. Without a `seq` (an API before M3-03) nothing subscribes and no socket opens. `apps/web/src/sync/feed.ts` is the socket: one per tab and workspace, reconnecting with backoff (1 s doubling to 30 s, with jitter), resuming each hub from the high-water `seq` of the last `changes` message, and closing 10 s after the last hub is let go. `useItems` keeps the folder list's order and the items it has read; a `changes` message updates rows in place, puts an item new to the open folder on top, and drops deleted rows; `resync` reads the list and the items opened by ID again. A `hub` event reads the hub description again in place; `access_lost` (or a `not_found` refusal of a subscription) shows no permission. The shell shows "Offline" while the socket is down. Writes are confirmed by their HTTP response, socket or not.
+
 ## Local development
 
 - `docker compose up -d db` starts Postgres.
