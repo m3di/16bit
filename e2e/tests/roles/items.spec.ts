@@ -1,4 +1,5 @@
-import { hubDescriptionSchema, itemSchema, type Item } from '@16bit/core'
+import { hubDescriptionSchema, type Item } from '@16bit/core'
+import { parseItemRead } from '../support/item-responses.ts'
 import type { Page } from '@playwright/test'
 import {
   expect,
@@ -23,7 +24,7 @@ const READ_ONLY = 'You can view the items in this hub but not add or change them
 async function getItem(client: Client, id: string): Promise<Item> {
   const res = await client.get(`/items/${id}`)
   await expectStatus(res, 200)
-  return itemSchema.parse(await res.json())
+  return parseItemRead(await res.json())
 }
 
 async function openItem(page: Page, item: Item) {

@@ -1,4 +1,4 @@
-import { itemPageSchema, type Filter, type HubDescription, type Item } from '@16bit/core'
+import { itemQueryResultSchema, type Filter, type HubDescription, type Item } from '@16bit/core'
 import { computed, ref } from 'vue'
 import { asRequestError, sendJson, type ApiRequestError, type Fetch } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -55,7 +55,7 @@ export function useRelationSearch(
       'POST',
       path,
       { from, where: where(query), limit: PICKER_PAGE, cursor },
-      itemPageSchema,
+      itemQueryResultSchema,
       fetchFn,
     )
 

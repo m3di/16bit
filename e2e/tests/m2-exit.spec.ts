@@ -3,12 +3,12 @@ import {
   hubDescriptionSchema,
   hubGrantPageSchema,
   hubListEntrySchema,
-  itemSchema,
   MAX_PAGE_LIMIT,
   memberPageSchema,
   type HubDescription,
   type Item,
 } from '@16bit/core'
+import { parseItemRead } from './support/item-responses.ts'
 import type { Page } from '@playwright/test'
 import {
   expect,
@@ -43,7 +43,7 @@ async function describeHub(client: Client, hubId: string): Promise<HubDescriptio
 async function getItem(client: Client, id: string): Promise<Item> {
   const res = await client.get(`/items/${encodeURIComponent(id)}`)
   await expectStatus(res, 200)
-  return itemSchema.parse(await res.json())
+  return parseItemRead(await res.json())
 }
 
 /**

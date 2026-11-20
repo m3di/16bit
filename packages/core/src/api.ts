@@ -10,6 +10,7 @@ import {
   timestampSchema,
   workspaceSchema,
 } from './entities.ts'
+import { decodeItemCursor, type ItemCursorOrder } from './cursor.ts'
 import { paletteColorSchema } from './palette.ts'
 import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
 import { agentHubRoleSchema, hubRoleSchema, workspaceRoleSchema } from './roles.ts'
@@ -24,6 +25,26 @@ export const MAX_PAGE_LIMIT = 200
 
 /** An opaque cursor from a previous page's `nextCursor`. */
 export const cursorSchema = z.string().min(1).max(512)
+
+/**
+ * A position in the workspace's change history: `revision.seq`, which only grows (D58). `0`
+ * is before the first change.
+ */
+export const seqSchema = z.int().min(0)
+
+/**
+ * The workspace's `seq` as of a read: a client keeping the response live subscribes with it as
+ * `after` (D58). It is never newer than the rows it came with. Optional until the API sends it
+ * (M3-03); a client that gets none must not subscribe from that read.
+ */
+const responseSeq = { seq: seqSchema.optional() }
+
+/**
+ * A client's ID for one item write, so a retry is safe (D59). Unique per workspace and actor:
+ * a retry with the same ID applies nothing and answers as the first attempt did, with the item
+ * as it is now; the same ID with another item or operation is a 422.
+ */
+export const clientMutationIdSchema = z.uuid()
 
 /** Query string of the list endpoints (workspaces, hubs). */
 export const pageQuerySchema = z.strictObject({
@@ -132,24 +153,85 @@ export const hubDescriptionSchema = z.strictObject({
     attributes: z.boolean(),
     folderAttributes: z.boolean(),
   }),
+  ...responseSeq,
 })
 export type HubDescription = z.infer<typeof hubDescriptionSchema>
 
+/** Most rows `offset` skips (D20, D61). */
+export const MAX_QUERY_OFFSET = 100_000
+
 /**
- * `POST /v1/workspaces/:workspaceId/query`. The query shape in docs/ARCHITECTURE.md, M1 subset:
- * items of one folder, filtered and sorted on indexed attributes (D20), with a required limit
- * and cursor paging. With no `sort`, items come newest update first. `where`, `sort` and
- * `expand` are checked against the folder's attributes with `compileItemQuery`.
+ * The order of a query without `sort` (D61): `updated` is newest update first, `number` is
+ * item number, newest first. `number` keeps a row in place when it is edited, so a window
+ * by offset stays put.
  */
-export const itemQuerySchema = z.strictObject({
-  from: idSchema,
-  where: boundedFilterSchema.nullable().default(null),
-  sort: sortSchema.default([]),
-  expand: expandSchema.default([]),
-  limit: z.int().min(1).max(MAX_PAGE_LIMIT),
-  cursor: cursorSchema.nullable().default(null),
-})
+export const ITEM_QUERY_ORDERS = ['updated', 'number'] as const
+export type ItemQueryOrder = (typeof ITEM_QUERY_ORDERS)[number]
+
+/**
+ * `POST /v1/workspaces/:workspaceId/query`. The query shape in docs/ARCHITECTURE.md: items of
+ * one folder, filtered and sorted on indexed attributes (D20), with a required limit. `where`,
+ * `sort` and `expand` are checked against the folder's attributes with `compileItemQuery`.
+ *
+ * - Without `sort`, `order` decides: `updated` (the default) or `number` (D61). `order`
+ *   together with a non-empty `sort` is refused.
+ * - Paging is by `cursor` or by `offset` (0 to `MAX_QUERY_OFFSET`), never both. A cursor
+ *   records the order it was read in (`updated`, `number`, or an attribute `sort`) and is
+ *   refused under another; under `number` it pages by item number.
+ * - `count: true` adds `total`, the number of items that pass `where`.
+ */
+export const itemQuerySchema = z
+  .strictObject({
+    from: idSchema,
+    where: boundedFilterSchema.nullable().default(null),
+    sort: sortSchema.default([]),
+    order: z.enum(ITEM_QUERY_ORDERS).optional(),
+    expand: expandSchema.default([]),
+    limit: z.int().min(1).max(MAX_PAGE_LIMIT),
+    cursor: cursorSchema.nullable().default(null),
+    offset: z.int().min(0).max(MAX_QUERY_OFFSET).optional(),
+    count: z.boolean().default(false),
+  })
+  .superRefine((query, ctx) => {
+    if (query.order !== undefined && query.sort.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['order'],
+        message: 'order cannot be combined with sort; sort decides the order',
+      })
+    }
+    if (query.offset !== undefined && query.cursor !== null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['offset'],
+        message: 'Page by offset or by cursor, not both',
+      })
+    }
+    if (query.cursor !== null) {
+      const cursor = decodeItemCursor(query.cursor)
+      const order = itemQueryOrder(query)
+      if (!cursor) {
+        ctx.addIssue({ code: 'custom', path: ['cursor'], message: 'Invalid cursor' })
+      } else if (cursor.order !== order) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['cursor'],
+          message: `This cursor is from the ${cursor.order} order and cannot page the ${order} order`,
+        })
+      }
+    }
+  })
 export type ItemQuery = z.input<typeof itemQuerySchema>
+export type ParsedItemQuery = z.output<typeof itemQuerySchema>
+
+/** The order a query's rows come in, as its cursors record it. */
+export function itemQueryOrder(query: {
+  sort?: readonly unknown[] | undefined
+  order?: ItemQueryOrder | undefined
+}): ItemCursorOrder {
+  if (query.sort && query.sort.length > 0) return 'sort'
+  return query.order ?? 'updated'
+}
 
 export const itemPageSchema = pageSchema(itemSchema)
 
@@ -167,7 +249,7 @@ export type LinkedItem = z.infer<typeof linkedItemSchema>
 export const MAX_LINKED_ITEMS = 1000
 
 /**
- * The response of `POST /query`. With a non-empty `expand`, `linked` holds the items that page
+ * The response of `POST /query`, with the workspace `seq` of the read (D58). With a non-empty `expand`, `linked` holds the items that page
  * items link to through the expanded attributes, keyed by item ID, by ID order, up to
  * `MAX_LINKED_ITEMS`. If `linkedTruncated` is false, an ID in an expanded relation value with no
  * entry in `linked` no longer exists. If it is true, such an ID may also have been cut off:
@@ -176,6 +258,9 @@ export const MAX_LINKED_ITEMS = 1000
 export const itemQueryResultSchema = itemPageSchema.extend({
   linked: z.record(idSchema, linkedItemSchema).optional(),
   linkedTruncated: z.boolean().optional(),
+  /** With `count: true`: the items that pass `where`, over all pages (D61). */
+  total: z.int().min(0).optional(),
+  ...responseSeq,
 })
 export type ItemQueryResult = z.infer<typeof itemQueryResultSchema>
 
@@ -221,11 +306,13 @@ export type GetItemQuery = z.input<typeof getItemQuerySchema>
  * The response of `GET /items/:itemId`: the item, and with a non-empty `expand`, `linked` and
  * `linkedTruncated` with the same meaning as in `POST /query`. An ID in an expanded relation
  * value with no `linked` entry (and `linkedTruncated` false) no longer exists; `{ access:
- * "none" }` means it exists in a hub the caller cannot read. Without `expand`, just the item.
+ * "none" }` means it exists in a hub the caller cannot read. Without `expand`, the item and
+ * `seq` (D58).
  */
 export const itemReadSchema = itemSchema.extend({
   linked: z.record(idSchema, linkedItemSchema).optional(),
   linkedTruncated: z.boolean().optional(),
+  ...responseSeq,
 })
 export type ItemRead = z.infer<typeof itemReadSchema>
 
@@ -237,6 +324,7 @@ export const createItemSchema = z.strictObject({
   id: idSchema.optional(),
   folderId: idSchema,
   values: itemValuesInputSchema.default({}),
+  clientMutationId: clientMutationIdSchema.optional(),
 })
 export type CreateItem = z.input<typeof createItemSchema>
 
@@ -246,6 +334,7 @@ export type CreateItem = z.input<typeof createItemSchema>
  */
 export const patchItemSchema = z.strictObject({
   version: z.int().min(1),
+  clientMutationId: clientMutationIdSchema.optional(),
   values: itemValuesInputSchema.refine((v) => Object.keys(v).length > 0, {
     message: 'At least one value is required',
   }),
@@ -255,7 +344,16 @@ export type PatchItem = z.infer<typeof patchItemSchema>
 /** Query string of `DELETE /v1/workspaces/:workspaceId/items/:itemId`. */
 export const deleteItemQuerySchema = z.strictObject({
   version: z.coerce.number().int().min(1),
+  clientMutationId: clientMutationIdSchema.optional(),
 })
+
+/**
+ * The response of `POST /items` (201) and `PATCH /items/:itemId`: the item as written, with the
+ * workspace `seq` read inside the write's own transaction (D58). A retry with a known
+ * `clientMutationId` answers the same way, with the item as it is now (D59).
+ */
+export const itemWriteResultSchema = itemSchema.extend(responseSeq)
+export type ItemWriteResult = z.infer<typeof itemWriteResultSchema>
 
 /**
  * An agent key (D47). `id` is the key's agent principal. Its hub and role are the principal's

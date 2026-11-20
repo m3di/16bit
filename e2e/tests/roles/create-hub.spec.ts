@@ -2,9 +2,9 @@ import {
   hubDescriptionSchema,
   hubListEntrySchema,
   hubPageSchema,
-  itemSchema,
   type HubListEntry,
 } from '@16bit/core'
+import { parseItemRead } from '../support/item-responses.ts'
 import type { Page } from '@playwright/test'
 import {
   expect,
@@ -208,7 +208,7 @@ test('"New item" checks required attributes first, then opens the new item’s p
   const id = decodeURIComponent(new URL(page.url()).pathname.split('/').pop() ?? '')
   const res = await as('owner').get(`/items/${encodeURIComponent(id)}`)
   await expectStatus(res, 200)
-  expect(itemSchema.parse(await res.json())).toMatchObject({
+  expect(parseItemRead(await res.json())).toMatchObject({
     hubId: 'launch',
     values: { 'launch-title': name },
   })
