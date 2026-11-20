@@ -31,6 +31,16 @@ describe('useRelationSearch', () => {
     expect(s.offered(['b']).map((i) => i.id)).toEqual(['a'])
   })
 
+  it('accepts a page carrying the workspace seq (issue 168)', async () => {
+    // From M3-03 a query result carries `seq` (D58); no `linked` or `total` without expand or
+    // count.
+    const api = fakeApi(() => json({ items: results, nextCursor: null, seq: 12 }))
+    const s = useRelationSearch('w', () => indexed, api.fetchFn)
+    await s.search()
+    expect(s.results.value).toMatchObject({ state: 'ready' })
+    expect(s.offered([]).map((i) => i.id)).toEqual(['a', 'b'])
+  })
+
   it('filters loaded items itself when the title is not indexed', async () => {
     const api = fakeApi(() => json({ items: results, nextCursor: 'c1' }))
     const s = useRelationSearch('w', () => description, api.fetchFn)

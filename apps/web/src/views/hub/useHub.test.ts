@@ -76,6 +76,13 @@ describe('useHub', () => {
     expect(h.tree.value).toHaveLength(4)
   })
 
+  it('accepts a description carrying the workspace seq (issue 168)', async () => {
+    const api = fakeApi(() => json({ ...description, seq: 41 }))
+    const h = useHub('w', 'bld', api.fetchFn)
+    await h.load()
+    expect(h.hub.value.state).toBe('ready')
+  })
+
   it('reports a missing hub as a 404 error', async () => {
     const api = fakeApi(() => json({ error: 'not_found', message: 'Hub not found' }, 404))
     const h = useHub('w', 'nope', api.fetchFn)

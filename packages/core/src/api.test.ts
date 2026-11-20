@@ -54,6 +54,7 @@ describe('api contracts', () => {
       expand: [],
       limit: 50,
       cursor: null,
+      count: false,
     })
     expect(itemQuerySchema.safeParse({ from: 'f1' }).success).toBe(false)
     expect(itemQuerySchema.safeParse({ from: 'f1', where: {} }).success).toBe(false)

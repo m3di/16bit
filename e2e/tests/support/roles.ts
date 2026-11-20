@@ -2,13 +2,13 @@ import {
   acceptedInviteSchema,
   createdAgentKeySchema,
   createdInviteSchema,
-  itemSchema,
   MAX_PAGE_LIMIT,
   type AgentHubRole,
   type AgentKey,
   type Item,
   type Page as ListPage,
 } from '@16bit/core'
+import { parseItemWrite } from './item-responses.ts'
 import { readFileSync } from 'node:fs'
 import {
   test as base,
@@ -77,7 +77,7 @@ export class Client {
   async createItem(folderId: string, values: Record<string, unknown>): Promise<Item> {
     const res = await this.post('/items', { folderId, values })
     await expectStatus(res, 201)
-    return itemSchema.parse(await res.json())
+    return parseItemWrite(await res.json())
   }
 
   dispose(): Promise<void> {
