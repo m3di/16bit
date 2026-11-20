@@ -112,7 +112,8 @@ async function seed(): Promise<void> {
     parent_id: null,
     name: id,
     color: 'blue',
-    id_prefix: 'H',
+    // Unique per workspace among hubs (D56).
+    id_prefix: id.toUpperCase(),
   })
   await db
     .insertInto('folder')
@@ -516,7 +517,8 @@ describe('folders', () => {
       id: 'new',
       hubId: 'build',
       parentId: 'bugs',
-      idPrefix: 'H',
+      // The hub's, not the parent folder's (BUGS).
+      idPrefix: 'BUILD',
       itemCount: 0,
       version: 0,
     })

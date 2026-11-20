@@ -7,6 +7,7 @@ import {
   itemPanel,
   test,
   uniqueHubName,
+  uniquePrefix,
   uniqueTitle,
   type Client,
 } from '../support/roles.ts'
@@ -24,6 +25,8 @@ const DESIGN_TITLE = 'design-title'
 interface Built {
   hubId: string
   hubName: string
+  /** The hub's ID prefix, unique per run (D56). */
+  prefix: string
   title: string
   refs: string
   parent: string
@@ -43,8 +46,9 @@ async function created<T>(
 /** A hub with Title (its title attribute), Refs (into Design) and Parent (inside the hub). */
 async function buildHub(owner: Client): Promise<Built> {
   const hubName = uniqueHubName('item page')
+  const prefix = uniquePrefix()
   const hub = await created(
-    owner.post('/hubs', { name: hubName, color: 'violet', idPrefix: 'ITP' }),
+    owner.post('/hubs', { name: hubName, color: 'violet', idPrefix: prefix }),
     hubListEntrySchema,
   )
   const attr = (body: Record<string, unknown>) =>
@@ -84,7 +88,7 @@ async function buildHub(owner: Client): Promise<Built> {
     200,
   )
   await expectStatus(await owner.put(`/hubs/${hub.id}/grants/ivy`, { hubRole: 'viewer' }), 200)
-  return { hubId: hub.id, hubName, title: title.id, refs: refs.id, parent: parent.id }
+  return { hubId: hub.id, hubName, prefix, title: title.id, refs: refs.id, parent: parent.id }
 }
 
 const itemPath = (id: string) => `/w/demo/items/${id}`
@@ -114,7 +118,7 @@ test('an editor opens an item on its own page, edits it and follows its links', 
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
   const trail = page.getByRole('navigation', { name: 'Breadcrumb' })
   await expect(trail.getByRole('link', { name: h.hubName })).toBeVisible()
-  await expect(trail).toContainText(`ITP-${String(item.seqId)}`)
+  await expect(trail).toContainText(`${h.prefix}-${String(item.seqId)}`)
 
   // Every attribute of the folder, with its editor. The linked Design item shows its title.
   const refs = page.getByRole('list', { name: 'Refs' })
@@ -271,7 +275,7 @@ test('after a refused delete, closing the dialog puts focus on the read-only not
   await page.goto(itemPath(item.id))
   await page.getByRole('button', { name: 'Delete item' }).focus()
   await page.keyboard.press('Enter')
-  const dialog = page.getByRole('dialog', { name: `Delete ITP-${String(item.seqId)}?` })
+  const dialog = page.getByRole('dialog', { name: `Delete ${h.prefix}-${String(item.seqId)}?` })
   await dialog.getByRole('button', { name: 'Delete item' }).click()
   await expect(dialog.getByRole('alert')).toContainText('was not deleted')
   // The page turned read-only behind the dialog, so the button that opened it is gone.
@@ -302,7 +306,7 @@ test('an editor deletes an item after confirming; a stale version is refused', a
     200,
   )
   await page.getByRole('button', { name: 'Delete item' }).click()
-  const dialog = page.getByRole('dialog', { name: `Delete ITP-${String(item.seqId)}?` })
+  const dialog = page.getByRole('dialog', { name: `Delete ${h.prefix}-${String(item.seqId)}?` })
   await dialog.getByRole('button', { name: 'Delete item' }).click()
   await expect(dialog.getByRole('alert')).toContainText('changed by someone else')
   await expect(page.getByLabel('Title (required)')).toHaveValue(theirs)

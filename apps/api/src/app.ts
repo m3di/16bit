@@ -490,7 +490,13 @@ export function buildApp(options: AppOptions): FastifyInstance {
             const { workspaceId } = parse(workspaceParams, request.params)
             const { after, limit } = parse(changesQuerySchema, request.query)
             // Every hub the caller can read, as row-level security decides; an agent's is its own.
-            return snapshot(request, (trx) => readChanges(trx, workspaceId, { after, limit }))
+            return snapshot(request, (trx) =>
+              readChanges(trx, workspaceId, {
+                principalId: request.principal.id,
+                after,
+                limit,
+              }),
+            )
           })
 
           ws.get('/items/:itemId', async (request): Promise<ItemRead> => {

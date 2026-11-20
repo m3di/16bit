@@ -127,6 +127,15 @@ export function uniqueHubName(label: string): string {
   return `Zz e2e ${label} ${crypto.randomUUID().slice(0, 8)}`
 }
 
+/**
+ * An ID prefix for a hub a spec creates. Prefixes are unique among a workspace's hubs (D56), and
+ * spec hubs outlive their run, so a fixed one would be refused the second time. `Z` and 8 random
+ * capitals or digits: no seeded hub starts with Z.
+ */
+export function uniquePrefix(): string {
+  return `Z${crypto.randomUUID().replaceAll('-', '').slice(0, 8).toUpperCase()}`
+}
+
 function sessionCookie(person: Person): string {
   const file = stateFile(person)
   const state = JSON.parse(readFileSync(file, 'utf8')) as {

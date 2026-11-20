@@ -15,6 +15,11 @@ import { toItem } from './mappers.ts'
 export const MAX_CHANGES_SCAN = 10_000
 
 export interface ChangesRead {
+  /**
+   * The caller. A change carries its `clientMutationId` only for the principal who wrote it:
+   * the echo only stops a writer applying its own change twice (D59), and is no one else's.
+   */
+  principalId: string
   /** Changes after this `seq`. */
   after: number
   /** Most revisions returned, before collapsing. */
@@ -27,7 +32,8 @@ export interface ChangesRead {
 
 /**
  * The changes after `after` that the caller may see, one per item, each as the item is now
- * (`null` when it is gone) with the `seq` of its latest revision in the page, in `seq` order.
+ * (`null` when it is gone) with the `seq` of its latest revision in the page, in `seq` order,
+ * and that revision's `clientMutationId` when the caller wrote it.
  *
  * `seq` is the high-water mark: the workspace counter when the page is complete, the last
  * returned revision's `seq` when `limit` cut it short, and the end of the examined range when
@@ -65,7 +71,7 @@ export async function readChangesBatch(
   const end = Math.min(counter, after + (read.maxScan ?? MAX_CHANGES_SCAN))
   let q = trx
     .selectFrom('revision')
-    .select(['seq', 'item_id', 'hub_id', 'client_mutation_id'])
+    .select(['seq', 'item_id', 'hub_id', 'actor', 'client_mutation_id'])
     .where('workspace_id', '=', workspaceId)
     .where('seq', '>', after)
     .where('seq', '<=', end)
@@ -106,7 +112,9 @@ export async function readChangesBatch(
       itemId: row.item_id,
       item: item ? toItem(item) : null,
     }
-    if (row.client_mutation_id !== null) change.clientMutationId = row.client_mutation_id
+    if (row.client_mutation_id !== null && row.actor === read.principalId) {
+      change.clientMutationId = row.client_mutation_id
+    }
     return change
   })
   return { page: { changes, seq, more: cut || end < counter }, cut }

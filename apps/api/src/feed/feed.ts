@@ -372,6 +372,8 @@ export class Connection {
 
   #readBatch(trx: Trx, after: number, hubIds: string[]): Promise<Batch> {
     return readChangesBatch(trx, this.context.workspaceId, {
+      // The writer's `clientMutationId` is echoed only to the writer's own sockets.
+      principalId: this.context.principal.id,
       after,
       limit: this.feed.maxMissed,
       hubIds,

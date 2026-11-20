@@ -18,6 +18,7 @@ import {
   itemPanel,
   test,
   uniqueHubName,
+  uniquePrefix,
   uniqueTitle,
   workspaceSection,
   WS,
@@ -181,6 +182,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
 }) => {
   const owner = as('owner')
   const hubName = uniqueHubName('exit check')
+  const prefix = uniquePrefix()
   let hubId = ''
   try {
     // 1. Signed in as the owner (auth.setup.ts signs in through the form), create the hub from
@@ -191,7 +193,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
       .click()
     const newHub = page.getByRole('dialog', { name: 'New hub' })
     await newHub.getByLabel('Name').fill(hubName)
-    await newHub.getByLabel('ID prefix').fill('EXIT')
+    await newHub.getByLabel('ID prefix').fill(prefix)
     await newHub.getByRole('radio', { name: 'Teal' }).check()
     const created = page.waitForResponse(
       (r) => r.request().method() === 'POST' && r.url().endsWith(`/v1/workspaces/${WS}/hubs`),
@@ -202,7 +204,7 @@ test('M2 exit: a new hub is created, given attributes and folders, and populated
     await expect(page.getByRole('heading', { level: 1, name: hubName })).toBeVisible()
     expect((await describeHub(owner, hubId)).hub).toMatchObject({
       name: hubName,
-      idPrefix: 'EXIT',
+      idPrefix: prefix,
       color: 'teal',
     })
 
@@ -412,7 +414,7 @@ test('an invited person joins with the link, is granted a hub, and as its editor
   const created = await owner.post('/hubs', {
     name: uniqueHubName('invite grant'),
     color: 'blue',
-    idPrefix: 'INV',
+    idPrefix: uniquePrefix(),
   })
   await expectStatus(created, 201)
   const hub = hubListEntrySchema.parse(await created.json())
@@ -547,7 +549,7 @@ test('a Number value is saved from the New item form and the item page (#155)', 
   const made = await owner.post('/hubs', {
     name: uniqueHubName('number'),
     color: 'teal',
-    idPrefix: 'NUM',
+    idPrefix: uniquePrefix(),
   })
   await expectStatus(made, 201)
   const hub = hubListEntrySchema.parse(await made.json())

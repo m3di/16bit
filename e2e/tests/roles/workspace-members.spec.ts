@@ -342,3 +342,74 @@ test('a workspace the person does not belong to is not available, and not named'
   await expect(page.getByRole('navigation', { name: 'Workspace settings' })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Back to hubs' })).toBeVisible()
 })
+
+// "What each role can do" (issue 138): generated from can(), so it must agree with the API.
+function roleTable(page: Page, which: 'workspace' | 'hub') {
+  return page.getByRole('table', {
+    name:
+      which === 'workspace'
+        ? 'What each workspace role and an agent key can do in this workspace'
+        : 'What each hub role can do inside a hub',
+  })
+}
+
+function roleCell(page: Page, which: 'workspace' | 'hub', row: string, column: string) {
+  const table = roleTable(page, which)
+  return table.locator(`tr[data-matrix-row="${row}"] [data-cell="${column}"]`)
+}
+
+test('everyone in the workspace sees what each role can do, and the API agrees', async ({
+  pageAs,
+  as,
+}) => {
+  const page = await pageAs('leo')
+  await page.goto(membersPath)
+  await expect(page.getByRole('region', { name: 'What each role can do' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'What each hub role can do' })).toContainText(
+    'Viewer and Finance act as viewer at most',
+  )
+  const sections = page.locator('[data-role-matrix]')
+  // Reference comes after the page's main job, managing people.
+  await expect(page.getByRole('heading', { level: 2 })).toHaveText([
+    'People',
+    'What each role can do',
+    'What each hub role can do',
+  ])
+  await expect(roleTable(page, 'workspace').getByRole('columnheader')).toHaveText([
+    'Action',
+    'Owner',
+    'Admin',
+    'Member',
+    'Viewer',
+    'Finance',
+    'Agent key',
+  ])
+  await expect(roleTable(page, 'hub').getByRole('columnheader')).toHaveText([
+    'Action',
+    'Hub admin',
+    'Editor',
+    'Commenter',
+    'Viewer',
+  ])
+  // Read-only: no controls in either table.
+  await expect(sections.getByRole('button')).toHaveCount(0)
+  await expect(sections.getByRole('combobox')).toHaveCount(0)
+
+  // Footnotes ¹ and ³ show as limits.
+  await expect(roleCell(page, 'workspace', 'invite', 'owner')).toHaveText('Yes')
+  await expect(roleCell(page, 'workspace', 'invite', 'admin')).toContainText('Not owner invites')
+  await expect(roleCell(page, 'workspace', 'invite', 'member')).toHaveText('No')
+  await expect(roleCell(page, 'workspace', 'billing.manage', 'finance')).toHaveText('Yes')
+  await expect(roleCell(page, 'hub', 'item.write', 'commenter')).toHaveText('No')
+  await expect(roleCell(page, 'hub', 'grant.change', 'hub_admin')).toContainText(
+    'Not their own grant',
+  )
+
+  // What the table says a member cannot do, the API refuses Leo, a member.
+  const leo = as('leo')
+  await expectStatus(await leo.post('/invites', { workspaceRole: 'member' }), 403)
+  await expectStatus(
+    await leo.post('/hubs', { name: 'Not made', color: 'blue', idPrefix: 'NOP' }),
+    403,
+  )
+})
