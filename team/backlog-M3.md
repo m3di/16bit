@@ -22,9 +22,9 @@ The maintainer asked the lead to decide all five questions:
 - **Role:** backend
 - **Depends on:** nothing
 - **Gate:** needs-human (`packages/core` contracts)
-- **Acceptance:** `packages/core` exports: the feed protocol (client messages `subscribe`, `unsubscribe` with a hub ID and `after`; server messages `changes` with a high-water `seq` and `{ seq, hubId, itemId, item | null, clientMutationId? }[]`, `hub` with the hub's version, `access_lost`, `resync`, `error` with `not_found` among its codes), the `GET /changes` request and response (paged by `after` and `limit`, up to 1,000, with the high-water `seq`), an optional `clientMutationId` on item create, patch and delete, a `seq` on item, query and hub responses (D58), and on the query `offset` (0 to 100,000, not with `cursor`), `count: true` (adds `total`) and `order: "updated" | "number"` (D61). Client messages have a 4 KiB cap. Contract tests for each shape, including `offset` with `cursor` refused and an oversized message.
+- **Acceptance:** `packages/core` exports: the feed protocol (client messages `subscribe`, `unsubscribe` with a hub ID and `after`; server messages `changes` with a high-water `seq` and `{ seq, hubId, itemId, item | null, clientMutationId? }[]`, `hub` with the hub's version, `access_lost`, `resync`, `error` with `not_found` among its codes), the `GET /changes` request and response (paged by `after` and `limit`, up to 1,000, with the high-water `seq`), an optional `clientMutationId` on item create, patch and delete, a `seq` on item, query and hub responses (D58), and on the query `offset` (0 to 100,000, not with `cursor`), `count: true` (adds `total`) and `order: "updated" | "number"` (default `updated`; refused together with `sort`; the cursor records its order and is refused under the other, and under `number` it pages by item number) (D61). Client messages have a 4 KiB cap. Contract tests for each shape, including `offset` with `cursor` refused, `order` with `sort` refused, a cursor from the other order refused, and an oversized message.
 
-## M3-02 Mutation ID migration
+## M3-02 Migration: mutation IDs and the number index
 - **Role:** backend
 - **Depends on:** nothing (alongside M3-01)
 - **Gate:** needs-human (migration)
@@ -34,7 +34,7 @@ The maintainer asked the lead to decide all five questions:
 - **Role:** backend
 - **Depends on:** M3-01, M3-02
 - **Gate:** needs-human (reads under row-level security)
-- **Acceptance:** one function reads changes after a sequence for a list of hubs under the caller's identity and collapses each item to its latest state (D58); `GET /changes` serves it to people and agents. Every `GET /changes` page carries the high-water `seq`. Item, query and hub responses carry the workspace `seq` from the same snapshot (D58). Item writes store `clientMutationId`; a retry with a known ID returns the first answer's status with the current item and writes nothing, also when two retries race, and the same ID with a different item or operation is a 422 (D59). Schema writes, access changes, sign-out, member removal, key revocation and password resets `NOTIFY` so the feed can act on them (D58). Integration tests: a viewer never sees changes in a hub they lack, the high-water `seq` moves past hidden changes, a revoked grant stops changes, collapse, the retry race, a reused ID refused, and an item changed between a query and `GET /changes` after its `seq` is not missed.
+- **Acceptance:** one function reads changes after a sequence for a list of hubs under the caller's identity and collapses each item to its latest state (D58); `GET /changes` serves it to people and agents. Every `GET /changes` page and feed batch carries a high-water `seq`: the workspace counter when the page is complete, the last returned row's `seq` when `limit` or a cap cut it short. Item, query and hub responses read the workspace `seq` and their rows in one `REPEATABLE READ READ ONLY` transaction, so the `seq` is never newer than the rows (requests otherwise run at READ COMMITTED) (D58). Item writes store `clientMutationId`; a retry with a known ID returns the first answer's status with the current item and writes nothing, also when two retries race, and the same ID with a different item or operation is a 422 (D59). Schema writes, access changes, sign-out, member removal, key revocation and password resets `NOTIFY` so the feed can act on them (D58). Integration tests: a viewer never sees changes in a hub they lack, the high-water `seq` moves past hidden changes, a revoked grant stops changes, collapse, the retry race, a reused ID refused, an item changed between a query and `GET /changes` after its `seq` is not missed (with a write forced between the two reads), and a page cut short by `limit` is followed by the rows it left out.
 
 ## M3-04 WebSocket feed
 - **Role:** backend
@@ -45,7 +45,7 @@ The maintainer asked the lead to decide all five questions:
 ## M3-05 Query windows by offset, total count and the number order
 - **Role:** backend
 - **Depends on:** M3-01, M3-02, M3-06
-- **Acceptance:** the query accepts `offset`, `count` and `order: "number"` (D61). `total` comes from `folder.item_count` when there is no `where`. EXPLAIN tests show both orders stay index scans with an offset. On a 50,000-item folder a window at offset 49,800 answers in under 500 ms on CI hardware, and one with an attribute sort and a filter in under two seconds.
+- **Acceptance:** the query accepts `offset`, `count` and `order: "number"` (D61). `total` comes from `folder.item_count` when there is no `where`. EXPLAIN tests show both orders stay index scans with an offset. On a 50,000-item folder a window at offset 49,800 answers in under 500 ms on CI hardware, and one with an attribute sort, a filter and `count: true` in under two seconds.
 
 ## M3-06 Large-folder seed
 - **Role:** backend
@@ -60,7 +60,7 @@ The maintainer asked the lead to decide all five questions:
 ## M3-08 Client store and live sync
 - **Role:** frontend
 - **Depends on:** M3-01, M3-04 (it can start on the store against M3-01's shapes)
-- **Acceptance:** the store from D60, one feed connection per tab with reconnect (backoff up to 30 s) and resume, subscriptions for the hubs on screen, and optimistic create, patch and delete with mutation IDs, confirmed by the echo and rolled back on rejection. The folder table, item panel and item page read from it. A `hub` event reloads the schema; `access_lost` shows the no-permission state; `resync` reloads windows. A small connection indicator in the shell when offline. Component tests for apply, rollback, echo, reconnect and resync.
+- **Acceptance:** the store from D60, one feed connection per tab with reconnect (backoff up to 30 s) and resume, subscriptions for the hubs on screen, and optimistic create, patch and delete with mutation IDs, confirmed by the HTTP response, rolled back on rejection, and not applied twice when the echo arrives (D59). Every live read subscribes with the `seq` it came with; an item is applied only if its version is newer, and deleted IDs keep a tombstone (D58). The folder table, item panel and item page read from it. A `hub` event reloads the schema; `access_lost` shows the no-permission state; `resync` reloads windows. A small connection indicator in the shell when offline. Component tests for apply, rollback, echo, reconnect and resync, and that a stale version or late event never overwrites a newer item, a tombstone stops a deleted row coming back, a subscription uses the read's `seq`, and a write made while the socket is down is confirmed.
 
 ## M3-09 Large folders in the dashboard
 - **Role:** frontend
@@ -81,7 +81,7 @@ The maintainer asked the lead to decide all five questions:
 ## M3-12 Sync end-to-end suite and exit check
 - **Role:** qa
 - **Depends on:** M3-08, M3-09, M3-06
-- **Acceptance:** two browser contexts and one agent key edit the same folder (create, edit the same and different items, delete, a conflicting edit); both browsers show the same rows and values within two seconds of each write, checked against the API. A dropped connection catches up after reconnect, and an HTTP write made while the socket is down is confirmed. A 50,000-item folder from `seed:large` meets D61's numbers for the default order (rows within one second of a jump, no `longtask` over 50 ms while scrolling, under 100 rows in the DOM). Runs in the required End-to-end check. If the large folder makes it slower than five minutes, QA proposes a separate required job; changing the required checks is gated.
+- **Acceptance:** two browser contexts and one agent key edit the same folder (create, edit the same and different items, delete, a conflicting edit); both browsers show the same rows and values within two seconds of each write, checked against the API. A dropped connection catches up after reconnect, and an HTTP write made while the socket is down is confirmed. A 50,000-item folder from `seed:large` meets D61's numbers for the default order (rows within one second of a jump, as the median of several jumps, no `longtask` over 50 ms while scrolling, under 100 rows in the DOM). Runs in the required End-to-end check. If the large folder makes it slower than five minutes, QA proposes a separate required job; changing the required checks is gated.
 
 ## M3-13 M3 report
 - **Role:** lead
