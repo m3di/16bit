@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_SORT_KEYS } from './query.ts'
 
 // The item query cursor (D61). It stays opaque to clients, but it is encoded here rather than
 // in `apps/api` so the query schema can refuse a cursor from another order at the edge. Core
@@ -116,8 +117,11 @@ export const itemCursorSchema = z.discriminatedUnion('order', [
   z.strictObject({ order: z.literal('number'), after: z.tuple([z.int().min(1)]) }),
   z.strictObject({
     order: z.literal('sort'),
-    // Up to MAX_SORT_KEYS (3) keys, then the ID.
-    after: z.array(cursorKeySchema).min(2).max(4),
+    // One key per sort key, then the ID.
+    after: z
+      .array(cursorKeySchema)
+      .min(2)
+      .max(MAX_SORT_KEYS + 1),
   }),
 ])
 export type ItemCursor = z.infer<typeof itemCursorSchema>

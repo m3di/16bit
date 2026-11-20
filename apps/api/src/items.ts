@@ -14,7 +14,6 @@ import {
   type Filter,
   type FolderAttributeDefinition,
   type Item,
-  type ItemCursor,
   type ItemQueryResult,
   type ItemRead,
   type ItemValues,
@@ -771,13 +770,16 @@ export async function queryItems(
     items: page.map((row) => toItem(row)),
     nextCursor:
       rows.length > query.limit && last
-        ? encodeItemCursor({
-            order: sorted ? 'sort' : 'updated',
-            after: [
-              ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
-              last.id,
-            ],
-          } as ItemCursor)
+        ? sorted
+          ? encodeItemCursor({
+              order: 'sort',
+              after: [
+                ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
+                last.id,
+              ],
+            })
+          : // The default order has one key, `updated_at` in microsecond text form.
+            encodeItemCursor({ order: 'updated', after: [last['c0'] as string, last.id] })
         : null,
   }
   if (expand.length > 0) {

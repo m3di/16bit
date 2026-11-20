@@ -2,7 +2,7 @@ import { itemReadSchema, itemWriteResultSchema, type Item } from '@16bit/core'
 
 // Item responses carry the workspace `seq` from M3-03 (D58), which the strict `itemSchema`
 // refuses. Specs compare items, so these parse with the schemas that allow it and drop it
-// (issue 181).
+// (issue 168).
 
 function withoutSeq<T extends { seq?: number | undefined }>(response: T): Omit<T, 'seq'> {
   const rest = { ...response }

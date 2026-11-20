@@ -158,7 +158,13 @@ export function parseFeedClientMessage(text: string): ParsedClientMessage {
  * hub the caller can read, `seq` order, at most `limit` (D57). An agent sees its own hub only.
  */
 export const changesQuerySchema = z.strictObject({
-  after: z.coerce.number().pipe(seqSchema),
+  // Digits only: an empty `?after=` is refused rather than read as 0, which would replay
+  // the whole history.
+  after: z
+    .string()
+    .regex(/^\d{1,15}$/, 'after must be a sequence number')
+    .transform(Number)
+    .pipe(seqSchema),
   limit: z.coerce.number().int().min(1).max(MAX_CHANGES_LIMIT).default(DEFAULT_CHANGES_LIMIT),
 })
 export type ChangesQuery = z.input<typeof changesQuerySchema>

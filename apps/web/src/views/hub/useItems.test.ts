@@ -922,7 +922,7 @@ describe('useItems: deleting (#119)', () => {
 
 // From M3-03 the API adds the workspace `seq` to item, query and write responses (D58). The
 // strict item schema would refuse it, so these must keep working, and the store keeps items
-// without it (issue 181).
+// without it (issue 168).
 describe('useItems: responses carrying seq', () => {
   const withSeq = (body: object, seq = 7) => ({ ...body, seq })
 

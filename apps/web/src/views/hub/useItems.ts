@@ -116,7 +116,7 @@ export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> =
 }
 
 /**
- * A response without the workspace `seq` it carries (D58, issue 181), so the store holds
+ * A response without the workspace `seq` it carries (D58, issue 168), so the store holds
  * items only. The API sends `seq` from M3-03; until then this changes nothing.
  */
 export function withoutSeq<T extends Item & { seq?: number | undefined }>(

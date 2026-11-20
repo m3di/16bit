@@ -316,6 +316,10 @@ describe('GET /changes', () => {
     expect(changesQuerySchema.safeParse({ after: '-1' }).success).toBe(false)
     expect(changesQuerySchema.safeParse({ after: 'x' }).success).toBe(false)
     expect(changesQuerySchema.safeParse({ after: '1.5' }).success).toBe(false)
+    // An empty or loose `after` would otherwise coerce to a number and replay history.
+    for (const after of ['', ' ', ' 1', '1e3', '0x10', '+1', 1]) {
+      expect(changesQuerySchema.safeParse({ after }).success, JSON.stringify(after)).toBe(false)
+    }
     expect(changesQuerySchema.safeParse({ after: '0', limit: '0' }).success).toBe(false)
     expect(changesQuerySchema.safeParse({ after: '0', limit: '1001' }).success).toBe(false)
     expect(changesQuerySchema.safeParse({ after: '0', hub: 'h1' }).success).toBe(false)

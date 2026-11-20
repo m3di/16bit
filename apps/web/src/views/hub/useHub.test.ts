@@ -76,7 +76,7 @@ describe('useHub', () => {
     expect(h.tree.value).toHaveLength(4)
   })
 
-  it('accepts a description carrying the workspace seq (issue 181)', async () => {
+  it('accepts a description carrying the workspace seq (issue 168)', async () => {
     const api = fakeApi(() => json({ ...description, seq: 41 }))
     const h = useHub('w', 'bld', api.fetchFn)
     await h.load()
