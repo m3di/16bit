@@ -1,7 +1,15 @@
 // @vitest-environment client-node
 import type { CreateHub } from '@16bit/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { findAll, fire, mount, setLayout, type, type FakeNode } from '../../test/fake-dom.ts'
+import {
+  activeElement,
+  findAll,
+  fire,
+  mount,
+  setLayout,
+  type,
+  type FakeNode,
+} from '../../test/fake-dom.ts'
 import { PREFIX_TAKEN, type CreateHubResult } from './newHub.ts'
 import NewHubDialog from './NewHubDialog.vue'
 
@@ -78,9 +86,32 @@ describe('NewHubDialog with a taken prefix', () => {
     expect(dialog.notice()).toEqual([])
     expect(dialog.created).toEqual([])
     expect(dialog.name().props['aria-invalid']).toBeUndefined()
+    // Focus moves to the field, so a screen reader reads its description with the error.
+    expect(activeElement(dialog.root)).toBe(dialog.prefix())
 
     type(dialog.prefix(), 'eng2')
     await flush()
+    expect(dialog.prefix().props['aria-invalid']).toBeUndefined()
+    expect(textOf(dialog.root)).not.toContain(PREFIX_TAKEN)
+  })
+
+  it('clears the refusal when a prefix that follows the name changes with it', async () => {
+    const dialog = mountDialog([{ ok: false, message: PREFIX_TAKEN, field: 'idPrefix' }])
+    type(dialog.name(), 'Engineering')
+    await flush()
+    await dialog.submit()
+    expect(dialog.sent).toEqual([{ name: 'Engineering', color: 'indigo', idPrefix: 'ENG' }])
+    expect(dialog.prefix().props['aria-invalid']).toBe('true')
+
+    // Same suggestion: still the refused prefix, so the refusal stays.
+    type(dialog.name(), 'Engineering ')
+    await flush()
+    expect(dialog.prefix().value).toBe('ENG')
+    expect(dialog.prefix().props['aria-invalid']).toBe('true')
+
+    type(dialog.name(), 'Platform Engineering')
+    await flush()
+    expect(dialog.prefix().value).toBe('PE')
     expect(dialog.prefix().props['aria-invalid']).toBeUndefined()
     expect(textOf(dialog.root)).not.toContain(PREFIX_TAKEN)
   })

@@ -638,10 +638,19 @@ describe('creating a hub', () => {
       expect(await logSince(seq)).toEqual([])
     })
 
-    it('reports a taken ID before a taken prefix', async () => {
+    it('reports a taken ID before a taken prefix, for a live hub and a deleted one', async () => {
       const res = await create('own', 'DOCS', { id: 'build' })
       expect(res.statusCode).toBe(409)
       expect(res.json()).toMatchObject({ error: 'id_taken' })
+
+      // hub_id_check fires before the insert reaches the prefix index.
+      expect((await create('own', 'GONE', { id: 'gone' })).statusCode).toBe(201)
+      expect(
+        (await call('own', 'DELETE', '/v1/workspaces/w1/hubs/gone?version=0')).statusCode,
+      ).toBe(204)
+      const again = await create('own', 'DOCS', { id: 'gone' })
+      expect(again.statusCode).toBe(409)
+      expect(again.json()).toMatchObject({ error: 'id_taken' })
     })
 
     it('allows a prefix used in another workspace, or only by a subfolder', async () => {
@@ -660,7 +669,8 @@ describe('creating a hub', () => {
       expect((await create('own', 'TMP', { id: 'tmp2' })).statusCode).toBe(201)
     })
 
-    it('lets one of two concurrent creates with a prefix win', async () => {
+    // The index decides however the two requests interleave; this doesn't prove they overlapped.
+    it('lets one of two creates sent together with a prefix win', async () => {
       const results = await Promise.all([
         create('own', 'RACE', { id: 'race1' }),
         create('adm', 'RACE', { id: 'race2' }),

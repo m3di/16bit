@@ -174,6 +174,8 @@ test('a prefix another hub has is refused on the prefix field, and free once tha
     // On the field, the dialog still open with what was typed, and nothing created.
     const field = dialog.getByLabel('ID prefix')
     await expect(field).toHaveAttribute('aria-invalid', 'true')
+    // Focus moves to the field, so a screen reader reads the error with it.
+    await expect(field).toBeFocused()
     await expect(field).toHaveAccessibleDescription(
       /Another hub in this workspace uses this prefix\. Choose a different one\./,
     )

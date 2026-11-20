@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CreateHub, HubListEntry, PaletteColor } from '@16bit/core'
-import { ref, useId, watch } from 'vue'
+import { nextTick, ref, useId, useTemplateRef, watch } from 'vue'
 import {
   BaseButton,
   BaseDialog,
@@ -35,6 +35,7 @@ const {
 const emit = defineEmits<{ created: [hub: Extract<HubListEntry, { access: 'granted' }>] }>()
 
 const formId = useId()
+const form = useTemplateRef<HTMLFormElement>('form')
 const name = ref('')
 const idPrefix = ref('')
 /** The reader typed a prefix of their own: it no longer follows the name. */
@@ -59,7 +60,12 @@ watch(
 )
 
 watch(name, (next) => {
-  if (!prefixEdited.value) idPrefix.value = suggestPrefix(next)
+  if (prefixEdited.value) return
+  const suggested = suggestPrefix(next)
+  if (suggested === idPrefix.value) return
+  idPrefix.value = suggested
+  // A refusal of the old prefix (prefix_taken) no longer applies.
+  delete errors.value.idPrefix
 })
 
 // Shown in capitals as typed: the prefix is permanent, so the field shows what is stored.
@@ -86,8 +92,15 @@ async function submit() {
   const result = await create(request.body)
   busy.value = false
   if (!result.ok) {
-    if (result.field) errors.value = { [result.field]: result.message }
-    else error.value = result.message
+    if (!result.field) {
+      error.value = result.message
+      return
+    }
+    errors.value = { [result.field]: result.message }
+    // "Create hub" was disabled while busy, so focus is lost: move it to the field, whose
+    // description now carries the error, so a screen reader announces it.
+    await nextTick()
+    form.value?.querySelector<HTMLInputElement>('[data-hub-prefix]')?.focus()
     return
   }
   open.value = false
@@ -102,7 +115,14 @@ async function submit() {
     :description="`In ${workspaceName}. You become its hub admin.`"
     :persistent="busy"
   >
-    <form :id="formId" class="flex flex-col gap-4" novalidate data-new-hub @submit.prevent="submit">
+    <form
+      :id="formId"
+      ref="form"
+      class="flex flex-col gap-4"
+      novalidate
+      data-new-hub
+      @submit.prevent="submit"
+    >
       <BaseInput
         v-model="name"
         label="Name"
