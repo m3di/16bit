@@ -44,10 +44,22 @@ export async function readChanges(
   workspaceId: string,
   read: ChangesRead,
 ): Promise<ChangesPage> {
+  return (await readChangesBatch(trx, workspaceId, read)).page
+}
+
+/**
+ * `readChanges`, plus `cut`: true when more than `limit` revisions the caller may see follow
+ * `after`, as opposed to the scan cap ending the page. The feed answers `resync` on it (D58).
+ */
+export async function readChangesBatch(
+  trx: Transaction<Database>,
+  workspaceId: string,
+  read: ChangesRead,
+): Promise<{ page: ChangesPage; cut: boolean }> {
   const counter = await workspaceSeq(trx, workspaceId)
   const { after, limit } = read
   if (after >= counter || read.hubIds?.length === 0) {
-    return { changes: [], seq: counter, more: false }
+    return { page: { changes: [], seq: counter, more: false }, cut: false }
   }
   // A primary key range of at most `maxScan` rows, whatever row-level security hides in it.
   const end = Math.min(counter, after + (read.maxScan ?? MAX_CHANGES_SCAN))
@@ -97,5 +109,5 @@ export async function readChanges(
     if (row.client_mutation_id !== null) change.clientMutationId = row.client_mutation_id
     return change
   })
-  return { changes, seq, more: cut || end < counter }
+  return { page: { changes, seq, more: cut || end < counter }, cut }
 }

@@ -1,0 +1,116 @@
+import pg from 'pg'
+import { REVISION_CHANNEL } from '../items.ts'
+import { ACCESS_CHANNEL, HUB_CHANNEL, SESSION_CHANNEL } from '../notify.ts'
+
+// The process's one dedicated `LISTEN` connection (D58). Outside the pool: a pooled connection
+// would be handed to queries and lose its LISTENs. When Postgres drops it (a restart,
+// `pg_terminate_backend`, a network drop) it reconnects with backoff, as the pool does (#107),
+// and reports `reconnected`: notifications sent in the gap are lost, so the feed catches every
+// socket up from its own positions.
+
+export const FEED_CHANNELS = [REVISION_CHANNEL, HUB_CHANNEL, ACCESS_CHANNEL, SESSION_CHANNEL]
+
+/** `application_name` of the connection, so an operator (or a test) can find it. */
+export const LISTENER_APPLICATION_NAME = '16bit-feed-listener'
+
+export interface ListenerHandlers {
+  notification(channel: string, payload: string): void
+  /** Connected again after a drop. Not called for the first connection. */
+  reconnected(): void
+}
+
+export interface ListenerOptions {
+  /** First delay before reconnecting, doubled per failed attempt up to `maxRetryMs`. */
+  retryMs?: number
+  maxRetryMs?: number
+}
+
+export class Listener {
+  readonly #url: string
+  readonly #handlers: ListenerHandlers
+  readonly #retryMs: number
+  readonly #maxRetryMs: number
+  #client: pg.Client | null = null
+  #timer: ReturnType<typeof setTimeout> | null = null
+  #attempt = 0
+  #connectedOnce = false
+  #closed = false
+
+  constructor(url: string, handlers: ListenerHandlers, options: ListenerOptions = {}) {
+    this.#url = url
+    this.#handlers = handlers
+    this.#retryMs = options.retryMs ?? 250
+    this.#maxRetryMs = options.maxRetryMs ?? 5000
+  }
+
+  /** True while the connection is up and listening. */
+  get listening(): boolean {
+    return this.#client !== null
+  }
+
+  /** Connects. Resolves after the first attempt, connected or not; failures keep retrying. */
+  async start(): Promise<void> {
+    await this.#connect()
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true
+    if (this.#timer) clearTimeout(this.#timer)
+    this.#timer = null
+    const client = this.#client
+    this.#client = null
+    if (client) await client.end().catch(() => undefined)
+  }
+
+  async #connect(): Promise<void> {
+    if (this.#closed) return
+    const client = new pg.Client({
+      connectionString: this.#url,
+      application_name: LISTENER_APPLICATION_NAME,
+      keepAlive: true,
+    })
+    let lost = false
+    const onLost = (error?: Error) => {
+      if (lost) return
+      lost = true
+      if (this.#client === client) this.#client = null
+      if (this.#closed) return
+      if (error) console.error(`feed: LISTEN connection lost, reconnecting: ${error.message}`)
+      this.#retry()
+    }
+    // Without an `error` listener a dropped socket would crash the process (#107).
+    client.on('error', onLost)
+    client.on('end', () => onLost())
+    client.on('notification', (n) => {
+      if (n.payload !== undefined) this.#handlers.notification(n.channel, n.payload)
+    })
+    try {
+      await client.connect()
+      for (const channel of FEED_CHANNELS) {
+        await client.query(`LISTEN ${pg.escapeIdentifier(channel)}`)
+      }
+    } catch (error) {
+      await client.end().catch(() => undefined)
+      onLost(error as Error)
+      return
+    }
+    if (this.#closed || lost) {
+      await client.end().catch(() => undefined)
+      return
+    }
+    this.#client = client
+    this.#attempt = 0
+    if (this.#connectedOnce) this.#handlers.reconnected()
+    this.#connectedOnce = true
+  }
+
+  #retry(): void {
+    if (this.#closed || this.#timer) return
+    const delay = Math.min(this.#maxRetryMs, this.#retryMs * 2 ** Math.min(this.#attempt, 16))
+    this.#attempt += 1
+    this.#timer = setTimeout(() => {
+      this.#timer = null
+      void this.#connect()
+    }, delay)
+  }
+}

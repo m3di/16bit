@@ -58,17 +58,27 @@ export type FeedClientMessage = z.infer<typeof feedClientMessageSchema>
 // Server to client.
 
 /**
- * Changes after the client's `after`, in `seq` order. `seq` is the high-water mark: every
- * change up to it that the subscriber may see is in this message or an earlier one, even when
- * all of them were hidden and `changes` is empty, so the client's `after` never stalls. A batch
- * cut short by its limit reports its last change's `seq` (D58).
+ * Changes after the client's `after`, in `seq` order, for the hubs in `hubIds`. `seq` is the
+ * high-water mark for those hubs only: every change in them up to it that the subscriber may see
+ * is in this message or an earlier one, even when all of them were hidden and `changes` is
+ * empty, so the client's `after` never stalls. A batch cut short by its limit reports its last
+ * change's `seq` (D58). A client advances only the hubs in `hubIds`.
+ *
+ * The server handles a socket's client messages in order. A `subscribe` is answered by a
+ * `changes` message for that hub alone (its catch-up from `after`, possibly empty), or by
+ * `resync` or `error`, before the hub appears in any later message.
  */
 export const changesMessageSchema = z.strictObject({
   type: z.literal('changes'),
   seq: seqSchema,
+  hubIds: z.array(idSchema).min(1).max(MAX_SUBSCRIPTIONS_PER_SOCKET),
   changes: z.array(changeSchema),
 })
-/** The hub's schema or settings changed: reload `GET /hubs/:hubId` if `version` is newer. */
+/**
+ * The hub's schema or settings changed (folders, attributes, the hub row): reload
+ * `GET /hubs/:hubId`, always. Folder and attribute writes don't bump the hub's `version`, so it
+ * is informational only: the hub row's version when the event was sent.
+ */
 export const hubMessageSchema = z.strictObject({
   type: z.literal('hub'),
   hubId: idSchema,

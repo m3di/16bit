@@ -30,12 +30,15 @@ import {
   type Page,
   type Workspace,
 } from '@16bit/core'
+import websocket from '@fastify/websocket'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
 import { checkHub, folderHub, itemHub } from './access.ts'
 import { readChanges } from './changes.ts'
+import { Feed, type FeedOptions } from './feed/feed.ts'
+import { registerFeedRoute } from './feed/route.ts'
 import {
   registerAuthHook,
   requireIdentity,
@@ -104,6 +107,11 @@ export interface AppOptions {
   loginPerEmail?: RateLimitPolicy
   /** Sign-in and invite acceptance attempts per client IP. Defaults to 100 per 15 minutes. */
   loginPerIp?: RateLimitPolicy
+  /**
+   * The change feed (D57, D58): `GET /feed` and its `LISTEN` connection. Without it the route
+   * answers 404, and the app opens no connection outside the pool.
+   */
+  feed?: FeedOptions
 }
 
 /** Default cap on folders and attributes returned by a hub description. */
@@ -132,6 +140,17 @@ export function buildApp(options: AppOptions): FastifyInstance {
   }
   const emailLimiter = new RateLimiter(options.loginPerEmail ?? { max: 10, windowSeconds: 900 })
   const ipLimiter = new RateLimiter(options.loginPerIp ?? { max: 100, windowSeconds: 900 })
+
+  // Before every route, so it can take over upgrades (its README). Frames past `maxPayload`
+  // close the socket (1009); between `MAX_CLIENT_MESSAGE_BYTES` and it they answer
+  // `message_too_large` (D57).
+  void app.register(websocket, { options: { maxPayload: 64 * 1024 } })
+  const feed = options.feed ? new Feed(db, auth.session, options.feed) : null
+  if (feed) {
+    app.addHook('onReady', () => feed.start())
+    // Before @fastify/websocket's own close, so sockets get a going-away code and reason.
+    app.addHook('preClose', () => feed.close())
+  }
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
@@ -258,6 +277,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           })
 
           registerInviteRoutes(ws, db)
+          if (feed) registerFeedRoute(ws, feed)
 
           ws.get('/hubs', async (request): Promise<Page<HubListEntry>> => {
             const { workspaceId } = parse(workspaceParams, request.params)

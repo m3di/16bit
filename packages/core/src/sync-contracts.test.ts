@@ -15,6 +15,7 @@ import {
   MAX_CHANGES_LIMIT,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_QUERY_OFFSET,
+  MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
   patchItemSchema,
   utf8ByteLength,
@@ -264,26 +265,27 @@ describe('feed client messages (D57)', () => {
 describe('feed server messages (D58)', () => {
   const change = { seq: 5, hubId: 'h1', itemId: 'i1', item }
 
-  it('sends changes with a high-water seq, even when all were hidden', () => {
+  it('sends changes with a high-water seq for the hubs it names, even when all were hidden', () => {
     const parse = (m: object) => feedServerMessageSchema.safeParse(m)
-    expect(parse({ type: 'changes', seq: 9, changes: [change] }).success).toBe(true)
-    expect(parse({ type: 'changes', seq: 9, changes: [] }).success).toBe(true)
-    expect(parse({ type: 'changes', changes: [change] }).success).toBe(false)
+    const base = { type: 'changes', seq: 9, hubIds: ['h1'] }
+    expect(parse({ ...base, changes: [change] }).success).toBe(true)
+    expect(parse({ ...base, changes: [] }).success).toBe(true)
+    expect(parse({ ...base, hubIds: ['h1', 'h2'], changes: [] }).success).toBe(true)
+    expect(parse({ type: 'changes', hubIds: ['h1'], changes: [change] }).success).toBe(false)
+    // Which hubs the high-water mark covers is always said, and never as an empty list (#171).
+    expect(parse({ type: 'changes', seq: 9, changes: [change] }).success).toBe(false)
+    expect(parse({ ...base, hubIds: [], changes: [] }).success).toBe(false)
+    const many = Array.from({ length: MAX_SUBSCRIPTIONS_PER_SOCKET + 1 }, (_, i) => `h${String(i)}`)
+    expect(parse({ ...base, hubIds: many, changes: [] }).success).toBe(false)
     // A deletion is the item as null; the echo of a writer's mutation ID is optional.
     expect(
-      parse({
-        type: 'changes',
-        seq: 9,
-        changes: [{ ...change, item: null, clientMutationId: MUTATION }],
-      }).success,
+      parse({ ...base, changes: [{ ...change, item: null, clientMutationId: MUTATION }] }).success,
     ).toBe(true)
-    expect(
-      parse({ type: 'changes', seq: 9, changes: [{ ...change, item: undefined }] }).success,
-    ).toBe(false)
+    expect(parse({ ...base, changes: [{ ...change, item: undefined }] }).success).toBe(false)
     // No patch is ever sent, only the item as it is now.
-    expect(
-      parse({ type: 'changes', seq: 9, changes: [{ ...change, patch: { op: 'delete' } }] }).success,
-    ).toBe(false)
+    expect(parse({ ...base, changes: [{ ...change, patch: { op: 'delete' } }] }).success).toBe(
+      false,
+    )
   })
 
   it('sends hub, access_lost, resync and error', () => {
