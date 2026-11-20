@@ -64,7 +64,7 @@ export interface FeedOptions {
 /** Who holds the socket, as resolved before the upgrade. */
 export type FeedCredential =
   | { kind: 'session'; sessionIdHash: string; accountId: string }
-  | { kind: 'agent'; keyHash: string; principalId: string }
+  | { kind: 'agent'; keyHash: string; principalId: string; hubId: string }
 
 export interface ConnectionContext {
   workspaceId: string
@@ -214,9 +214,17 @@ export class Feed {
     this.#pending.set(workspaceId, { seq, timer })
   }
 
-  /** One `hub` event per notification to each subscriber who can still read it (D58). */
+  /**
+   * One `hub` event per notification to each subscriber who can still read it (D58). Deleting a
+   * hub revokes its agent keys in SQL with only this notice, no `access` one, so an agent socket
+   * on the hub checks its key at once, and closes if the key is gone, subscribed or not.
+   */
   #hub(notice: HubNotice): void {
     for (const conn of this.#byWorkspace.get(notice.workspaceId) ?? []) {
+      const c = conn.context.credential
+      if (c.kind === 'agent' && c.hubId === notice.hubId) {
+        conn.enqueue(() => conn.recheckCredential())
+      }
       if (conn.subscribed(notice.hubId)) {
         conn.enqueue(() => conn.recheckHubs([notice.hubId], true))
       }
@@ -471,8 +479,7 @@ export class Connection {
     const live =
       credential.kind === 'session'
         ? await sessionLive(this.feed.db, credential.sessionIdHash, this.feed.session)
-        : (await resolveAgentKeyHash(this.feed.db, credential.keyHash))?.workspaceId ===
-          workspaceId
+        : (await resolveAgentKeyHash(this.feed.db, credential.keyHash))?.workspaceId === workspaceId
     if (!live) {
       this.close(CLOSE_CREDENTIALS_ENDED, 'Session ended')
       return

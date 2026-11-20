@@ -20,7 +20,12 @@ function credentialOf(request: FastifyRequest): FeedCredential {
   }
   // The auth hook accepted this bearer token; keep only its hash for the periodic check.
   const bearer = /^Bearer (.+)$/i.exec(request.headers.authorization ?? '')?.[1] ?? ''
-  return { kind: 'agent', keyHash: hashAgentSecret(bearer), principalId: identity.principalId }
+  return {
+    kind: 'agent',
+    keyHash: hashAgentSecret(bearer),
+    principalId: identity.principalId,
+    hubId: identity.hubId,
+  }
 }
 
 /**
@@ -31,7 +36,7 @@ function credentialOf(request: FastifyRequest): FeedCredential {
 function checkOrigin(request: FastifyRequest): void {
   if (request.identity?.kind !== 'person') return
   const origin = request.headers.origin
-  let host: string | null = null
+  let host: string | null
   try {
     host = origin ? new URL(origin).host : null
   } catch {
@@ -47,16 +52,18 @@ export function registerFeedRoute(ws: FastifyInstance, feed: Feed): void {
     method: 'GET',
     url: '/feed',
     // After the `/v1` auth hook (401, and 400 for D49), before the workspace check.
-    onRequest: async (request) => {
+    onRequest: (request, _reply, done) => {
       checkOrigin(request)
+      done()
     },
-    preHandler: async (request) => {
+    preHandler: (request, _reply, done) => {
       if (feed.socketCount(credentialOf(request)) >= MAX_SOCKETS_PER_SESSION) {
         throw new HttpError(
           'rate_limited',
           `At most ${String(MAX_SOCKETS_PER_SESSION)} feed connections per session`,
         )
       }
+      done()
     },
     handler: async (_request, reply) =>
       reply

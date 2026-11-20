@@ -80,7 +80,9 @@ export class Listener {
     }
     // Without an `error` listener a dropped socket would crash the process (#107).
     client.on('error', onLost)
-    client.on('end', () => onLost())
+    client.on('end', () => {
+      onLost()
+    })
     client.on('notification', (n) => {
       if (n.payload !== undefined) this.#handlers.notification(n.channel, n.payload)
     })
@@ -94,7 +96,8 @@ export class Listener {
       onLost(error as Error)
       return
     }
-    if (this.#closed || lost) {
+    // Closed, or the connection dropped, while LISTEN was being set up.
+    if (this.#stale(lost)) {
       await client.end().catch(() => undefined)
       return
     }
@@ -102,6 +105,10 @@ export class Listener {
     this.#attempt = 0
     if (this.#connectedOnce) this.#handlers.reconnected()
     this.#connectedOnce = true
+  }
+
+  #stale(lost: boolean): boolean {
+    return this.#closed || lost
   }
 
   #retry(): void {
