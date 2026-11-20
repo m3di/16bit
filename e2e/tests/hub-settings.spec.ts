@@ -6,7 +6,15 @@ import {
   type HubDescription,
 } from '@16bit/core'
 import type { Page } from '@playwright/test'
-import { expect, expectStatus, test, uniqueHubName, WS, type Client } from './support/roles.ts'
+import {
+  expect,
+  expectStatus,
+  test,
+  uniqueHubName,
+  uniquePrefix,
+  WS,
+  type Client,
+} from './support/roles.ts'
 
 // Hub settings, folders and attributes (#117): hub admins create, rename, nest and delete empty
 // folders; create attributes, edit options and required, attach and reorder them. Removing an
@@ -19,7 +27,7 @@ async function newHub(owner: Client) {
   const res = await owner.post('/hubs', {
     name: uniqueHubName('settings'),
     color: 'teal',
-    idPrefix: 'SET',
+    idPrefix: uniquePrefix(),
   })
   await expectStatus(res, 201)
   return hubListEntrySchema.parse(await res.json())

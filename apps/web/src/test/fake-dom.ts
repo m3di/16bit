@@ -18,6 +18,8 @@ export type FakeNode = {
   getRootNode: () => FakeNode
   /** Records focus on the root, as `document.activeElement` would. */
   focus: () => void
+  /** The first element under this one with an attribute; only `[name]` selectors. */
+  querySelector: (selector: string) => FakeNode | null
   /** Scrolling has no layout here; it records the offset asked for. */
   scrollTop: number
   scrollTo: (options: { top?: number }) => void
@@ -50,6 +52,11 @@ function node(tag: string, text = ''): FakeNode {
     },
     focus: () => {
       focused.set(n.getRootNode(), n)
+    },
+    querySelector: (selector) => {
+      const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1]
+      if (!attr) throw new Error(`fake-dom: unsupported selector ${selector}`)
+      return n.children.flatMap((c) => findAll(c, (e) => e.props[attr] !== undefined))[0] ?? null
     },
     scrollTop: 0,
     scrollTo: ({ top }) => {
