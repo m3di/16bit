@@ -37,10 +37,21 @@ import { Listener } from './listener.ts'
 
 /** Most sockets one session (or agent key) holds open at once. */
 export const MAX_SOCKETS_PER_SESSION = 10
+/**
+ * Most client messages one socket may have waiting for an answer. Each holds up to 64 KiB and a
+ * subscribe costs a transaction, so a client sending faster than it is answered is closed (1008)
+ * rather than queued without bound.
+ */
+export const MAX_PENDING_CLIENT_MESSAGES = 32
+/**
+ * Most bytes waiting to go out to one socket. A client that stops reading is closed (1011,
+ * reconnect and resume) instead of the server buffering every change for it.
+ */
+export const MAX_BUFFERED_BYTES = 4 * 1024 * 1024
 
 const {
   credentialsEnded: CLOSE_CREDENTIALS_ENDED,
-  tooManySockets: CLOSE_TOO_MANY_SOCKETS,
+  policy: CLOSE_POLICY,
   internal: CLOSE_INTERNAL,
   goingAway: CLOSE_GOING_AWAY,
 } = FEED_CLOSE_CODES
@@ -50,8 +61,13 @@ export interface FeedOptions {
   listenUrl: string
   /** Notifications for one workspace are gathered this long before reading (D58). */
   coalesceMs?: number
-  /** How often each socket's session or key and membership are checked again (D58). */
+  /**
+   * How often each socket's session or key and membership are checked again (D58), and each
+   * socket pinged: one that has not answered the previous ping by then is terminated.
+   */
   recheckMs?: number
+  /** `MAX_BUFFERED_BYTES`; lowered in tests. */
+  maxBufferedBytes?: number
   /** Past this many missed changes the subscriber could see, `resync`. Lowered in tests. */
   maxMissedChanges?: number
   /** Passed to the reader; lowered in tests. */
@@ -82,6 +98,7 @@ export class Feed {
   readonly session: SessionPolicy
   readonly maxMissed: number
   readonly maxScan: number | undefined
+  readonly maxBuffered: number
   readonly #coalesceMs: number
   readonly #recheckMs: number
   readonly #listener: Listener
@@ -96,6 +113,7 @@ export class Feed {
     this.session = session
     this.maxMissed = options.maxMissedChanges ?? MAX_MISSED_CHANGES
     this.maxScan = options.maxScan
+    this.maxBuffered = options.maxBufferedBytes ?? MAX_BUFFERED_BYTES
     this.#coalesceMs = options.coalesceMs ?? 50
     this.#recheckMs = options.recheckMs ?? 60_000
     this.#listener = new Listener(
@@ -104,8 +122,8 @@ export class Feed {
         notification: (channel, payload) => {
           this.#notification(channel, payload)
         },
-        reconnected: () => {
-          this.#reconnected()
+        connected: () => {
+          this.#connected()
         },
       },
       { retryMs: options.listenRetryMs },
@@ -119,7 +137,12 @@ export class Feed {
   async start(): Promise<void> {
     await this.#listener.start()
     this.#recheckTimer = setInterval(() => {
-      for (const conn of this.#all()) conn.enqueue(() => conn.recheckCredential())
+      void this.#listener.check(Math.min(10_000, this.#recheckMs))
+      for (const conn of this.#all()) {
+        // A half-open socket (a network that dropped without a FIN) never answers a ping.
+        if (!conn.heartbeat()) continue
+        conn.enqueue(() => conn.recheckCredential())
+      }
     }, this.#recheckMs)
     this.#recheckTimer.unref()
   }
@@ -145,7 +168,7 @@ export class Feed {
       return
     }
     if (this.socketCount(context.credential) >= MAX_SOCKETS_PER_SESSION) {
-      socket.close(CLOSE_TOO_MANY_SOCKETS, 'Too many sockets for this session')
+      socket.close(CLOSE_POLICY, 'Too many sockets for this session')
       return
     }
     const conn = new Connection(this, socket, context)
@@ -255,11 +278,12 @@ export class Feed {
   }
 
   /**
-   * Notifications sent while the `LISTEN` connection was down are lost. Check every socket's
-   * credential and hubs again, send `hub` for each subscribed hub (its schema may have changed),
-   * and catch every socket up from its own positions.
+   * On every successful connect of the `LISTEN` connection, the first one included: whatever was
+   * sent while it was down (or before it first came up) is lost. Check every socket's credential
+   * and hubs again, send `hub` for each subscribed hub (its schema may have changed), and catch
+   * every socket up from its own positions. With no sockets open it does nothing.
    */
-  #reconnected(): void {
+  #connected(): void {
     for (const conn of this.#all()) {
       conn.enqueue(() => conn.recheckCredential())
       conn.enqueue(() => conn.recheckHubs(conn.hubIds(), true))
@@ -278,6 +302,10 @@ export class Connection {
   #queue: Promise<void> = Promise.resolve()
   #pumpQueued = false
   #closed = false
+  /** Client messages received and not yet handled. */
+  #pendingMessages = 0
+  /** Answered the last ping (or was opened since the last tick). */
+  #alive = true
 
   constructor(feed: Feed, socket: WebSocket, context: ConnectionContext) {
     this.feed = feed
@@ -285,8 +313,22 @@ export class Connection {
     this.context = context
     // Attached at once, so no message is dropped while earlier work runs.
     socket.on('message', (data, isBinary) => {
+      if (this.#pendingMessages >= MAX_PENDING_CLIENT_MESSAGES) {
+        this.close(CLOSE_POLICY, 'Too many messages waiting for an answer')
+        return
+      }
+      this.#pendingMessages += 1
       const text = isBinary ? null : Buffer.isBuffer(data) ? data.toString('utf8') : null
-      this.enqueue(() => this.#message(text ?? ''))
+      this.enqueue(async () => {
+        try {
+          await this.#message(text ?? '')
+        } finally {
+          this.#pendingMessages -= 1
+        }
+      })
+    })
+    socket.on('pong', () => {
+      this.#alive = true
     })
     socket.on('close', () => {
       this.#closed = true
@@ -301,6 +343,23 @@ export class Connection {
 
   hubIds(): string[] {
     return [...this.#subs.keys()]
+  }
+
+  /**
+   * The recheck tick: terminates the socket if it has not answered the previous ping, else pings
+   * it again. Returns whether the socket is still open.
+   */
+  heartbeat(): boolean {
+    if (this.#closed) return false
+    if (!this.#alive) {
+      this.#closed = true
+      this.socket.terminate()
+      this.feed.forget(this)
+      return false
+    }
+    this.#alive = false
+    this.socket.ping()
+    return true
   }
 
   close(code: number, reason: string): void {
@@ -333,9 +392,13 @@ export class Connection {
   }
 
   #send(message: FeedServerMessage): void {
-    if (!this.#closed && this.socket.readyState === this.socket.OPEN) {
-      this.socket.send(JSON.stringify(message))
+    if (this.#closed || this.socket.readyState !== this.socket.OPEN) return
+    if (this.socket.bufferedAmount > this.feed.maxBuffered) {
+      // The client stopped reading. It resumes from its positions once it reconnects.
+      this.close(CLOSE_INTERNAL, 'Client is not reading')
+      return
     }
+    this.socket.send(JSON.stringify(message))
   }
 
   async #message(text: string): Promise<void> {

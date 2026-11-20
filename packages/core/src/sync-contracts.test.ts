@@ -267,7 +267,7 @@ describe('feed close codes (#171)', () => {
   it('pins each code, so client and server agree on what a close means', () => {
     expect(FEED_CLOSE_CODES).toEqual({
       goingAway: 1001,
-      tooManySockets: 1008,
+      policy: 1008,
       frameTooLarge: 1009,
       internal: 1011,
       credentialsEnded: 4401,

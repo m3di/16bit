@@ -134,11 +134,17 @@ export type FeedServerMessage = z.infer<typeof feedServerMessageSchema>
 export const FEED_CLOSE_CODES = {
   /** The process is shutting down: reconnect with backoff and resume. */
   goingAway: 1001,
-  /** Over the cap of sockets per session or agent key: close another tab's socket first. */
-  tooManySockets: 1008,
+  /**
+   * Over a cap: sockets per session or agent key (close another tab's socket first), or client
+   * messages sent faster than the server answers them (wait for answers before sending more).
+   */
+  policy: 1008,
   /** A frame over the server's frame cap (64 KiB): a client bug, not worth a retry as is. */
   frameTooLarge: 1009,
-  /** The server could not read changes: reconnect with backoff and resume from the positions held. */
+  /**
+   * The server could not read changes, or the client stopped reading what it was sent: reconnect
+   * with backoff and resume from the positions held.
+   */
   internal: 1011,
   /**
    * The session, agent key or membership ended (sign-out, password reset, revocation, removal,

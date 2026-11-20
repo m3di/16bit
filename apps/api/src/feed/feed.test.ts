@@ -20,7 +20,7 @@ import { sessionCookie } from '../db/test-session.ts'
 import { DEV_OWNER } from '../dev-accounts.ts'
 import { applyLargeSeed, LARGE_HUB, LARGE_WORKSPACE } from '../large-seed.ts'
 import { resetPassword } from '../reset-password.ts'
-import { MAX_SOCKETS_PER_SESSION } from './feed.ts'
+import { MAX_PENDING_CLIENT_MESSAGES, MAX_SOCKETS_PER_SESSION } from './feed.ts'
 import { LISTENER_APPLICATION_NAME } from './listener.ts'
 
 // The WebSocket feed (D57, D58) over a real socket, against a real Postgres under row-level
@@ -196,9 +196,13 @@ interface Client {
   closed: Promise<number>
 }
 
-function connect(headers: Record<string, string>, workspace = WS): Promise<Client> {
+function connect(
+  headers: Record<string, string>,
+  workspace = WS,
+  options: { autoPong?: boolean } = {},
+): Promise<Client> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(feedUrl(workspace), { headers })
+    const socket = new WebSocket(feedUrl(workspace), { headers, ...options })
     const queue: FeedServerMessage[] = []
     const waiters: ((m: FeedServerMessage) => void)[] = []
     socket.on('message', (data) => {
@@ -253,8 +257,8 @@ function connect(headers: Record<string, string>, workspace = WS): Promise<Clien
   })
 }
 
-const person = (who: string, workspace = WS) =>
-  connect({ cookie: cookies.get(who) ?? '', origin: origin() }, workspace)
+const person = (who: string, workspace = WS, options: { autoPong?: boolean } = {}) =>
+  connect({ cookie: cookies.get(who) ?? '', origin: origin() }, workspace, options)
 const agent = (secret: string) => connect({ authorization: `Bearer ${secret}` })
 
 /** The HTTP status an upgrade is refused with. */
@@ -349,8 +353,18 @@ describe('before the upgrade (D57)', () => {
     ;(await person('ed')).socket.close()
     open[0]?.socket.close()
     await open[0]?.closed
-    await new Promise((r) => setTimeout(r, 50))
-    open.push(await person('vw'))
+    // The server forgets the socket when its own close completes, a moment after the client's.
+    const deadline = Date.now() + 2000
+    for (;;) {
+      const next = await person('vw').catch((e: unknown) => {
+        if (Date.now() > deadline) throw e
+        return null
+      })
+      if (next) {
+        open.push(next)
+        break
+      }
+    }
     for (const c of open) c.socket.close()
   })
 })
@@ -707,5 +721,40 @@ describe('the LISTEN connection', () => {
     const after = await create('ed', 'h1', 'after')
     expect((await changes(ed)).changes.map((c) => c.itemId)).toEqual([after.id])
     ed.socket.close()
+  })
+})
+
+describe('a socket that misbehaves', () => {
+  it(`closes a socket with more than ${String(MAX_PENDING_CLIENT_MESSAGES)} messages waiting, with 1008`, async () => {
+    const ed = await person('ed')
+    // Each subscribe costs a transaction; a burst far faster than they are answered.
+    for (let i = 0; i < 300; i++) ed.subscribe('h1', 0)
+    expect(await ed.closed).toBe(FEED_CLOSE_CODES.policy)
+    // The answers it did get came in order, each a catch-up for h1.
+    const vw = await person('vw')
+    for (let i = 0; i < MAX_PENDING_CLIENT_MESSAGES; i++) vw.subscribe('h1', 0)
+    for (let i = 0; i < MAX_PENDING_CLIENT_MESSAGES; i++) {
+      expect((await changes(vw)).hubIds).toEqual(['h1'])
+    }
+    expect(vw.socket.readyState).toBe(WebSocket.OPEN)
+    vw.socket.close()
+  })
+
+  it('closes a frame over 64 KiB with frameTooLarge', async () => {
+    const ed = await person('ed')
+    ed.send('x'.repeat(64 * 1024 + 1))
+    expect(await ed.closed).toBe(FEED_CLOSE_CODES.frameTooLarge)
+  })
+
+  it('terminates a socket that stops answering pings within about two ticks', async () => {
+    const silent = await person('ed', WS, { autoPong: false })
+    const live = await person('ed')
+    const started = Date.now()
+    // Terminated without a close frame: the client sees 1006.
+    expect(await silent.closed).toBe(1006)
+    expect(Date.now() - started).toBeLessThan(RECHECK_MS * 3)
+    expect(live.socket.readyState).toBe(WebSocket.OPEN)
+    // It no longer counts towards the session's sockets.
+    live.socket.close()
   })
 })

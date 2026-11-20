@@ -5,8 +5,9 @@ import { ACCESS_CHANNEL, HUB_CHANNEL, SESSION_CHANNEL } from '../notify.ts'
 // The process's one dedicated `LISTEN` connection (D58). Outside the pool: a pooled connection
 // would be handed to queries and lose its LISTENs. When Postgres drops it (a restart,
 // `pg_terminate_backend`, a network drop) it reconnects with backoff, as the pool does (#107),
-// and reports `reconnected`: notifications sent in the gap are lost, so the feed catches every
-// socket up from its own positions.
+// and reports `connected` on every successful connect, the first included: notifications sent
+// while it was down (or before it first came up) are lost, so the feed catches every socket up
+// from its own positions.
 
 export const FEED_CHANNELS = [REVISION_CHANNEL, HUB_CHANNEL, ACCESS_CHANNEL, SESSION_CHANNEL]
 
@@ -15,8 +16,8 @@ export const LISTENER_APPLICATION_NAME = '16bit-feed-listener'
 
 export interface ListenerHandlers {
   notification(channel: string, payload: string): void
-  /** Connected again after a drop. Not called for the first connection. */
-  reconnected(): void
+  /** Connected and listening, the first time or again after a drop. */
+  connected(): void
 }
 
 export interface ListenerOptions {
@@ -31,9 +32,10 @@ export class Listener {
   readonly #retryMs: number
   readonly #maxRetryMs: number
   #client: pg.Client | null = null
+  /** Gives up on the current connection and schedules a reconnect. */
+  #drop: (() => void) | null = null
   #timer: ReturnType<typeof setTimeout> | null = null
   #attempt = 0
-  #connectedOnce = false
   #closed = false
 
   constructor(url: string, handlers: ListenerHandlers, options: ListenerOptions = {}) {
@@ -67,13 +69,19 @@ export class Listener {
     const client = new pg.Client({
       connectionString: this.#url,
       application_name: LISTENER_APPLICATION_NAME,
+      // TCP keepalive from 10 s idle, not the OS default (2 h on Linux). `check()` on the feed's
+      // tick is the faster guard; this one also covers a feed with no tick running.
       keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
     })
     let lost = false
     const onLost = (error?: Error) => {
       if (lost) return
       lost = true
-      if (this.#client === client) this.#client = null
+      if (this.#client === client) {
+        this.#client = null
+        this.#drop = null
+      }
       if (this.#closed) return
       if (error) console.error(`feed: LISTEN connection lost, reconnecting: ${error.message}`)
       this.#retry()
@@ -102,9 +110,36 @@ export class Listener {
       return
     }
     this.#client = client
+    this.#drop = () => {
+      onLost(new Error('no answer to the health check'))
+      void client.end().catch(() => undefined)
+    }
     this.#attempt = 0
-    if (this.#connectedOnce) this.#handlers.reconnected()
-    this.#connectedOnce = true
+    this.#handlers.connected()
+  }
+
+  /**
+   * `SELECT 1` on the connection, given up after `timeoutMs`: a silently dropped connection
+   * (no FIN, no RST) would otherwise look healthy and deliver nothing. On failure it reconnects.
+   */
+  async check(timeoutMs: number): Promise<void> {
+    const client = this.#client
+    const drop = this.#drop
+    if (!client || !drop) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const ok = await Promise.race([
+      client.query('SELECT 1').then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((done) => {
+        timer = setTimeout(() => {
+          done(false)
+        }, timeoutMs)
+      }),
+    ])
+    clearTimeout(timer)
+    if (!ok && this.#client === client) drop()
   }
 
   #stale(lost: boolean): boolean {
