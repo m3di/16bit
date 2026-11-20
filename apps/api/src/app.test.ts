@@ -73,7 +73,8 @@ async function seed(): Promise<void> {
     parent_id: null,
     name,
     color: 'blue',
-    id_prefix: 'BLD',
+    // Unique among the workspace's hubs (D56); subfolders take their hub's.
+    id_prefix: id === 'docs' ? 'DOC' : 'BLD',
   })
   await db
     .insertInto('folder')

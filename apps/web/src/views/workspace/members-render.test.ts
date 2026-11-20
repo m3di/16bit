@@ -210,3 +210,16 @@ describe('MembersPage states', () => {
     expect(html).toContain('Unreachable')
   })
 })
+
+describe('MembersPage section order', () => {
+  it('puts the role tables after people and invites, as reference', async () => {
+    const html = await renderPage(ready('p-sara', 'owner'))
+    const headings = [...html.matchAll(/<h2 [^>]*>([^<]+)<\/h2>/g)].map((m) => m[1])
+    expect(headings).toEqual([
+      'People',
+      'Pending invites',
+      'What each role can do',
+      'What each hub role can do',
+    ])
+  })
+})

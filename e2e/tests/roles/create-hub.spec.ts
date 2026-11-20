@@ -13,6 +13,7 @@ import {
   listAll,
   test,
   uniqueHubName,
+  uniquePrefix,
   uniqueTitle,
   workspaceSection,
   WS,
@@ -49,6 +50,7 @@ for (const person of ['owner', 'mina'] as const) {
   }) => {
     const client = as(person)
     const name = uniqueHubName(`ui ${person}`)
+    const prefix = uniquePrefix()
     const page = await pageAs(person)
     await page.goto('/')
 
@@ -61,9 +63,9 @@ for (const person of ['owner', 'mina'] as const) {
     await dialog.getByLabel('Name').fill(name)
     // The prefix follows the name ("Zz e2e ui owner ...": initials) until it is typed over.
     await expect(dialog.getByLabel('ID prefix')).toHaveValue(person === 'owner' ? 'ZEUO' : 'ZEUM')
-    await dialog.getByLabel('ID prefix').fill('zq1')
+    await dialog.getByLabel('ID prefix').fill(prefix.toLowerCase())
     // Permanent, so it shows in capitals as typed: what is stored.
-    await expect(dialog.getByLabel('ID prefix')).toHaveValue('ZQ1')
+    await expect(dialog.getByLabel('ID prefix')).toHaveValue(prefix)
     await dialog.getByRole('radio', { name: 'Violet' }).check()
     const answer = page.waitForResponse(
       (r) => r.request().method() === 'POST' && r.url().endsWith(`/v1/workspaces/${WS}/hubs`),
@@ -85,7 +87,7 @@ for (const person of ['owner', 'mina'] as const) {
         hubRole: 'hub_admin',
         name,
         color: 'violet',
-        idPrefix: 'ZQ1',
+        idPrefix: prefix,
       })
       const described = await client.get(`/hubs/${hubId}`)
       await expectStatus(described, 200)
@@ -138,6 +140,69 @@ test('a hub without a name or with a bad prefix is not sent', async ({ page, as 
   await expect(dialog).toHaveCount(0)
   expect(posts).toEqual([])
   expect((await hubList(as('owner'))).some((h) => h.name === name)).toBe(false)
+})
+
+test('a prefix another hub has is refused on the prefix field, and free once that hub is gone (D56)', async ({
+  page,
+  as,
+}) => {
+  const owner = as('owner')
+  const prefix = uniquePrefix()
+  const first = await owner.post('/hubs', {
+    name: uniqueHubName('prefix first'),
+    color: 'teal',
+    idPrefix: prefix,
+  })
+  await expectStatus(first, 201)
+  const firstId = hubListEntrySchema.parse(await first.json()).id
+  const name = uniqueHubName('prefix second')
+  let secondId = ''
+  try {
+    await page.goto('/')
+    await workspaceSection(page)
+      .getByRole('button', { name: `New hub in ${WS_NAME}` })
+      .click()
+    const dialog = newHubDialog(page)
+    await dialog.getByLabel('Name').fill(name)
+    await dialog.getByLabel('ID prefix').fill(prefix)
+    const refused = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && r.url().endsWith(`/v1/workspaces/${WS}/hubs`),
+    )
+    await dialog.getByRole('button', { name: 'Create hub' }).click()
+    expect((await refused).status()).toBe(409)
+
+    // On the field, the dialog still open with what was typed, and nothing created.
+    const field = dialog.getByLabel('ID prefix')
+    await expect(field).toHaveAttribute('aria-invalid', 'true')
+    // Focus moves to the field, so a screen reader reads the error with it.
+    await expect(field).toBeFocused()
+    await expect(field).toHaveAccessibleDescription(
+      /Another hub in this workspace uses this prefix\. Choose a different one\./,
+    )
+    await expect(field).toHaveValue(prefix)
+    await expect(dialog.locator('[data-new-hub-error]')).toHaveCount(0)
+    expect((await hubList(owner)).some((h) => h.name === name)).toBe(false)
+
+    // Once the other hub is deleted, the same prefix goes through.
+    await removeHub(owner, firstId)
+    const created = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && r.url().endsWith(`/v1/workspaces/${WS}/hubs`),
+    )
+    await dialog.getByRole('button', { name: 'Create hub' }).click()
+    const response = await created
+    expect(response.status()).toBe(201)
+    const hub = hubListEntrySchema.parse(await response.json())
+    secondId = hub.id
+    expect(hub).toMatchObject({ name, idPrefix: prefix })
+    await expect(page).toHaveURL(
+      new RegExp(`/w/${WS}/hubs/${encodeURIComponent(secondId)}/settings/general$`),
+    )
+  } finally {
+    const left = await hubList(owner)
+    for (const id of [firstId, secondId]) {
+      if (left.some((h) => h.id === id)) await removeHub(owner, id)
+    }
+  }
 })
 
 test('a refused create keeps the dialog open and says why', async ({ page, as }) => {

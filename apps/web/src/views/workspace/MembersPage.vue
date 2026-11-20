@@ -19,6 +19,7 @@ import {
 } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import InviteDialog from './InviteDialog.vue'
+import RoleMatrixSection from './RoleMatrixSection.vue'
 import {
   canManage,
   canRevokeInvite,
@@ -463,6 +464,8 @@ const inviteSectionState = computed((): SettingsState => {
         </DataTable>
       </div>
     </SettingsSection>
+    <!-- Reference, after the page's main job of managing people (lead, PR 186). -->
+    <RoleMatrixSection />
   </SettingsLayout>
 
   <InviteDialog
