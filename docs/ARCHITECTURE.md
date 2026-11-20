@@ -57,7 +57,8 @@ item             (workspace_id, id, hub_id, folder_id, seq_id,
 item_index       (workspace_id, attribute_id, item_id, ord, num, txt, ts)   -- derived; several rows per item for multi-valued types
 link             (workspace_id, from_item, attribute_id, to_item)
 view             (workspace_id, id, hub_id, folder_id, tree jsonb, version)
-revision         (workspace_id, seq bigint, item_id, hub_id, version, patch jsonb, actor, cause, at)
+revision         (workspace_id, seq bigint, item_id, hub_id, version, patch jsonb, actor, cause, at,
+                  client_mutation_id uuid)
 comment          (workspace_id, id, item_id, parent_id, author, body jsonb, at)
 document         (workspace_id, item_id, attribute_id, content jsonb, version)
 hub_grant        (workspace_id, hub_id, principal_id, hub_role)
@@ -73,6 +74,7 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `revision.hub_id` is the item's hub, kept after the item and its hub are deleted, so row-level security can check history against hub grants (#44, #111).
 - `revision.seq` increases per workspace. It is taken from `workspace.next_revision_seq` in the write transaction. A client asks for everything after a sequence number.
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.
+- `revision.client_mutation_id` (migration `0012_mutation_ids`, D59) is the UUID a client sent with the write, or null. A partial unique index, `revision_client_mutation_key (workspace_id, actor, client_mutation_id) WHERE client_mutation_id IS NOT NULL`, makes it unique per workspace and actor, so a racing retry fails with 23505 instead of applying twice. The same migration adds `item_folder_number_idx (workspace_id, folder_id, seq_id DESC)` for the `number` order (D61).
 - `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
 - `folder.item_count` on a hub is a counter kept in the write transaction, so the main dashboard never counts items.
 
@@ -138,7 +140,7 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 - Only indexed attributes shown on the `from` folder can be filtered or sorted. Anything else is a 400 `invalid_request` whose `message` names the path, attribute, and operator, with every problem listed in `errors: [{ path, message }]`.
 - The cursor holds the last row's sort values and ID, so it only fits the sort it came from. From #168 it also records its order (`updated`, `number`, or an attribute `sort`) and is encoded in core (`encodeItemCursor`), so `itemQuerySchema` refuses a cursor from another order at the edge; under `number` it holds the item number alone. Cursors from before #168 are refused as invalid.
 - Sync contracts (#168, D57 to D61): `order` (`updated` by default, or `number`; refused with a `sort`), `offset` (0 to 100,000; refused with a `cursor`) and `count: true` (adds `total`) are in `itemQuerySchema`; until M3-05 serves them the API answers them with 400. Item reads, query results, hub descriptions and item write responses (`itemWriteResultSchema`) carry an optional `seq`, optional until M3-03 sends it. Item create, patch and delete take an optional `clientMutationId` (a UUID), ignored until M3-03 stores it. The feed protocol and `GET /changes` shapes are in `packages/core/src/feed.ts`.
-- Plans (D20). With no `sort`, a page is an index scan on `item_folder_updated_idx` with a row-comparison cursor and no sort step; `apps/api/src/query.test.ts` checks this with EXPLAIN. With `order: "number"` (M3, D61), a page is an index scan on `(workspace_id, folder_id, seq_id DESC)` with a cursor on the item number, and an `offset` window walks the same index. A `sort` on attributes is not index-backed: each page reads every item in the folder that passes `where`, looks up its sort values in `item_index`, and sorts them, so a page costs O(folder size). That is fine at M1 folder sizes. Index-backed attribute sorts need a different shape (for example a per-folder sort column) and their own decision.
+- Plans (D20). With no `sort`, a page is an index scan on `item_folder_updated_idx` with a row-comparison cursor and no sort step; `apps/api/src/query.test.ts` checks this with EXPLAIN. With `order: "number"` (M3, D61), a page is an index scan on `item_folder_number_idx (workspace_id, folder_id, seq_id DESC)` with a cursor on the item number, and an `offset` window walks the same index. A `sort` on attributes is not index-backed: each page reads every item in the folder that passes `where`, looks up its sort values in `item_index`, and sorts them, so a page costs O(folder size). That is fine at M1 folder sizes. Index-backed attribute sorts need a different shape (for example a per-folder sort column) and their own decision.
 - A select value whose option was deleted still sorts (after every option), but cannot be filtered on: `eq`, `neq`, `in`, and `not_in` operands are checked against the current options and reject it as an unknown option. `is_empty` and `is_not_empty` still see it.
 
 ## API
