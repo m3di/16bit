@@ -56,7 +56,7 @@ const hub = computed<Load<HubDescription>>(() =>
     : hubRead.value,
 )
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
-const { list, rows, notice } = items
+const { list, notice } = items
 const session = useSession()
 
 // `item.write` from `can()`, once both the reader and their hub role are known.
@@ -319,7 +319,9 @@ async function submitCreate(values: ItemValues) {
             <ItemsBlock
               :folder-name="folder.name"
               :list="list"
-              :rows="rows"
+              :row-at="items.rowAt"
+              :index-of="items.indexOf"
+              :reordered="items.reordered.value"
               :columns="columns"
               :id-prefix="hub.data.hub.idPrefix"
               :selected-id="itemId"
@@ -329,7 +331,8 @@ async function submitCreate(values: ItemValues) {
               :sort="items.sort.value"
               @open="openItem"
               @retry="openFolder(openFolderId)"
-              @more="items.loadMore()"
+              @windows="items.showWindows($event)"
+              @retry-windows="items.retryWindows()"
               @create="startCreate"
               @sort="items.setSort($event)"
             />

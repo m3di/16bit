@@ -1,7 +1,7 @@
 import type { Change, Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { liveStore } from '../../sync/fake-feed.test-utils.ts'
-import { fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
+import { fakeApi, item, json, rowsOf, type Call } from './fixtures.test-utils.ts'
 import { useItems } from './useItems.ts'
 
 // The folder list, the panel and the item page on the workspace store with a live feed
@@ -40,7 +40,7 @@ const changed = (it: Item, seq: number, clientMutationId?: string): Change => ({
   ...(clientMutationId ? { clientMutationId } : {}),
 })
 const removed = (id: string, seq: number): Change => ({ seq, hubId: 'bld', itemId: id, item: null })
-const ids = (s: ReturnType<typeof useItems>) => s.rows.value.map((r) => r.id)
+const ids = (s: ReturnType<typeof useItems>) => rowsOf(s).map((r) => r.id)
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('live reads (D58)', () => {
@@ -70,9 +70,14 @@ describe('live reads (D58)', () => {
   })
 
   it('restarts the subscription from an older read, so nothing between them is missed', async () => {
-    const reads = [page([item('i1', 1)], 40, 'c1'), page([item('i2', 2)], 31)]
+    const reads = [
+      json({ items: [item('i1', 1)], nextCursor: null, total: 201, seq: 40 }),
+      json({ items: [item('i2', 2)], nextCursor: null, total: 201, seq: 31 }),
+    ]
     const { s, socket } = await live(() => reads.shift() ?? page([], 99))
-    await s.loadMore()
+    // The table scrolls to the second window, which an older read answers.
+    s.showWindows({ start: 195, end: 201, offsets: [0, 200] })
+    await flush()
     expect(socket()?.sent).toEqual([
       { type: 'subscribe', hubId: 'bld', after: 40 },
       { type: 'subscribe', hubId: 'bld', after: 31 },
@@ -115,7 +120,7 @@ describe('applying changes', () => {
   it('never lets a stale version or a late event overwrite a newer item', async () => {
     const { s, socket } = await live(
       () => page([item('i1', 1, { title: 'A' }, 1)], 10),
-      () => json(item('i1', 1, { title: 'Mine' }, 3)),
+      () => json({ ...item('i1', 1, { title: 'Mine' }, 3), seq: 11 }),
     )
     expect(await s.save('i1', { title: 'Mine' })).toBe(true)
     // Events for versions 2 and 3 arrive after the response that gave version 3.

@@ -1,5 +1,5 @@
 // @vitest-environment client-node
-import { defineComponent, h, nextTick, reactive } from 'vue'
+import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { afterEach, describe, expect, it } from 'vitest'
 import { activeElement, findAll, fire, mount, setLayout, type FakeNode } from '../test/fake-dom.ts'
 import type { RowWindows } from './data-table.ts'
@@ -21,11 +21,13 @@ function setup(rowCount = 1000, loaded = 50) {
   const selected: Row[] = []
   const windows: RowWindows[] = []
   const sorted: string[] = []
+  const table = ref<{ isInView: (index: number) => boolean } | null>(null)
   const Host = defineComponent({
     render: () =>
       h(
         DataTable<Row>,
         {
+          ref: table,
           caption: 'Items',
           columns,
           rows: [],
@@ -52,7 +54,7 @@ function setup(rowCount = 1000, loaded = 50) {
     return found
   }
   const text = (n: FakeNode): string => (n.tag === '#text' ? n.text : n.children.map(text).join(''))
-  return { root, state, selected, windows, sorted, rows, row, text }
+  return { root, state, selected, windows, sorted, rows, row, text, table }
 }
 
 const key = (el: FakeNode, k: string) => {
@@ -224,6 +226,38 @@ describe('DataTable virtual mode, scrolling', () => {
     // Across a window edge, both windows are asked for.
     await t.scrollTo(395 * 38)
     expect(t.windows.at(-1)).toMatchObject({ offsets: [200, 400] })
+  })
+
+  it('keeps the focused row rendered when the wheel scrolls it out of view', async () => {
+    const t = scrollable()
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    await nextTick()
+    const focused = t.row(1)
+    expect(activeElement(t.root)).toBe(focused)
+    await t.scrollTo(300 * 38)
+    // Row 1 stays where it belongs, between a spacer for row 0 and one up to row 291, and
+    // keeps focus, so the next arrow key moves on from it.
+    expect(t.rows().map((r) => r.props['data-index'])).toEqual([
+      1,
+      ...Array.from({ length: 27 }, (_, i) => 291 + i),
+    ])
+    expect(t.row(1)).toBe(focused)
+    expect(activeElement(t.root)).toBe(focused)
+    const spacers = findAll(t.root, (n) => n.tag === 'tr' && 'data-spacer' in n.props)
+    expect(spacers.map((n) => n.props['data-spacer'])).toEqual(['above', 'between', 'below'])
+    // The kept row is not in view: only the window in view is asked for.
+    expect(t.windows.at(-1)?.offsets).toEqual([200])
+    expect(t.table.value?.isInView(1)).toBe(false)
+    expect(t.table.value?.isInView(300)).toBe(true)
+  })
+
+  it('keeps a row reached with Tab rendered too', async () => {
+    const t = scrollable()
+    await nextTick()
+    fire(t.row(4), 'focusin')
+    await t.scrollTo(300 * 38)
+    expect(t.rows()[0]?.props['data-index']).toBe(4)
   })
 
   it('asks for nothing while scrolling inside the windows it already asked for', async () => {

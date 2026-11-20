@@ -189,15 +189,24 @@ describe('DataTable virtual mode', () => {
     props: Partial<{ rowCount: number; loaded: number; selectedId: string; busy: boolean }> = {},
   ) => {
     const { rowCount = 50_000, loaded = 4, ...rest } = props
-    // Rows past `loaded` are holes: not loaded yet.
-    const rows: Row[] = []
-    for (let i = 0; i < loaded; i++) rows[i] = { id: `r${String(i)}`, title: `Row ${String(i)}` }
+    // Rows past `loaded` are not loaded yet.
+    const rowAt = (i: number): Row | undefined =>
+      i < loaded ? { id: `r${String(i)}`, title: `Row ${String(i)}` } : undefined
     return renderToString(
       createSSRApp({
         render: () =>
           h(
             DataTable,
-            { caption: 'Items', columns, rows, rowCount, mode: 'virtual', height: 400, ...rest },
+            {
+              caption: 'Items',
+              columns,
+              rows: [],
+              rowAt,
+              rowCount,
+              mode: 'virtual',
+              height: 400,
+              ...rest,
+            },
             { cell: ({ row }: { row: { id: string } }) => (row as Row).title },
           ),
       }),
