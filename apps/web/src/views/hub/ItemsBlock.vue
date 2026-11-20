@@ -51,7 +51,8 @@ const {
 }>()
 
 const emit = defineEmits<{
-  open: [item: Item]
+  /** Open an item. `keyboard`: the arrow keys moved the selection, and focus stays in the table. */
+  open: [item: Item, via: 'pointer' | 'keyboard']
   retry: []
   create: []
   sort: [sort: SortKey | null]
@@ -82,8 +83,8 @@ const tableColumns = computed<TableColumn[]>(() => [
 const minWidth = computed(() => 104 + 160 * columns.length)
 
 // A row still being created has no server copy yet, so it cannot be opened.
-function select(row: Item) {
-  if (!isCreating(row.id)) emit('open', row)
+function select(row: Item, via: 'pointer' | 'keyboard') {
+  if (!isCreating(row.id)) emit('open', row, via)
 }
 
 const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.attribute])))

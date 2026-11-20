@@ -19,6 +19,7 @@ function setup(rowCount = 1000, loaded = 50) {
   for (let i = 0; i < loaded; i++)
     state.store.set(i, { id: `r${String(i)}`, title: `Row ${String(i)}` })
   const selected: Row[] = []
+  const via: string[] = []
   const windows: RowWindows[] = []
   const sorted: string[] = []
   const table = ref<{ isInView: (index: number) => boolean } | null>(null)
@@ -36,8 +37,9 @@ function setup(rowCount = 1000, loaded = 50) {
           height: 400,
           selectedId: state.selectedId,
           rowAt: (i: number) => state.store.get(i),
-          onSelect: (row: Row) => {
+          onSelect: (row: Row, how: string) => {
             selected.push(row)
+            via.push(how)
             state.selectedId = row.id
           },
           onWindows: (w: RowWindows) => windows.push(w),
@@ -54,7 +56,7 @@ function setup(rowCount = 1000, loaded = 50) {
     return found
   }
   const text = (n: FakeNode): string => (n.tag === '#text' ? n.text : n.children.map(text).join(''))
-  return { root, state, selected, windows, sorted, rows, row, text, table }
+  return { root, state, selected, via, windows, sorted, rows, row, text, table }
 }
 
 const key = (el: FakeNode, k: string) => {
@@ -81,6 +83,7 @@ describe('DataTable virtual mode, in use', () => {
     await nextTick()
     fire(t.row(2), 'click', { target: t.row(2) })
     expect(t.selected.map((r) => r.id)).toEqual(['r2'])
+    expect(t.via).toEqual(['pointer'])
     fire(t.row(7), 'click', { target: t.row(7) })
     const link = { closest: (s: string) => (s.includes('a') ? {} : null) }
     fire(t.row(3), 'click', { target: link })
@@ -93,6 +96,8 @@ describe('DataTable virtual mode, in use', () => {
     key(t.row(0), 'ArrowDown')
     await nextTick()
     expect(t.selected.map((r) => r.id)).toEqual(['r1'])
+    // The screen keeps focus in the table for a selection by keyboard.
+    expect(t.via).toEqual(['keyboard'])
     expect(activeElement(t.root)).toBe(t.row(1))
     // Keys pressed before the parent re-renders with the new selection still move it.
     key(t.row(1), 'ArrowDown')

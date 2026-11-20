@@ -222,7 +222,13 @@ const selectedItem = computed(() =>
 )
 
 const itemLink = (item: Item) => ({ query: { item: item.id } })
-const openItem = (item: Item) => void router.push(itemLink(item))
+// A click opens the panel with focus on it; the arrow keys in the table keep focus there, so
+// the reader can go on through the rows (DESIGN.md, virtual rows).
+const panelKeepsFocus = ref(false)
+const openItem = (item: Item, via: 'pointer' | 'keyboard' = 'pointer') => {
+  panelKeepsFocus.value = via === 'keyboard'
+  void router.push(itemLink(item))
+}
 const closePanel = () => {
   creating.value = false
   void router.push({ query: {} })
@@ -358,6 +364,7 @@ async function submitCreate(values: ItemValues) {
       <ItemPanel
         v-else-if="itemId && panelItem && !live.lost.value"
         :title="selectedItem && description ? items.label(selectedItem) : 'Item'"
+        :keep-focus="panelKeepsFocus"
         class="flex-[1_1_320px]"
         @close="closePanel"
       >

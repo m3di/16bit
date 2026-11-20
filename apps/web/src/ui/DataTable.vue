@@ -87,7 +87,8 @@ const {
 }>()
 
 const emit = defineEmits<{
-  select: [row: Row]
+  /** A row was selected, by a click or by the arrow keys (`virtual`), which keep focus. */
+  select: [row: Row, via: 'pointer' | 'keyboard']
   sort: [key: string]
   /** `virtual`: the windows holding the rows in view changed. Load the ones not loaded yet. */
   windows: [windows: RowWindows]
@@ -105,7 +106,7 @@ const inControl = (event: MouseEvent) => {
 }
 
 function onRowClick(event: MouseEvent, row: Row) {
-  if (!inControl(event)) emit('select', row)
+  if (!inControl(event)) emit('select', row, 'pointer')
 }
 
 const selects = computed(() => mode !== 'static')
@@ -235,7 +236,7 @@ watch(
   (row) => {
     if (!row) return
     selectPending.value = -1
-    emit('select', row)
+    emit('select', row, 'keyboard')
   },
 )
 
@@ -253,7 +254,7 @@ function moveTo(index: number) {
   const row = rowOf(index)
   if (row) {
     selectPending.value = -1
-    emit('select', row)
+    emit('select', row, 'keyboard')
   } else selectPending.value = index
 }
 
@@ -278,7 +279,7 @@ function onVirtualRowClick(event: MouseEvent, index: number, row: Row | undefine
   selectPending.value = -1
   focusPending.value = -1
   active.value = index
-  if (row) emit('select', row)
+  if (row) emit('select', row, 'pointer')
 }
 
 defineExpose({

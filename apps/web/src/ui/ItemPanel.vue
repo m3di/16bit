@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import { onMounted, useTemplateRef, watch } from 'vue'
 
-const { title, label = 'Item' } = defineProps<{
+const {
+  title,
+  label = 'Item',
+  keepFocus,
+} = defineProps<{
   /** The item's display ID or name. */
   title: string
   /** Names the panel for screen readers. */
   label?: string
+  /**
+   * Leaves focus where it is when the panel opens or shows another item, as when the arrow
+   * keys move the selection in the table beside it. By default focus moves to the panel.
+   */
+  keepFocus?: boolean
 }>()
 
 const emit = defineEmits<{ close: [] }>()
@@ -14,7 +23,9 @@ const heading = useTemplateRef<HTMLHeadingElement>('heading')
 
 // Move focus to the panel when it opens or shows another item, so keyboard and phone users
 // land on it. At phone width it sits under the table, and focusing scrolls it into view.
-const focus = () => heading.value?.focus()
+const focus = () => {
+  if (!keepFocus) heading.value?.focus()
+}
 onMounted(focus)
 watch(() => title, focus, { flush: 'post' })
 </script>
