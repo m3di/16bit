@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onScopeDispose, ref, shallowReactive } from 'vue'
 import {
   BaseButton,
   BaseInput,
@@ -14,6 +14,7 @@ import {
   StateBlock,
   StatusDot,
   paletteVar,
+  type RowWindows,
   type TableColumn,
 } from '../../ui/index.ts'
 import KitSettings from './KitSettings.vue'
@@ -73,6 +74,59 @@ const next: Record<Sort, Sort> = { none: 'ascending', ascending: 'descending', d
 function onSort(key: string) {
   tableSort.value = { key, dir: next[sortOf(key)] }
 }
+
+// Virtual table: 50,000 made-up rows, loaded 200 at a time after a pause like a server's, so
+// placeholders show while scrolling. Sorting by number drops the loaded windows and asks again.
+const VIRTUAL_COUNT = 50_000
+const stages = ['Backlog', 'In progress', 'In review', 'Done']
+type KitRow = { id: string; ref: string; title: string; stage: string; points: string }
+const loadedRows = shallowReactive(new Map<number, KitRow>())
+const loading = new Set<number>()
+const timers = new Set<ReturnType<typeof setTimeout>>()
+const virtualDir = ref<'ascending' | 'descending'>('descending')
+const virtualSelected = ref<string | null>(null)
+let lastWindows: RowWindows | null = null
+const makeRow = (index: number): KitRow => {
+  const n = virtualDir.value === 'descending' ? VIRTUAL_COUNT - index : index + 1
+  return {
+    id: `v${String(n)}`,
+    ref: `PT-${String(n)}`,
+    title: `Made-up item ${n.toLocaleString('en')}`,
+    stage: stages[n % stages.length] ?? 'Backlog',
+    points: String((n * 7) % 13),
+  }
+}
+function loadWindows(windows: RowWindows) {
+  lastWindows = windows
+  for (const offset of windows.offsets) {
+    if (loadedRows.has(offset) || loading.has(offset)) continue
+    loading.add(offset)
+    const timer = setTimeout(() => {
+      timers.delete(timer)
+      loading.delete(offset)
+      const end = Math.min(offset + 200, VIRTUAL_COUNT)
+      for (let i = offset; i < end; i++) loadedRows.set(i, makeRow(i))
+    }, 600)
+    timers.add(timer)
+  }
+}
+const virtualColumns = (): TableColumn[] => [
+  { key: 'ref', label: 'ID', width: '96px', sort: virtualDir.value },
+  { key: 'title', label: 'Title' },
+  { key: 'stage', label: 'Stage', width: '120px' },
+  { key: 'points', label: 'Points', align: 'end', width: '80px' },
+]
+function onVirtualSort() {
+  virtualDir.value = virtualDir.value === 'descending' ? 'ascending' : 'descending'
+  for (const timer of timers) clearTimeout(timer)
+  timers.clear()
+  loading.clear()
+  loadedRows.clear()
+  if (lastWindows) loadWindows(lastWindows)
+}
+onScopeDispose(() => {
+  for (const timer of timers) clearTimeout(timer)
+})
 </script>
 
 <template>
@@ -249,6 +303,34 @@ function onSort(key: string) {
         Stage and Points can be sorted: two chevrons at rest, one in ink when sorted. Points is
         right-aligned, so its chevrons lead the label. ID and Title cannot. The second row is
         selected.
+      </p>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">Table, virtual</h3>
+      <DataTable
+        caption="Kit items, virtual"
+        mode="virtual"
+        :columns="virtualColumns()"
+        :row-count="VIRTUAL_COUNT"
+        :row-at="(i: number) => loadedRows.get(i)"
+        :selected-id="virtualSelected"
+        :height="342"
+        @select="virtualSelected = $event.id"
+        @sort="onVirtualSort"
+        @windows="loadWindows"
+      >
+        <template #cell="{ row, column }">
+          <span v-if="column.key === 'ref'" class="font-mono text-secondary text-ink2">{{
+            row.ref
+          }}</span>
+          <template v-else>{{ row[column.key as 'title' | 'stage' | 'points'] }}</template>
+        </template>
+      </DataTable>
+      <p class="m-0 text-caption text-ink3">
+        50,000 rows, 38px each, loaded 200 at a time after a pause: rows not loaded yet are
+        placeholders. Click a row, then use the arrow keys, Page Up and Page Down, Home and End. ID
+        sorts and reloads.
       </p>
     </section>
 
