@@ -36,7 +36,7 @@ import { tombstoned } from './seed-tombstones.ts'
 // interrupted run continues with the same data. Values are drawn from the attributes as stored:
 // an option removed through the API is not used, and an attribute deleted through the API
 // (`deleted_attribute`) is neither re-created nor filled. A deleted hub (`deleted_hub`) stops the
-// seed. Relations link earlier items that still exist.
+// seed before it writes anything. Relations link earlier items that still exist.
 //
 // Each chunk sends one NOTIFY on the revision channel with its last `seq`, not one per revision.
 
@@ -246,8 +246,16 @@ export async function ensureLargeHub(db: Kysely<Database>): Promise<{ hubDeleted
     attribute: attributeSchema.parse({ ...a, workspaceId: ws, hubId: LARGE_HUB.id, version: 0 }),
     required,
   }))
+  // A deleted hub stops the seed before it writes anything: no account, workspace or principal.
+  // Checked again first thing in the transaction, for a delete that commits in between.
+  if ((await tombstoned(db, 'deleted_hub', ws, [LARGE_HUB.id])).size > 0) {
+    return { hubDeleted: true }
+  }
   const accountId = (await ensureDevAccounts(db, [DEV_OWNER])).get(DEV_OWNER.id)
   return db.transaction().execute(async (trx) => {
+    if ((await tombstoned(trx, 'deleted_hub', ws, [LARGE_HUB.id])).size > 0) {
+      return { hubDeleted: true }
+    }
     await trx
       .insertInto('workspace')
       .values({ id: ws, name: LARGE_WORKSPACE.name })
@@ -274,9 +282,6 @@ export async function ensureLargeHub(db: Kysely<Database>): Promise<{ hubDeleted
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .execute()
     if (accountId !== undefined) await linkDevAccount(trx, ws, DEV_OWNER.id, accountId)
-    if ((await tombstoned(trx, 'deleted_hub', ws, [LARGE_HUB.id])).size > 0) {
-      return { hubDeleted: true }
-    }
     const inserted = await trx
       .insertInto('folder')
       .values([
@@ -530,12 +535,12 @@ async function seedChunk(trx: Transaction<Database>, first: number, last: number
   if (todo.length === 0) return 0
 
   const drafts = todo.map((n) => ({ n, ...valuesFor(n, attributes) }))
-  // Earlier items this chunk links to, locked FOR KEY SHARE in ID order before the hub row (the
+  // Earlier items this chunk links to, locked FOR KEY SHARE in ID order (the ORDER BY) before the hub row (the
   // lock order in items.ts), so none can be deleted before the links commit.
   const inChunk = new Set(todo)
   const outside = [
     ...new Set(drafts.flatMap((d) => d.targets.filter((t) => !inChunk.has(t)).map(largeItemId))),
-  ].sort()
+  ]
   const live = new Set<string>()
   if (outside.length > 0) {
     const rows = await sql<{ id: string }>`
@@ -577,12 +582,14 @@ async function seedChunk(trx: Transaction<Database>, first: number, last: number
     .where('id', '=', hubId)
     .returning(sql<number>`next_seq - ${k}`.as('first'))
     .executeTakeFirstOrThrow()
-  await trx
+  const counted = await trx
     .updateTable('folder')
     .set({ item_count: sql`item_count + ${k}` })
     .where('workspace_id', '=', ws)
     .where('id', '=', folderId)
-    .execute()
+    .executeTakeFirst()
+  // A folder deleted after the attributes were read: the transaction rolls back.
+  if (counted.numUpdatedRows === 0n) throw new Error(`seed:large: folder ${folderId} is gone`)
 
   const autoIds = attributes.filter((a) => a.type === 'auto_id')
   const items = valid.map(({ n, values }, i) => {

@@ -352,6 +352,14 @@ describe('applyLargeSeed', () => {
       .where('workspace_id', '=', WS)
       .execute()
     expect(folders).toEqual([])
+    // Nothing else either: no account, and no principal besides the one already there.
+    expect(await db.selectFrom('account').select('id').execute()).toEqual([])
+    const principals = await db
+      .selectFrom('principal')
+      .select(['id', 'account_id'])
+      .where('workspace_id', '=', WS)
+      .execute()
+    expect(principals).toEqual([{ id: DEV_OWNER.id, account_id: null }])
   })
 
   it('refuses an invalid item count or chunk before writing', async () => {
