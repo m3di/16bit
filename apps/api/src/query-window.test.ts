@@ -108,6 +108,8 @@ describe('windows on a 50,000-item folder (D61)', () => {
     const matching = rows[0]?.n ?? 0
     expect(matching).toBeGreaterThan(30_000)
 
+    // Warm, as in the 500 ms test: the folder table loads its first window before any other.
+    await timed({ where, sort: [{ attribute: LARGE_ATTR.title }], count: true })
     const { page, ms } = await timed({
       where,
       sort: [{ attribute: LARGE_ATTR.title }],
@@ -116,11 +118,30 @@ describe('windows on a 50,000-item folder (D61)', () => {
     })
     expect(page.total).toBe(matching)
     expect(page.items).toHaveLength(200)
+
+    // The split, for the CI log (#172), as medians of three: the window without `count`, and a
+    // window past the end with `count`, which has no row to carry the total, so it scans the
+    // folder for the window and then counts it with a second statement.
+    const sort = [{ attribute: LARGE_ATTR.title }]
+    const median = async (body: object) => {
+      const times: number[] = []
+      for (let i = 0; i < 3; i++) times.push((await timed(body)).ms)
+      return times.toSorted((a, b) => a - b)[1] ?? 0
+    }
+    const withTotal = await median({ where, sort, offset: matching - 300, count: true })
+    const windowOnly = await median({ where, sort, offset: matching - 300 })
+    const pastEnd = await median({ where, sort, offset: matching, count: true })
+    console.info(
+      `query-window (#172): first timed ${ms.toFixed(0)} ms; medians: window with total ` +
+        `${withTotal.toFixed(0)} ms, window alone ${windowOnly.toFixed(0)} ms, ` +
+        `empty window + separate count ${pastEnd.toFixed(0)} ms`,
+    )
     expect(ms).toBeLessThan(2_000)
-  })
+  }, 60_000)
 })
 
 describe('plans Postgres picks on a 50,000-item folder (D20, D61)', () => {
+  /** As the owner: the index shape, without the `item_read` filter the API's role adds. */
   async function plan(query: Partial<ItemQuery>): Promise<string> {
     const full: ItemQuery = {
       from: FROM,

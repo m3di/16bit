@@ -792,11 +792,8 @@ export async function queryItems(
   query: ItemQuery,
   caps: { maxLinkedItems?: number } = {},
 ): Promise<ItemQueryResult> {
-  const { statement, keys, order, expand, folderId, where } = await itemQueryStatement(
-    db,
-    workspaceId,
-    query,
-  )
+  const { statement, keys, order, expand, folderId, where, totalInWindow } =
+    await itemQueryStatement(db, workspaceId, query)
   const { rows } = await statement.execute(db)
   const page = rows.slice(0, query.limit)
   const last = page.at(-1)
@@ -804,7 +801,14 @@ export async function queryItems(
     items: page.map((row) => toItem(row)),
     nextCursor: rows.length > query.limit && last ? nextItemCursor(order, keys, last) : null,
   }
-  if (query.count) result.total = await itemTotal(db, workspaceId, folderId, where)
+  if (query.count) {
+    // An empty window (past the end) has no row to carry the total, so it counts on its own.
+    const first = rows[0]
+    result.total =
+      totalInWindow && first
+        ? (first['window_total'] as number)
+        : await itemTotal(db, workspaceId, folderId, where)
+  }
   if (expand.length > 0) {
     const { linked, truncated } = await linkedItems(
       db,
@@ -1055,6 +1059,8 @@ export async function itemQueryStatement(
   expand: string[]
   folderId: string
   where: CompiledFilter | null
+  /** The rows carry `window_total`, the items that pass `where`. */
+  totalInWindow: boolean
 }> {
   const folder = await db
     .selectFrom('folder')
@@ -1113,10 +1119,14 @@ export async function itemQueryStatement(
       ? sql`to_char(${sql.ref(`q.k${String(i)}`)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
       : sql.ref(`q.k${String(i)}`)
 
+  // With `count` and a `where`, the total comes from the same pass that filters the folder
+  // (the window already reads every matching row to sort or skip them), not a second count.
+  // Before the cursor's WHERE, so it counts every page. Without a `where` the counters answer.
+  const totalInWindow = Boolean(query.count) && where !== null
   const statement = sql<QueryRow>`
     SELECT q.*, ${sql.join(keys.map((k, i) => sql`${cursorForm(k, i)} AS ${sql.id(`c${String(i)}`)}`))}
     FROM (
-      SELECT i.*, ${sql.join(keys.map((k, i) => sql`${k.expr} AS ${sql.id(`k${String(i)}`)}`))}
+      SELECT i.*, ${sql.join(keys.map((k, i) => sql`${k.expr} AS ${sql.id(`k${String(i)}`)}`))}${totalInWindow ? sql`, count(*) OVER ()::int AS window_total` : sql``}
       FROM item i
       WHERE i.workspace_id = ${workspaceId}
         AND i.folder_id = ${folder.id}
@@ -1134,5 +1144,5 @@ export async function itemQueryStatement(
     ])}
     LIMIT ${query.limit + 1}${query.offset ? sql` OFFSET ${query.offset}` : sql``}
   `
-  return { statement, keys, order, expand, folderId: folder.id, where }
+  return { statement, keys, order, expand, folderId: folder.id, where, totalInWindow }
 }

@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
+import { hashAgentSecret, newAgentSecret } from './auth/agent-key.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { sessionCookie } from './db/test-session.ts'
@@ -645,6 +646,93 @@ describe('total (D61)', () => {
     expect(await total('deep')).toBe(1)
   })
 
+  it('counts every page from the window itself, the same on a later page and past the end', async () => {
+    const where = cond('points', 'is_not_empty')
+    const first = await result({ where, count: true, limit: 1 })
+    expect(first.total).toBe(4)
+    const second = await result({ where, count: true, limit: 1, cursor: first.nextCursor })
+    expect(second.items.map((i) => i.id)).toEqual(['c'])
+    expect(second.total).toBe(4)
+    expect((await result({ where, count: true, order: 'number', offset: 2 })).total).toBe(4)
+    expect((await result({ where, count: true, offset: 4 })).total).toBe(4)
+  })
+
+  it('gives a viewer and an agent key the owner’s total, and a caller without a grant 404', async () => {
+    await db
+      .insertInto('folder')
+      .values({
+        workspace_id: 'w1',
+        id: 'sub',
+        hub_id: 'h',
+        parent_id: 'h',
+        name: 'sub',
+        color: 'blue',
+        id_prefix: 'H',
+      })
+      .execute()
+    const res = await post('/v1/workspaces/w1/items', { id: 's1', folderId: 'sub', values: {} })
+    expect(res.statusCode, res.body).toBe(201)
+
+    await db
+      .insertInto('principal')
+      .values([
+        { workspace_id: 'w1', id: 'vw', kind: 'user', name: 'Viewer', workspace_role: 'viewer' },
+        { workspace_id: 'w1', id: 'mem', kind: 'user', name: 'Member', workspace_role: 'member' },
+        { workspace_id: 'w1', id: 'bot', kind: 'agent', name: 'Bot', workspace_role: 'member' },
+      ])
+      .execute()
+    await db
+      .insertInto('hub_grant')
+      .values([
+        { workspace_id: 'w1', hub_id: 'h', principal_id: 'vw', hub_role: 'viewer' },
+        {
+          workspace_id: 'w1',
+          hub_id: 'h',
+          principal_id: 'bot',
+          principal_kind: 'agent',
+          hub_role: 'editor',
+        },
+      ])
+      .execute()
+    const secret = newAgentSecret()
+    await db
+      .insertInto('agent_key')
+      .values({
+        workspace_id: 'w1',
+        principal_id: 'bot',
+        secret_hash: hashAgentSecret(secret),
+        created_by: ACTOR,
+        expires_at: null,
+      })
+      .execute()
+
+    const callers: Record<string, Record<string, string>> = {
+      owner: auth,
+      viewer: await sessionCookie(db, 'vw'),
+      agent: { authorization: `Bearer ${secret}` },
+    }
+    const asCaller = (headers: Record<string, string>, body: object) =>
+      app.inject({
+        method: 'POST',
+        url: '/v1/workspaces/w1/query',
+        headers,
+        payload: { from: 'h', limit: 50, count: true, ...body },
+      })
+    for (const [name, headers] of Object.entries(callers)) {
+      const totals = []
+      for (const body of [{}, { from: 'sub' }, { where: cond('points', 'eq', 3) }]) {
+        const page = await asCaller(headers, body)
+        expect(page.statusCode, `${name}: ${page.body}`).toBe(200)
+        totals.push(itemQueryResultSchema.parse(page.json()).total)
+      }
+      expect(totals, name).toEqual([5, 1, 2])
+    }
+
+    const denied = await asCaller(await sessionCookie(db, 'mem'), {})
+    expect(denied.statusCode).toBe(404)
+    expect(denied.json()).not.toHaveProperty('total')
+  })
+
   it('answers 404 for a folder in another workspace, and counts only its own workspace', async () => {
     await seedWorkspace('w2')
     await createIn('w2', 'z', { points: 3 })
@@ -681,7 +769,8 @@ describe('query plans (D20)', () => {
   /**
    * EXPLAIN of one page, with sorting priced out so only an index can supply the order. This
    * proves the SQL can be served by the index at any offset; which plan Postgres picks on a
-   * real database is checked in query-window.test.ts.
+   * real database is checked in query-window.test.ts. It runs as the owner, so the plan shows
+   * the index shape, not the `item_read` filter row-level security adds for the API's role.
    */
   async function plan(query: Partial<ItemQuery>): Promise<string> {
     const full: ItemQuery = { from: 'h', where: null, sort: [], limit: 50, cursor: null, ...query }
