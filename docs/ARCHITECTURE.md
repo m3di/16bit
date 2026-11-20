@@ -137,7 +137,7 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 - `sort` is up to 3 `{ attribute, direction }`. Text sorts case-insensitively, select by option order. Empty values sort last in both directions, and ties end on the item ID. With no `sort`, items come newest update first.
 - Only indexed attributes shown on the `from` folder can be filtered or sorted. Anything else is a 400 `invalid_request` whose `message` names the path, attribute, and operator, with every problem listed in `errors: [{ path, message }]`.
 - The cursor holds the last row's sort values and ID, so it only fits the sort it came from.
-- Plans (D20). With no `sort`, a page is an index scan on `item_folder_updated_idx` with a row-comparison cursor and no sort step; `apps/api/src/query.test.ts` checks this with EXPLAIN. A `sort` on attributes is not index-backed: each page reads every item in the folder that passes `where`, looks up its sort values in `item_index`, and sorts them, so a page costs O(folder size). That is fine at M1 folder sizes. Index-backed attribute sorts need a different shape (for example a per-folder sort column) and their own decision.
+- Plans (D20). With no `sort`, a page is an index scan on `item_folder_updated_idx` with a row-comparison cursor and no sort step; `apps/api/src/query.test.ts` checks this with EXPLAIN. With `order: "number"` (M3, D61), a page is an index scan on `(workspace_id, folder_id, seq_id DESC)` with a cursor on the item number, and an `offset` window walks the same index. A `sort` on attributes is not index-backed: each page reads every item in the folder that passes `where`, looks up its sort values in `item_index`, and sorts them, so a page costs O(folder size). That is fine at M1 folder sizes. Index-backed attribute sorts need a different shape (for example a per-folder sort column) and their own decision.
 - A select value whose option was deleted still sorts (after every option), but cannot be filtered on: `eq`, `neq`, `in`, and `not_in` operands are checked against the current options and reject it as an unknown option. `is_empty` and `is_not_empty` still see it.
 
 ## API
@@ -150,7 +150,7 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 | Aggregate | `POST /v1/aggregate` | M4 |
 | View data | `GET /v1/views/:id/data` | M4 |
 | Search | `GET /v1/search` | M6 |
-| Changes | `GET /v1/changes?after=seq` | M3 |
+| Changes | `GET /v1/workspaces/:workspaceId/changes?after=seq`, and the WebSocket `GET /v1/workspaces/:workspaceId/feed` (D57) | M3 |
 | Digest | `GET /v1/views/:id/digest` | M5 |
 
 Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE /v1/items/:id`.
@@ -229,7 +229,7 @@ Migration `0009_schema_writes` opens folders and attributes to hub admins and ad
 
 ## Client data layer (from M3)
 
-A normalised store keyed by item ID sits between the server and every component. Views hold ordered ID windows, not item copies. Writes are optimistic: applied locally, sent with a mutation ID, and rolled back if rejected. The client subscribes per folder over WebSocket, applies item changes to the store, and refetches aggregates when a folder's sequence moves.
+A normalised store keyed by item ID sits between the server and every component. Views hold ordered ID windows, not item copies. Writes are optimistic: applied locally, sent with a mutation ID, and rolled back if rejected. The client subscribes per hub over one WebSocket (D57), applies item changes to the store, and refetches what a change may have reordered (D58 to D61).
 
 **M0 scope:** plain fetch with an optimistic edit and rollback on 409 in the item panel. No WebSocket.
 
