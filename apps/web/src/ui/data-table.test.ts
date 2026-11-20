@@ -1,6 +1,7 @@
 import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { describe, expect, it } from 'vitest'
+import { rowKeyIndex, windowOffsets } from './data-table.ts'
 import DataTable, { type TableColumn, type TableMode } from './DataTable.vue'
 
 const rows = [{ id: 'r1' }]
@@ -174,5 +175,137 @@ describe('DataTable static mode', () => {
     expect(first).toContain('data-member-row')
     expect(first).toContain('data-member-id="p1"')
     expect(second).toContain('data-member-id="p2"')
+  })
+})
+
+describe('DataTable virtual mode', () => {
+  type Row = { id: string; title: string }
+  const columns: TableColumn[] = [
+    { key: 'ref', label: 'ID', width: '96px', rowHeader: true },
+    { key: 'title', label: 'Title', wrap: true },
+    { key: 'points', label: 'Points', align: 'end', sort: 'none' },
+  ]
+  const renderVirtual = (
+    props: Partial<{ rowCount: number; loaded: number; selectedId: string; busy: boolean }> = {},
+  ) => {
+    const { rowCount = 50_000, loaded = 4, ...rest } = props
+    // Rows past `loaded` are holes: not loaded yet.
+    const rows: Row[] = []
+    for (let i = 0; i < loaded; i++) rows[i] = { id: `r${String(i)}`, title: `Row ${String(i)}` }
+    return renderToString(
+      createSSRApp({
+        render: () =>
+          h(
+            DataTable,
+            { caption: 'Items', columns, rows, rowCount, mode: 'virtual', height: 400, ...rest },
+            { cell: ({ row }: { row: { id: string } }) => (row as Row).title },
+          ),
+      }),
+    )
+  }
+  const bodyRows = (html: string) =>
+    [...html.matchAll(/<tr[^>]*data-index[^>]*>[\s\S]*?<\/tr>/g)].map((m) => m[0])
+  const spacer = (html: string, where: string) =>
+    Number(
+      new RegExp(`data-spacer="${where}"><td[^>]*style="height:(\\d+)px;`).exec(html)?.[1] ?? -1,
+    )
+
+  it('tells screen readers how many rows there are and where each one is', async () => {
+    const html = await renderVirtual()
+    expect(html).toMatch(/<table[^>]*aria-rowcount="50001"/)
+    expect(html).toMatch(/<thead><tr[^>]*aria-rowindex="1"/)
+    const rows = bodyRows(html)
+    expect(rows[0]).toContain('aria-rowindex="2"')
+    expect(rows[3]).toContain('aria-rowindex="5"')
+    expect(html).toContain('arrow keys on a row move the selection')
+  })
+
+  it('renders the rows in view only, with space below for the rest of the scrollbar', async () => {
+    const html = await renderVirtual()
+    const rows = bodyRows(html)
+    expect(rows).toHaveLength(18)
+    expect(spacer(html, 'above')).toBe(-1)
+    expect(spacer(html, 'below')).toBe((50_000 - 18) * 38)
+  })
+
+  it('shows rows not loaded yet as placeholders, which are not selectable', async () => {
+    const rows = bodyRows(await renderVirtual({ loaded: 2 }))
+    expect(rows[1]).toContain('data-row')
+    expect(rows[1]).toContain('Row 1')
+    const placeholder = rows[2] ?? ''
+    expect(placeholder).toContain('data-placeholder')
+    expect(placeholder).not.toContain('data-row')
+    expect(placeholder).toContain('aria-busy="true"')
+    expect(placeholder).toContain('<span class="sr-only">Loading</span>')
+    expect(placeholder).toMatch(/aria-hidden="true" class="[^"]*bg-empty/)
+    expect(placeholder).not.toContain('cursor-pointer')
+    expect(placeholder).not.toContain('role="status"')
+    expect(placeholder).not.toContain('aria-live')
+  })
+
+  it('marks the selected row and gives it the tab stop', async () => {
+    const rows = bodyRows(await renderVirtual({ selectedId: 'r2' }))
+    expect(rows[2]).toContain('aria-selected="true"')
+    expect(rows[2]).toContain('bg-selected')
+    expect(rows[2]).toContain('tabindex="0"')
+    expect(rows.filter((r) => r.includes('tabindex="0"'))).toHaveLength(1)
+    expect(rows[0]).toContain('tabindex="-1"')
+  })
+
+  it('keeps every row one line and 38px high, with a fixed column layout', async () => {
+    const html = await renderVirtual()
+    expect(html).toMatch(/<table class="[^"]*table-fixed border-separate/)
+    expect(html).toMatch(/<th[^>]*style="width:96px;"/)
+    for (const row of bodyRows(html)) {
+      for (const cell of row.match(/<(th|td)[^>]*>/g) ?? []) {
+        expect(cell).toContain('h-[38px] truncate border-b border-line')
+      }
+    }
+  })
+
+  it('keeps the header in view and sortable', async () => {
+    const html = await renderVirtual({ busy: true })
+    expect(html).toMatch(/<div class="relative min-w-0 overflow-auto[^"]*"[^>]*height:400px/)
+    expect(header(html, 'Points')).toContain('sticky top-0')
+    expect(header(html, 'Points')).toContain('<button type="button"')
+    expect(html).toMatch(/<table[^>]*aria-busy="true"/)
+  })
+})
+
+describe('windowOffsets', () => {
+  it('lists the windows that hold a range of rows', () => {
+    expect(windowOffsets(0, 18, 200)).toEqual([0])
+    expect(windowOffsets(190, 215, 200)).toEqual([0, 200])
+    expect(windowOffsets(200, 400, 200)).toEqual([200])
+    expect(windowOffsets(24_990, 25_010, 200)).toEqual([24_800, 25_000])
+  })
+
+  it('lists nothing for an empty range', () => {
+    expect(windowOffsets(5, 5, 200)).toEqual([])
+    expect(windowOffsets(0, 10, 0)).toEqual([])
+  })
+})
+
+describe('rowKeyIndex', () => {
+  it('moves one row and stops at the ends', () => {
+    expect(rowKeyIndex(4, 'ArrowDown', 10, 5)).toBe(5)
+    expect(rowKeyIndex(4, 'ArrowUp', 10, 5)).toBe(3)
+    expect(rowKeyIndex(9, 'ArrowDown', 10, 5)).toBe(9)
+    expect(rowKeyIndex(0, 'ArrowUp', 10, 5)).toBe(0)
+  })
+
+  it('pages and jumps', () => {
+    expect(rowKeyIndex(4, 'PageDown', 100, 9)).toBe(13)
+    expect(rowKeyIndex(4, 'PageUp', 100, 9)).toBe(0)
+    expect(rowKeyIndex(95, 'PageDown', 100, 9)).toBe(99)
+    expect(rowKeyIndex(50, 'Home', 100, 9)).toBe(0)
+    expect(rowKeyIndex(50, 'End', 100, 9)).toBe(99)
+  })
+
+  it('starts at an end when nothing is selected, and ignores other keys', () => {
+    expect(rowKeyIndex(-1, 'ArrowDown', 10, 5)).toBe(0)
+    expect(rowKeyIndex(-1, 'ArrowUp', 10, 5)).toBe(9)
+    expect(rowKeyIndex(3, 'Enter', 10, 5)).toBeNull()
+    expect(rowKeyIndex(0, 'ArrowDown', 0, 5)).toBeNull()
   })
 })

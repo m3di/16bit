@@ -16,7 +16,17 @@ export type FakeNode = {
   addEventListener: (type: string, fn: (e: unknown) => void) => void
   removeEventListener: (type: string, fn: (e: unknown) => void) => void
   getRootNode: () => FakeNode
+  /** Records focus on the root, as `document.activeElement` would. */
+  focus: () => void
+  /** Scrolling has no layout here; it records the offset asked for. */
+  scrollTop: number
+  scrollTo: (options: { top?: number }) => void
 }
+
+const focused = new WeakMap<FakeNode, FakeNode>()
+
+/** The element last focused under a mounted root, like `document.activeElement`. */
+export const activeElement = (root: FakeNode) => focused.get(root)
 
 function node(tag: string, text = ''): FakeNode {
   const n: FakeNode = {
@@ -38,12 +48,34 @@ function node(tag: string, text = ''): FakeNode {
       while (top.parent) top = top.parent
       return top
     },
+    focus: () => {
+      focused.set(n.getRootNode(), n)
+    },
+    scrollTop: 0,
+    scrollTo: ({ top }) => {
+      if (top !== undefined) n.scrollTop = top
+    },
   }
   return n
 }
 
+let layout: ((el: FakeNode) => void) | null = null
+
+/**
+ * Gives new elements what a browser's layout would, such as `clientHeight` or an
+ * `ownerDocument`, for code that measures or scrolls (DataTable's virtual mode). Pass null to
+ * stop. Applies to elements created after the call.
+ */
+export function setLayout(fn: ((el: FakeNode) => void) | null) {
+  layout = fn
+}
+
 const { createApp } = createRenderer<FakeNode, FakeNode>({
-  createElement: (tag) => node(tag),
+  createElement: (tag) => {
+    const el = node(tag)
+    layout?.(el)
+    return el
+  },
   createText: (text) => node('#text', text),
   createComment: (text) => node('#comment', text),
   setText: (n, text) => {
@@ -73,6 +105,12 @@ const { createApp } = createRenderer<FakeNode, FakeNode>({
     if (key === 'value') n.value = next === null || next === undefined ? '' : String(next)
   },
 })
+
+/** Every element under `n` (itself included) that `match` accepts, in document order. */
+export const findAll = (n: FakeNode, match: (n: FakeNode) => boolean): FakeNode[] => [
+  ...(match(n) ? [n] : []),
+  ...n.children.flatMap((c) => findAll(c, match)),
+]
 
 const find = (n: FakeNode, tag: string): FakeNode | undefined =>
   n.tag === tag ? n : n.children.map((c) => find(c, tag)).find(Boolean)
