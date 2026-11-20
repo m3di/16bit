@@ -117,6 +117,7 @@ describe('migrations', () => {
       '0009_schema_writes',
       '0010_invite_update_owner',
       '0011_deleted_attribute',
+      '0012_mutation_ids',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -787,6 +788,7 @@ describe('0009_schema_writes', () => {
       '0009_schema_writes',
       '0010_invite_update_owner',
       '0011_deleted_attribute',
+      '0012_mutation_ids',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -837,6 +839,7 @@ describe('0010_invite_update_owner', () => {
     expect(await migrateToLatest(db)).toEqual([
       '0010_invite_update_owner',
       '0011_deleted_attribute',
+      '0012_mutation_ids',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -865,7 +868,7 @@ describe('0011_deleted_attribute', () => {
       DELETE FROM attribute WHERE id IN ('gone', 'old');
     `.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0011_deleted_attribute'])
+    expect(await migrateToLatest(db)).toEqual(['0011_deleted_attribute', '0012_mutation_ids'])
     const backfilled = await db
       .selectFrom('deleted_attribute')
       .select(['workspace_id', 'id', 'hub_id', 'deleted_by'])
@@ -892,5 +895,102 @@ describe('0011_deleted_attribute', () => {
     await sql`DELETE FROM attribute WHERE id = 'live'`.execute(db)
     await sql`INSERT INTO attribute (workspace_id, id, hub_id, name, type)
               VALUES ('w1', 'live', 'h1', 'Live', 'number')`.execute(db)
+  })
+})
+
+describe('0012_mutation_ids', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+  const M1 = '7f0c2a1e-3b4d-4c5e-8f60-718293a4b5c6'
+  const M2 = '0a1b2c3d-4e5f-4a6b-8c7d-8e9fa0b1c2d3'
+  const revision = (seq: number, version: number, actor: string, id: string | null) =>
+    sql`INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor,
+                              client_mutation_id)
+        VALUES ('w1', ${seq}, 'i1', 'h1', ${version}, '{"op":"update","values":{}}', ${actor},
+                ${id})`.execute(db)
+  const indexDef = async (name: string) => {
+    const { rows } = await sql<{ def: string }>`
+      SELECT indexdef AS def FROM pg_indexes WHERE schemaname = 'public' AND indexname = ${name}
+    `.execute(db)
+    return rows[0]?.def ?? null
+  }
+
+  it('applies to a database migrated to 0011 with data, and migrates back down', async () => {
+    expect((await migrator().migrateTo('0011_deleted_attribute')).error).toBeUndefined()
+    await seedHub()
+    await sql`
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+        VALUES ('w1', 'i1', 'h1', 'f1', 1, '{}', 'p1');
+      INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor)
+        VALUES ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1');
+    `.execute(db)
+
+    expect(await migrateToLatest(db)).toEqual(['0012_mutation_ids'])
+    // Existing revisions carry no ID.
+    expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
+      [{ seq: 1, client_mutation_id: null }],
+    )
+    expect(await indexDef('revision_client_mutation_key')).toMatch(
+      /UNIQUE INDEX .* \(workspace_id, actor, client_mutation_id\) WHERE \(client_mutation_id IS NOT NULL\)/,
+    )
+    expect(await indexDef('item_folder_number_idx')).toMatch(
+      /\(workspace_id, folder_id, seq_id DESC\)/,
+    )
+
+    expect((await migrator().migrateTo('0011_deleted_attribute')).error).toBeUndefined()
+    expect(await indexDef('revision_client_mutation_key')).toBeNull()
+    expect(await indexDef('item_folder_number_idx')).toBeNull()
+    const { rows } = await sql<{ n: number }>`
+      SELECT count(*)::int AS n FROM information_schema.columns
+      WHERE table_name = 'revision' AND column_name = 'client_mutation_id'
+    `.execute(db)
+    expect(rows[0]?.n).toBe(0)
+  })
+
+  describe('on the latest schema', () => {
+    beforeEach(async () => {
+      await migrateToLatest(db)
+      await seedHub()
+      await sql`
+        INSERT INTO principal (workspace_id, id, kind, name, workspace_role)
+          VALUES ('w1', 'p2', 'user', 'Second', 'member');
+        INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+          VALUES ('w1', 'i1', 'h1', 'f1', 1, '{}', 'p1');
+      `.execute(db)
+    })
+
+    it('refuses an ID twice for one actor in a workspace, and allows it for another actor', async () => {
+      await revision(1, 1, 'p1', M1)
+      await expect(revision(2, 2, 'p1', M1)).rejects.toMatchObject({
+        code: '23505',
+        constraint: 'revision_client_mutation_key',
+      })
+      await revision(2, 2, 'p2', M1)
+      await revision(3, 3, 'p1', M2)
+    })
+
+    it('never compares writes without an ID', async () => {
+      await revision(1, 1, 'p1', null)
+      await revision(2, 2, 'p1', null)
+      expect(await db.selectFrom('revision').select('seq').execute()).toHaveLength(2)
+    })
+
+    it('refuses an ID that is not a UUID', async () => {
+      await expect(revision(1, 1, 'p1', 'not-a-uuid')).rejects.toMatchObject({ code: '22P02' })
+    })
+
+    it('reads a folder by item number from item_folder_number_idx without a sort', async () => {
+      const plan = await db.transaction().execute(async (trx) => {
+        await sql`SET LOCAL enable_sort = off`.execute(trx)
+        await sql`SET LOCAL enable_seqscan = off`.execute(trx)
+        const { rows } = await sql<{ 'QUERY PLAN': string }>`
+          EXPLAIN SELECT id FROM item WHERE workspace_id = 'w1' AND folder_id = 'f1'
+          ORDER BY seq_id DESC LIMIT 200 OFFSET 400
+        `.execute(trx)
+        return rows.map((r) => r['QUERY PLAN']).join('\n')
+      })
+      expect(plan).toContain('item_folder_number_idx')
+      expect(plan).not.toMatch(/Sort/)
+    })
   })
 })
