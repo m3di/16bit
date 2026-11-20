@@ -1,6 +1,6 @@
 import type { Attribute, Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
-import { attributes, fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
+import { attributes, fakeApi, item, json, withSeq, type Call } from './fixtures.test-utils.ts'
 import { ApiRequestError } from '../../api/client.ts'
 import {
   canSort,
@@ -14,7 +14,8 @@ import {
   withoutSeq,
 } from './useItems.ts'
 
-const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
+const page = (items: Item[], nextCursor: string | null = null) =>
+  json(withSeq({ items, nextCursor }))
 
 /** A promise that resolves when `release` is called, to hold a request open. */
 function gate<T>() {
@@ -78,7 +79,7 @@ describe('useItems: reading', () => {
   })
 
   it('fetches an item that is not in the list', async () => {
-    const { s, calls } = await opened(() => json(item('far', 99)), [])
+    const { s, calls } = await opened(() => json(withSeq(item('far', 99))), [])
     expect(await s.openItem('far')).toMatchObject({ state: 'ready', data: { seqId: 99 } })
     expect(calls.at(-1)?.path).toBe('/v1/workspaces/w/items/far')
     expect(s.view('far')?.seqId).toBe(99)
@@ -525,7 +526,7 @@ describe('useItems: editing', () => {
     const saved = s.save('i1', { title: 'New' })
     expect(s.view('i1')?.values['title']).toBe('New')
     expect(s.isSaving('i1')).toBe(true)
-    answer.release(json(item('i1', 1, { title: 'New' }, 2)))
+    answer.release(json(withSeq(item('i1', 1, { title: 'New' }, 2))))
     expect(await saved).toBe(true)
     expect(calls.at(-1)).toMatchObject({
       method: 'PATCH',
@@ -579,7 +580,7 @@ describe('useItems: editing', () => {
       (call) => {
         const body = call.body as { values: Item['values'] }
         version++
-        return json(item('i1', 1, body.values, version))
+        return json(withSeq(item('i1', 1, body.values, version)))
       },
       [item('i1', 1)],
     )
@@ -600,7 +601,7 @@ describe('useItems: creating', () => {
     expect(s.isCreating(id)).toBe(true)
     const body = calls.at(-1)?.body as { id: string; folderId: string; values: unknown }
     expect(body).toEqual({ id, folderId: 'bld', values: { title: 'Fresh' } })
-    answer.release(json(item(id, 2, { title: 'Fresh' }), 201))
+    answer.release(json(withSeq(item(id, 2, { title: 'Fresh' })), 201))
     expect(await created).toMatchObject({ ok: true, item: { id, seqId: 2 } })
     expect(s.isCreating(id)).toBe(false)
     expect(s.rows.value.map((r) => r.seqId)).toEqual([2, 1])
@@ -636,7 +637,7 @@ describe('useItems: creating', () => {
     expect(calls).toHaveLength(sent)
     expect(s.view(id)?.values).toEqual({ title: 'Fresh' })
     expect(s.notice.value).toContain('still being saved')
-    answer.release(json(item(id, 2, { title: 'Fresh' }), 201))
+    answer.release(json(withSeq(item(id, 2, { title: 'Fresh' })), 201))
     await created
   })
 })
@@ -659,12 +660,14 @@ describe('useItems: linked items (#50)', () => {
   it('expands relation columns and keeps what the server says about each linked item', async () => {
     const target = item('t1', 5, { title: 'Target' })
     const api = fakeApi(() =>
-      json({
-        items: [linking(['t1', 't2', 't3'])],
-        nextCursor: null,
-        linked: { t1: { access: 'read', item: target }, t2: { access: 'none' } },
-        linkedTruncated: false,
-      }),
+      json(
+        withSeq({
+          items: [linking(['t1', 't2', 't3'])],
+          nextCursor: null,
+          linked: { t1: { access: 'read', item: target }, t2: { access: 'none' } },
+          linkedTruncated: false,
+        }),
+      ),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld', ['blocks'])
@@ -678,7 +681,9 @@ describe('useItems: linked items (#50)', () => {
 
   it('does not call an item deleted when the server cut the linked list short', async () => {
     const api = fakeApi(() =>
-      json({ items: [linking(['t3'])], nextCursor: null, linked: {}, linkedTruncated: true }),
+      json(
+        withSeq({ items: [linking(['t3'])], nextCursor: null, linked: {}, linkedTruncated: true }),
+      ),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld', ['blocks'])
@@ -687,8 +692,8 @@ describe('useItems: linked items (#50)', () => {
 
   it('reads uncovered linked items one by one; a 404 shows as no access', async () => {
     const api = fakeApi((call) => {
-      if (call.path.endsWith('/query')) return json({ items: [], nextCursor: null })
-      if (call.path.endsWith('/t1')) return json(item('t1', 5))
+      if (call.path.endsWith('/query')) return json(withSeq({ items: [], nextCursor: null }))
+      if (call.path.endsWith('/t1')) return json(withSeq(item('t1', 5)))
       if (call.path.endsWith('/t2')) return json({ error: 'not_found', message: 'Not found' }, 404)
       return json({ error: 'internal', message: 'Boom' }, 500)
     })
@@ -706,9 +711,9 @@ describe('useItems: linked items (#50)', () => {
   it('reads at most a few linked items at once', async () => {
     const held = gate<undefined>()
     const api = fakeApi(async (call) => {
-      if (call.path.endsWith('/query')) return json({ items: [], nextCursor: null })
+      if (call.path.endsWith('/query')) return json(withSeq({ items: [], nextCursor: null }))
       await held.promise
-      return json(item(call.path.split('/').at(-1) ?? '', 5))
+      return json(withSeq(item(call.path.split('/').at(-1) ?? '', 5)))
     })
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
@@ -726,19 +731,21 @@ describe('useItems: linked items (#50)', () => {
   it('waits for the folder query, whose answer wins over a direct read', async () => {
     const list = gate<Response>()
     const api = fakeApi((call) =>
-      call.path.endsWith('/query') ? list.promise : json(item('t1', 5)),
+      call.path.endsWith('/query') ? list.promise : json(withSeq(item('t1', 5))),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn)
     const opening = s.openFolder('bld', ['blocks'])
     s.resolveLinked(['t1'])
     expect(api.calls.filter((c) => c.method === 'GET')).toHaveLength(0)
     list.release(
-      json({
-        items: [item('i1', 1, { blocks: ['t1'] })],
-        nextCursor: null,
-        linked: { t1: { access: 'none' } },
-        linkedTruncated: false,
-      }),
+      json(
+        withSeq({
+          items: [item('i1', 1, { blocks: ['t1'] })],
+          nextCursor: null,
+          linked: { t1: { access: 'none' } },
+          linkedTruncated: false,
+        }),
+      ),
     )
     await opening
     s.resolveLinked(['t1'])
@@ -802,11 +809,13 @@ describe('useItems: an item page without a list (#119)', () => {
   it('reads an item with expand and keeps its linked items, and a missing one as gone', async () => {
     const target = item('t1', 5, { title: 'Target' })
     const api = fakeApi(() =>
-      json({
-        ...item('i1', 1, { blocks: ['t1', 't2', 't3'] }),
-        linked: { t1: { access: 'read', item: target }, t2: { access: 'none' } },
-        linkedTruncated: false,
-      }),
+      json(
+        withSeq({
+          ...item('i1', 1, { blocks: ['t1', 't2', 't3'] }),
+          linked: { t1: { access: 'read', item: target }, t2: { access: 'none' } },
+          linkedTruncated: false,
+        }),
+      ),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
     const result = await s.readItem('i1', ['blocks', 'parent'])
@@ -820,7 +829,9 @@ describe('useItems: an item page without a list (#119)', () => {
 
   it('keeps a newer version than the one read', async () => {
     const api = fakeApi((call) =>
-      call.path.includes('expand') ? json(item('i1', 1, {}, 1)) : json(item('i1', 1, {}, 3)),
+      call.path.includes('expand')
+        ? json(withSeq(item('i1', 1, {}, 1)))
+        : json(withSeq(item('i1', 1, {}, 3))),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
     await s.openItem('i1')
@@ -836,7 +847,7 @@ describe('useItems: an item page without a list (#119)', () => {
   })
 
   it('reads linked items at once, since no list query will cover them', async () => {
-    const api = fakeApi((call) => json(item(call.path.split('/').at(-1) ?? '', 5)))
+    const api = fakeApi((call) => json(withSeq(item(call.path.split('/').at(-1) ?? '', 5))))
     const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
     s.resolveLinked(['t1'])
     await new Promise((r) => setTimeout(r, 0))
@@ -848,7 +859,7 @@ describe('useItems: an item page without a list (#119)', () => {
 describe('useItems: deleting (#119)', () => {
   async function loaded(handler: (call: Call) => Response | Promise<Response>) {
     const api = fakeApi((call) =>
-      call.method === 'GET' ? json(item('i1', 7, { title: 'Old' }, 2)) : handler(call),
+      call.method === 'GET' ? json(withSeq(item('i1', 7, { title: 'Old' }, 2))) : handler(call),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn, { list: false })
     await s.openItem('i1')
@@ -913,7 +924,7 @@ describe('useItems: deleting (#119)', () => {
     )
     const saved = s.save('i1', { title: 'New' })
     const removed = s.remove('i1')
-    answer.release(json(item('i1', 7, { title: 'New' }, 3)))
+    answer.release(json(withSeq(item('i1', 7, { title: 'New' }, 3))))
     await saved
     expect(await removed).toEqual({ ok: true })
     expect(calls.at(-1)?.path).toBe('/v1/workspaces/w/items/i1?version=3')
@@ -924,8 +935,6 @@ describe('useItems: deleting (#119)', () => {
 // strict item schema would refuse it, so these must keep working, and the store keeps items
 // without it (issue 168).
 describe('useItems: responses carrying seq', () => {
-  const withSeq = (body: object, seq = 7) => ({ ...body, seq })
-
   it('drops seq and nothing else', () => {
     const i = item('i1', 1)
     expect(withoutSeq({ ...i, seq: 3 })).toEqual(i)

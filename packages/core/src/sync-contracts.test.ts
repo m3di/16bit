@@ -131,9 +131,11 @@ describe('item query windows and orders (D61)', () => {
   })
 
   it('adds total and seq to the result', () => {
-    const page = { items: [item], nextCursor: null }
+    const page = { items: [item], nextCursor: null, seq: 7 }
+    // Required since M3-03 (#170).
+    expect(itemQueryResultSchema.safeParse({ items: [item], nextCursor: null }).success).toBe(false)
     expect(itemQueryResultSchema.parse(page)).toEqual(page)
-    expect(itemQueryResultSchema.parse({ ...page, total: 50_000, seq: 7 })).toMatchObject({
+    expect(itemQueryResultSchema.parse({ ...page, total: 50_000 })).toMatchObject({
       total: 50_000,
       seq: 7,
     })
@@ -148,6 +150,8 @@ describe('seq on read and write responses (D58)', () => {
     expect(itemWriteResultSchema.parse({ ...item, seq: 12 }).seq).toBe(12)
     expect(itemReadSchema.safeParse({ ...item, seq: -1 }).success).toBe(false)
     expect(itemWriteResultSchema.safeParse({ ...item, seq: '12' }).success).toBe(false)
+    expect(itemReadSchema.safeParse(item).success).toBe(false)
+    expect(itemWriteResultSchema.safeParse(item).success).toBe(false)
   })
 
   it('carries seq on a hub description', () => {
@@ -172,6 +176,7 @@ describe('seq on read and write responses (D58)', () => {
     }
     expect(hubDescriptionSchema.parse({ ...body, seq: 3 }).seq).toBe(3)
     expect(hubDescriptionSchema.safeParse({ ...body, seq: null }).success).toBe(false)
+    expect(hubDescriptionSchema.safeParse(body).success).toBe(false)
   })
 })
 

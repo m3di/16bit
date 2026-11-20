@@ -74,6 +74,7 @@ describe('hub', () => {
       attributes: [stage],
       folderAttributes: [],
       truncated: { folders: false, attributes: false, folderAttributes: false },
+      seq: 0,
     }
     expect(hubDescriptionSchema.parse(description).hub.titleAttributeId).toBe('title')
     const untitled: Partial<typeof hub> = { ...hub }
