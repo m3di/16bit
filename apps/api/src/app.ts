@@ -419,14 +419,6 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/query', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const query = parse(itemQuerySchema, request.body)
-            // In the contract since #168; served from M3-05 (D61). Refused until then rather
-            // than ignored, so no client reads a window or a total that is not there.
-            if (query.offset !== undefined || query.count || query.order === 'number') {
-              throw new HttpError(
-                'invalid_request',
-                'offset, count and order "number" are not supported yet',
-              )
-            }
             return snapshot(request, async (trx): Promise<ItemQueryResult> => {
               const hubId = await folderHub(trx, workspaceId, query.from)
               await checkHub(trx, workspaceId, request.principal, hubId, 'hub.read', 'Folder')
