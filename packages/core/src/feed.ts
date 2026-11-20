@@ -127,6 +127,27 @@ export const feedServerMessageSchema = z.discriminatedUnion('type', [
 ])
 export type FeedServerMessage = z.infer<typeof feedServerMessageSchema>
 
+/**
+ * Codes the server closes a feed socket with. Upgrade refusals are plain HTTP errors instead
+ * (D57); a browser `WebSocket` sees those only as a failed connection.
+ */
+export const FEED_CLOSE_CODES = {
+  /** The process is shutting down: reconnect with backoff and resume. */
+  goingAway: 1001,
+  /** Over the cap of sockets per session or agent key: close another tab's socket first. */
+  tooManySockets: 1008,
+  /** A frame over the server's frame cap (64 KiB): a client bug, not worth a retry as is. */
+  frameTooLarge: 1009,
+  /** The server could not read changes: reconnect with backoff and resume from the positions held. */
+  internal: 1011,
+  /**
+   * The session, agent key or membership ended (sign-out, password reset, revocation, removal,
+   * expiry): sign in again; a reconnect would be refused (401 or 404).
+   */
+  credentialsEnded: 4401,
+} as const
+export type FeedCloseCode = (typeof FEED_CLOSE_CODES)[keyof typeof FEED_CLOSE_CODES]
+
 export type ParsedClientMessage =
   | { ok: true; message: FeedClientMessage }
   | { ok: false; code: 'invalid_message' | 'message_too_large'; message: string }

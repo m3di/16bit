@@ -1,5 +1,6 @@
 import {
   createdAgentKeySchema,
+  FEED_CLOSE_CODES,
   feedServerMessageSchema,
   itemWriteResultSchema,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
@@ -19,7 +20,7 @@ import { sessionCookie } from '../db/test-session.ts'
 import { DEV_OWNER } from '../dev-accounts.ts'
 import { applyLargeSeed, LARGE_HUB, LARGE_WORKSPACE } from '../large-seed.ts'
 import { resetPassword } from '../reset-password.ts'
-import { CLOSE_CREDENTIALS_ENDED, MAX_SOCKETS_PER_SESSION } from './feed.ts'
+import { MAX_SOCKETS_PER_SESSION } from './feed.ts'
 import { LISTENER_APPLICATION_NAME } from './listener.ts'
 
 // The WebSocket feed (D57, D58) over a real socket, against a real Postgres under row-level
@@ -285,7 +286,11 @@ async function changes(client: Client, ms?: number) {
 }
 
 /** Closes within `ms` with `code`. */
-async function closesWithin(client: Client, ms: number, code = CLOSE_CREDENTIALS_ENDED) {
+async function closesWithin(
+  client: Client,
+  ms: number,
+  code: number = FEED_CLOSE_CODES.credentialsEnded,
+) {
   const started = Date.now()
   const result = await Promise.race([
     client.closed,

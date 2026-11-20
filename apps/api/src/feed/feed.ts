@@ -1,4 +1,5 @@
 import {
+  FEED_CLOSE_CODES,
   MAX_MISSED_CHANGES,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
@@ -37,14 +38,12 @@ import { Listener } from './listener.ts'
 /** Most sockets one session (or agent key) holds open at once. */
 export const MAX_SOCKETS_PER_SESSION = 10
 
-/** Close codes. 4401: the session, key or membership ended; sign in again before reconnecting. */
-export const CLOSE_CREDENTIALS_ENDED = 4401
-/** 1008 (policy): over the per-session socket cap. */
-export const CLOSE_TOO_MANY_SOCKETS = 1008
-/** 1011: the server could not read changes; reconnect and resume. */
-export const CLOSE_INTERNAL = 1011
-/** 1001: the process is shutting down; reconnect. */
-export const CLOSE_GOING_AWAY = 1001
+const {
+  credentialsEnded: CLOSE_CREDENTIALS_ENDED,
+  tooManySockets: CLOSE_TOO_MANY_SOCKETS,
+  internal: CLOSE_INTERNAL,
+  goingAway: CLOSE_GOING_AWAY,
+} = FEED_CLOSE_CODES
 
 export interface FeedOptions {
   /** Connection string for the `LISTEN` connection: the API's own role (DATABASE_URL). */

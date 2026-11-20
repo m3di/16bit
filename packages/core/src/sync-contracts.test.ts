@@ -6,6 +6,7 @@ import {
   decodeItemCursor,
   deleteItemQuerySchema,
   encodeItemCursor,
+  FEED_CLOSE_CODES,
   feedServerMessageSchema,
   hubDescriptionSchema,
   itemQueryResultSchema,
@@ -259,6 +260,27 @@ describe('feed client messages (D57)', () => {
     expect(parseFeedClientMessage('x'.repeat(1_000_000))).toMatchObject({
       code: 'message_too_large',
     })
+  })
+})
+
+describe('feed close codes (#171)', () => {
+  it('pins each code, so client and server agree on what a close means', () => {
+    expect(FEED_CLOSE_CODES).toEqual({
+      goingAway: 1001,
+      tooManySockets: 1008,
+      frameTooLarge: 1009,
+      internal: 1011,
+      credentialsEnded: 4401,
+    })
+  })
+
+  it('keeps codes distinct, and its own in the range RFC 6455 leaves to applications', () => {
+    const codes = Object.values(FEED_CLOSE_CODES)
+    expect(new Set(codes).size).toBe(codes.length)
+    for (const code of codes) {
+      // Standard codes a server may send, or 4000 to 4999 for application use.
+      expect([1001, 1008, 1009, 1011].includes(code) || (code >= 4000 && code <= 4999)).toBe(true)
+    }
   })
 })
 
