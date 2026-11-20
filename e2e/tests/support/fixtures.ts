@@ -1,4 +1,5 @@
-import { conflictErrorSchema, itemSchema, type ConflictError, type Item } from '@16bit/core'
+import { conflictErrorSchema, type ConflictError, type Item } from '@16bit/core'
+import { parseItemRead, parseItemWrite } from './item-responses.ts'
 import { readFileSync } from 'node:fs'
 import { test as base, expect, type APIRequestContext, type APIResponse } from '@playwright/test'
 import { OWNER_STATE } from './auth-state.ts'
@@ -41,13 +42,13 @@ export class Api {
       },
     )
     await expectStatus(res, 201)
-    return itemSchema.parse(await res.json())
+    return parseItemWrite(await res.json())
   }
 
   async getItem(id: string, workspaceId: string = demo.workspaceId): Promise<Item> {
     const res = await this.#request.get(this.path(workspaceId, `/items/${encodeURIComponent(id)}`))
     await expectStatus(res, 200)
-    return itemSchema.parse(await res.json())
+    return parseItemRead(await res.json())
   }
 
   /** Sends the PATCH and returns the raw response, so a spec can check a 409. */
@@ -65,7 +66,7 @@ export class Api {
 
   async parseItem(res: APIResponse): Promise<Item> {
     await expectStatus(res, 200)
-    return itemSchema.parse(await res.json())
+    return parseItemWrite(await res.json())
   }
 
   async parseConflict(res: APIResponse): Promise<ConflictError> {

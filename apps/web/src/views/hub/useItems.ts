@@ -4,7 +4,7 @@ import {
   DEFAULT_PAGE_LIMIT,
   itemQueryResultSchema,
   itemReadSchema,
-  itemSchema,
+  itemWriteResultSchema,
   type Attribute,
   type Item,
   type ItemQueryResult,
@@ -113,6 +113,18 @@ export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> =
   b[8] = ((b[8] ?? 0) & 0x3f) | 0x80
   const hex = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
+ * A response without the workspace `seq` it carries (D58, issue 181), so the store holds
+ * items only. The API sends `seq` from M3-03; until then this changes nothing.
+ */
+export function withoutSeq<T extends Item & { seq?: number | undefined }>(
+  response: T,
+): Omit<T, 'seq'> {
+  const item = { ...response }
+  delete item.seq
+  return item
 }
 
 /** An item opened by ID inside a hub's page. One from another hub is reported as missing. */
@@ -261,8 +273,9 @@ export function useItems(
         if (linkState(id).access === 'unknown') linked.value[id] = state
       }
       linkReads++
-      const run = getJson(itemPath(id), itemSchema, fetchFn)
-        .then((item): Load<Item> => {
+      const run = getJson(itemPath(id), itemReadSchema, fetchFn)
+        .then((read): Load<Item> => {
+          const item = withoutSeq(read)
           settle({ access: 'read', item })
           return { state: 'ready', data: item }
         })
@@ -448,8 +461,9 @@ export function useItems(
     if (known) return Promise.resolve({ state: 'ready', data: known })
     let running = opening.get(id)
     if (!running) {
-      running = getJson(itemPath(id), itemSchema, fetchFn)
-        .then((item): Load<Item> => {
+      running = getJson(itemPath(id), itemReadSchema, fetchFn)
+        .then((read): Load<Item> => {
+          const item = withoutSeq(read)
           server.value[item.id] = item
           return { state: 'ready', data: item }
         })
@@ -472,8 +486,9 @@ export function useItems(
       const {
         linked: links,
         linkedTruncated,
-        ...item
+        ...read
       } = await getJson(`${itemPath(id)}${query}`, itemReadSchema, fetchFn)
+      const item = withoutSeq(read)
       const known = server.value[id]
       if (!known || known.version <= item.version) server.value[id] = item
       absorbLinked({ items: [item], nextCursor: null, linked: links, linkedTruncated }, expandIds)
@@ -523,9 +538,9 @@ export function useItems(
           'PATCH',
           itemPath(id),
           { version: before.version, values },
-          itemSchema,
+          itemWriteResultSchema,
           fetchFn,
-        )
+        ).then(withoutSeq)
         server.value[id] = updated
         drop()
         return true
@@ -584,9 +599,9 @@ export function useItems(
         'POST',
         `${base}/items`,
         { id, folderId: folder, values },
-        itemSchema,
+        itemWriteResultSchema,
         fetchFn,
-      )
+      ).then(withoutSeq)
       server.value[id] = item
       return { ok: true, item }
     } catch (thrown) {

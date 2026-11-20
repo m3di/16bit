@@ -11,6 +11,7 @@ import {
   refusedSort,
   useItems,
   valueErrors,
+  withoutSeq,
 } from './useItems.ts'
 
 const page = (items: Item[], nextCursor: string | null = null) => json({ items, nextCursor })
@@ -916,5 +917,49 @@ describe('useItems: deleting (#119)', () => {
     await saved
     expect(await removed).toEqual({ ok: true })
     expect(calls.at(-1)?.path).toBe('/v1/workspaces/w/items/i1?version=3')
+  })
+})
+
+// From M3-03 the API adds the workspace `seq` to item, query and write responses (D58). The
+// strict item schema would refuse it, so these must keep working, and the store keeps items
+// without it (issue 181).
+describe('useItems: responses carrying seq', () => {
+  const withSeq = (body: object, seq = 7) => ({ ...body, seq })
+
+  it('drops seq and nothing else', () => {
+    const i = item('i1', 1)
+    expect(withoutSeq({ ...i, seq: 3 })).toEqual(i)
+    expect(withoutSeq(i)).toEqual(i)
+  })
+
+  it('reads a query page and a single item', async () => {
+    const api = fakeApi((call) =>
+      call.path.endsWith('/query')
+        ? json(withSeq({ items: [item('i1', 1)], nextCursor: null }))
+        : json(withSeq(item('far', 99))),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    expect(s.list.value.state).toBe('ready')
+    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(await s.openItem('far')).toMatchObject({ state: 'ready', data: { seqId: 99 } })
+    expect(await s.readItem('far', [])).toMatchObject({ state: 'ready' })
+    expect(s.view('far')).not.toHaveProperty('seq')
+  })
+
+  it('saves and creates', async () => {
+    const { s } = await opened(
+      (call) =>
+        call.method === 'PATCH'
+          ? json(withSeq(item('i1', 1, { title: 'New' }, 2)))
+          : json(withSeq(item((call.body as { id: string }).id, 2, { title: 'Fresh' })), 201),
+      [item('i1', 1)],
+    )
+    expect(await s.save('i1', { title: 'New' })).toBe(true)
+    expect(s.view('i1')).toMatchObject({ version: 2, values: { title: 'New' } })
+    expect(s.view('i1')).not.toHaveProperty('seq')
+    const created = await s.create({ title: 'Fresh' })
+    expect(created.ok).toBe(true)
+    if (created.ok) expect(created.item).not.toHaveProperty('seq')
   })
 })
