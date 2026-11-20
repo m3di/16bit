@@ -4,6 +4,7 @@ import {
   decodeItemCursor,
   encodeItemCursor,
   indexEntries,
+  itemQueryOrder,
   validateItemValues,
   MAX_HIDDEN_BACKLINKS,
   MAX_LINKED_ITEMS,
@@ -14,6 +15,8 @@ import {
   type Filter,
   type FolderAttributeDefinition,
   type Item,
+  type ItemCursorOrder,
+  type ItemQueryOrder,
   type ItemQueryResult,
   type ItemRead,
   type ItemValues,
@@ -66,6 +69,17 @@ const REVISION_VERSION_KEY = 'revision_workspace_id_item_id_version_key'
 // SHARE does not conflict with another write's own row lock (FOR NO KEY UPDATE), only with a
 // delete, and a delete takes only its own item row before the hub, folder and workspace rows.
 
+/**
+ * Thrown when a write's revision finds its `clientMutationId` already taken by the same actor
+ * (D59): a retry that raced its first attempt and lost. The write's transaction must roll back;
+ * the route then answers as the first attempt did (`replayMutation`).
+ */
+export class MutationReplayed extends Error {
+  constructor() {
+    super('This clientMutationId was already used')
+  }
+}
+
 export async function appendRevision(
   trx: Trx,
   workspaceId: string,
@@ -74,6 +88,7 @@ export async function appendRevision(
   version: number,
   patch: RevisionPatch,
   actor: string,
+  clientMutationId?: string,
 ): Promise<number> {
   const { seq } = await trx
     .updateTable('workspace')
@@ -91,8 +106,21 @@ export async function appendRevision(
       version,
       patch: JSON.stringify(patch),
       actor,
+      client_mutation_id: clientMutationId ?? null,
     })
-    .execute()
+    // The partial unique index (0012) is the arbiter only if its WHERE is repeated here. A
+    // racing retry waits for the first attempt, then inserts nothing.
+    .onConflict((oc) =>
+      oc
+        .columns(['workspace_id', 'actor', 'client_mutation_id'])
+        .where('client_mutation_id', 'is not', null)
+        .doNothing(),
+    )
+    .returning('seq')
+    .executeTakeFirst()
+    .then((row) => {
+      if (!row) throw new MutationReplayed()
+    })
   await sql`SELECT pg_notify(${REVISION_CHANNEL}, ${`${workspaceId}:${String(seq)}`})`.execute(trx)
   return seq
 }
@@ -414,7 +442,12 @@ export async function createItem(
   db: Db,
   workspaceId: string,
   actor: string,
-  input: { id?: string | undefined; folderId: string; values: Record<string, unknown> },
+  input: {
+    id?: string | undefined
+    folderId: string
+    values: Record<string, unknown>
+    clientMutationId?: string | undefined
+  },
 ): Promise<Item> {
   return inTransaction(db, async (trx) => {
     const folder = await trx
@@ -493,6 +526,7 @@ export async function createItem(
         row.version,
         { op: 'create', folderId: folder.id, values: stored },
         actor,
+        input.clientMutationId,
       )
     } catch (error) {
       // The ID belonged to an item since deleted in a hub the writer can't read, so the check
@@ -564,6 +598,7 @@ export async function patchItem(
       row.version,
       { op: 'update', values: patch },
       actor,
+      input.clientMutationId,
     )
     return toItem(row)
   })
@@ -575,6 +610,7 @@ export async function deleteItem(
   actor: string,
   id: string,
   version: number,
+  clientMutationId?: string,
 ): Promise<void> {
   await inTransaction(db, async (trx) => {
     const row = await trx
@@ -593,14 +629,24 @@ export async function deleteItem(
     // revision is checked against the deleted item by revision_guard (migration 0008).
     await bumpCounts(trx, workspaceId, row.hub_id, row.folder_id, -1)
     // The delete is the item's last version, so `(item_id, version)` stays unique in the log.
-    await appendRevision(trx, workspaceId, row.hub_id, id, row.version + 1, { op: 'delete' }, actor)
+    await appendRevision(
+      trx,
+      workspaceId,
+      row.hub_id,
+      id,
+      row.version + 1,
+      { op: 'delete' },
+      actor,
+      clientMutationId,
+    )
   })
 }
 
-// Queries (D19, D20): one folder, `where` and `sort` on item_index, keyset paging.
+// Queries (D19, D20, D61): one folder, `where` and `sort` on item_index, keyset paging or a
+// window by offset, and the total from the folder's counter when there is no `where`.
 
 /** How a sort key is typed, for its SQL casts and its cursor form. */
-type KeyKind = 'num' | 'txt' | 'ts'
+type KeyKind = 'num' | 'int' | 'txt' | 'ts'
 
 /** One ORDER BY key, computed per item as `k<i>` in the inner query. */
 interface SortKey {
@@ -613,6 +659,8 @@ interface SortKey {
 
 const CAST: Record<KeyKind, RawBuilder<unknown>> = {
   num: sql`double precision`,
+  // Item numbers: a bigint comparison, so item_folder_number_idx still applies.
+  int: sql`bigint`,
   txt: sql`text`,
   ts: sql`timestamptz`,
 }
@@ -696,8 +744,17 @@ const NEWEST_FIRST: SortKey = {
   nullable: false,
 }
 
+/** The `number` order (D61): item number, newest first. Unique in the hub, so no ID tiebreak. */
+const NUMBER_NEWEST_FIRST: SortKey = {
+  expr: sql`i.seq_id`,
+  kind: 'int',
+  desc: true,
+  nullable: false,
+}
+
 const CURSOR_VALUE: Record<KeyKind, z.ZodType> = {
   num: z.number(),
+  int: z.int().min(1),
   txt: z.string().max(20_000),
   ts: z.iso.datetime(),
 }
@@ -706,16 +763,23 @@ const CURSOR_VALUE: Record<KeyKind, z.ZodType> = {
  * Rows after the cursor in `ORDER BY k0, k1, ..., id` with nulls last:
  * OR over i of (k0..k(i-1) equal to the cursor, and ki after it).
  *
- * When no key is nullable and every key runs in the ID's direction (the default order), this
- * is a row comparison instead, which Postgres matches to a btree index such as
+ * When no key is nullable and every key runs in the ID's direction (the `updated` and `number`
+ * orders), this is a row comparison instead, which Postgres matches to a btree index such as
  * item_folder_updated_idx. The OR form cannot use the index and sorts the whole folder.
+ * Without `tiebreak` (the `number` order, whose key is unique) the cursor has no ID.
  */
-function afterCursor(keys: SortKey[], idDesc: boolean, cursor: unknown[]): RawBuilder<unknown> {
+function afterCursor(
+  keys: SortKey[],
+  idDesc: boolean,
+  tiebreak: boolean,
+  cursor: unknown[],
+): RawBuilder<unknown> {
   const ref = (i: number) => sql.ref(`q.k${String(i)}`)
   if (keys.every((key) => !key.nullable && key.desc === idDesc)) {
     const values = keys.map((key, i) => typed(key.kind, cursor[i] as string | number))
-    const row = sql`(${sql.join([...keys.map((_, i) => ref(i)), sql.ref('q.id')])})`
-    const at = sql`(${sql.join([...values, sql`${cursor.at(-1) as string}`])})`
+    const idValue = tiebreak ? [sql`${cursor.at(-1)}`] : []
+    const row = sql`(${sql.join([...keys.map((_, i) => ref(i)), ...(tiebreak ? [sql.ref('q.id')] : [])])})`
+    const at = sql`(${sql.join([...values, ...idValue])})`
     return idDesc ? sql`${row} < ${at}` : sql`${row} > ${at}`
   }
   const equal = (key: SortKey, i: number, c: unknown) =>
@@ -745,14 +809,22 @@ export interface ItemQuery {
   from: string
   where: Filter | null
   sort: { attribute: string; direction: 'asc' | 'desc' }[]
+  /** Without `sort`: `updated` (the default) or `number` (D61). */
+  order?: ItemQueryOrder | undefined
   expand?: string[]
   limit: number
   cursor: string | null
+  /** Rows to skip, for a window anywhere in the folder (D61). Not with a cursor. */
+  offset?: number | undefined
+  /** Adds `total`, the items that pass `where`. */
+  count?: boolean | undefined
 }
 
 /**
- * A folder's items, filtered and sorted on indexed attributes, keyset-paged. With no `sort`,
- * newest update first. The cursor holds the last row's sort values and ID. With `expand`, the
+ * A folder's items, filtered and sorted on indexed attributes, keyset-paged or a window by
+ * `offset`. With no `sort`, newest update first, or with `order: "number"` newest item number
+ * first. The cursor holds the last row's sort values and ID (the item number alone under
+ * `number`). With `count`, `total` is the number of items that pass `where`. With `expand`, the
  * items the page links to through those relations come back in `linked`, one level deep (D20).
  */
 export async function queryItems(
@@ -761,26 +833,23 @@ export async function queryItems(
   actor: Subject,
   query: ItemQuery,
   caps: { maxLinkedItems?: number } = {},
-): Promise<ItemQueryResult> {
-  const { statement, keys, sorted, expand } = await itemQueryStatement(db, workspaceId, query)
+): Promise<Omit<ItemQueryResult, 'seq'>> {
+  const { statement, keys, order, expand, folderId, where, totalInWindow } =
+    await itemQueryStatement(db, workspaceId, query)
   const { rows } = await statement.execute(db)
   const page = rows.slice(0, query.limit)
   const last = page.at(-1)
-  const result: ItemQueryResult = {
+  const result: Omit<ItemQueryResult, 'seq'> = {
     items: page.map((row) => toItem(row)),
-    nextCursor:
-      rows.length > query.limit && last
-        ? sorted
-          ? encodeItemCursor({
-              order: 'sort',
-              after: [
-                ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
-                last.id,
-              ],
-            })
-          : // The default order has one key, `updated_at` in microsecond text form.
-            encodeItemCursor({ order: 'updated', after: [last['c0'] as string, last.id] })
-        : null,
+    nextCursor: rows.length > query.limit && last ? nextItemCursor(order, keys, last) : null,
+  }
+  if (query.count) {
+    // An empty window (past the end) has no row to carry the total, so it counts on its own.
+    const first = rows[0]
+    result.total =
+      totalInWindow && first
+        ? (first['window_total'] as number)
+        : await itemTotal(db, workspaceId, folderId, where)
   }
   if (expand.length > 0) {
     const { linked, truncated } = await linkedItems(
@@ -795,6 +864,54 @@ export async function queryItems(
     result.linkedTruncated = truncated
   }
   return result
+}
+
+/** The cursor after `last`, in the form `decodeItemCursor` reads back for `order`. */
+function nextItemCursor(order: ItemCursorOrder, keys: SortKey[], last: QueryRow): string {
+  switch (order) {
+    case 'sort':
+      return encodeItemCursor({
+        order,
+        after: [...keys.map((_, i) => last[`c${String(i)}`] as string | number | null), last.id],
+      })
+    case 'updated':
+      // One key, `updated_at` in microsecond text form.
+      return encodeItemCursor({ order, after: [last['c0'] as string, last.id] })
+    case 'number':
+      return encodeItemCursor({ order, after: [Number(last['c0'])] })
+  }
+}
+
+/**
+ * The items in the folder that pass `where`. With no `where` it reads the counters (D61), so a
+ * 50,000-item folder is never counted: a folder's `item_count` holds its own items, a hub's
+ * every item in the hub, so a hub's own items are its count less its folders'. With a `where`
+ * it counts the folder, which reads every item in it, like an attribute sort (D20, D61).
+ */
+async function itemTotal(
+  db: Db,
+  workspaceId: string,
+  folderId: string,
+  where: CompiledFilter | null,
+): Promise<number> {
+  const { rows } = where
+    ? await sql<{ total: number }>`
+        SELECT count(*)::int AS total
+        FROM item i
+        WHERE i.workspace_id = ${workspaceId}
+          AND i.folder_id = ${folderId}
+          AND ${conditionSql(where)}
+      `.execute(db)
+    : await sql<{ total: number }>`
+        SELECT (f.item_count - CASE WHEN f.parent_id IS NULL THEN coalesce((
+          SELECT sum(c.item_count)
+          FROM folder c
+          WHERE c.workspace_id = f.workspace_id AND c.hub_id = f.id AND c.id <> f.id
+        ), 0) ELSE 0 END)::int AS total
+        FROM folder f
+        WHERE f.workspace_id = ${workspaceId} AND f.id = ${folderId}
+      `.execute(db)
+  return rows[0]?.total ?? 0
 }
 
 /**
@@ -865,7 +982,7 @@ export async function expandItem(
   item: Item,
   expand: string[],
   caps: { maxLinkedItems?: number } = {},
-): Promise<ItemRead> {
+): Promise<Omit<ItemRead, 'seq'>> {
   const definitions = await folderDefinitions(db, workspaceId, item.folderId)
   const compiled = compileOrThrow(definitions, { where: null, sort: [], expand })
   const { linked, truncated } = await linkedItems(
@@ -970,7 +1087,8 @@ async function hiddenBacklinks(db: Db, id: string, maxHidden: number): Promise<n
 
 /**
  * The SQL for one page of `queryItems`, fetching one row past the limit. Exported so tests can
- * EXPLAIN it: the default order must stay an index scan on item_folder_updated_idx (D20).
+ * EXPLAIN it: the `updated` and `number` orders must be able to come from
+ * item_folder_updated_idx and item_folder_number_idx with no sort step (D20, D61).
  */
 export async function itemQueryStatement(
   db: Db,
@@ -979,8 +1097,12 @@ export async function itemQueryStatement(
 ): Promise<{
   statement: RawBuilder<QueryRow>
   keys: SortKey[]
-  sorted: boolean
+  order: ItemCursorOrder
   expand: string[]
+  folderId: string
+  where: CompiledFilter | null
+  /** The rows carry `window_total`, the items that pass `where`. */
+  totalInWindow: boolean
 }> {
   const folder = await db
     .selectFrom('folder')
@@ -1005,9 +1127,16 @@ export async function itemQueryStatement(
     expand = compiled.expand
   }
 
-  const keys = sorts.length > 0 ? sorts.map(sortKey) : [NEWEST_FIRST]
-  // Ties end on the ID, in the direction of the default order when there is no sort.
-  const idDesc = sorts.length === 0
+  // `itemQueryOrder` is `sort` exactly when `sort` is non-empty; core refuses `order` with it.
+  const order: ItemCursorOrder = sorts.length > 0 ? 'sort' : itemQueryOrder(query)
+  const keys =
+    order === 'sort'
+      ? sorts.map(sortKey)
+      : [order === 'number' ? NUMBER_NEWEST_FIRST : NEWEST_FIRST]
+  // Ties end on the ID, in the direction of the order when there is no sort. Item numbers are
+  // unique in the hub, so the `number` order needs no tiebreak and matches its index exactly.
+  const idDesc = order !== 'sort'
+  const tiebreak = order !== 'number'
 
   // The cursor records its order (core's `itemQuerySchema` refuses one from another order at
   // the edge); its keys must also fit this sort's key types.
@@ -1016,14 +1145,10 @@ export async function itemQueryStatement(
     const decoded = decodeItemCursor(query.cursor)
     const schema = z.tuple([
       ...keys.map((k) => (k.nullable ? CURSOR_VALUE[k.kind].nullable() : CURSOR_VALUE[k.kind])),
-      z.string().min(1).max(64),
+      ...(tiebreak ? [z.string().min(1).max(64)] : []),
     ] as unknown as [z.ZodType, ...z.ZodType[]])
     const keysFit = decoded && schema.safeParse(decoded.after)
-    if (
-      !decoded ||
-      decoded.order !== (sorts.length > 0 ? 'sort' : 'updated') ||
-      !keysFit?.success
-    ) {
+    if (!decoded || decoded.order !== order || !keysFit?.success) {
       throw new HttpError('invalid_request', 'Invalid cursor')
     }
     cursor = keysFit.data
@@ -1036,16 +1161,20 @@ export async function itemQueryStatement(
       ? sql`to_char(${sql.ref(`q.k${String(i)}`)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
       : sql.ref(`q.k${String(i)}`)
 
+  // With `count` and a `where`, the total comes from the same pass that filters the folder
+  // (the window already reads every matching row to sort or skip them), not a second count.
+  // Before the cursor's WHERE, so it counts every page. Without a `where` the counters answer.
+  const totalInWindow = Boolean(query.count) && where !== null
   const statement = sql<QueryRow>`
     SELECT q.*, ${sql.join(keys.map((k, i) => sql`${cursorForm(k, i)} AS ${sql.id(`c${String(i)}`)}`))}
     FROM (
-      SELECT i.*, ${sql.join(keys.map((k, i) => sql`${k.expr} AS ${sql.id(`k${String(i)}`)}`))}
+      SELECT i.*, ${sql.join(keys.map((k, i) => sql`${k.expr} AS ${sql.id(`k${String(i)}`)}`))}${totalInWindow ? sql`, count(*) OVER ()::int AS window_total` : sql``}
       FROM item i
       WHERE i.workspace_id = ${workspaceId}
         AND i.folder_id = ${folder.id}
         AND ${where ? conditionSql(where) : sql`TRUE`}
     ) q
-    WHERE ${cursor ? afterCursor(keys, idDesc, cursor) : sql`TRUE`}
+    WHERE ${cursor ? afterCursor(keys, idDesc, tiebreak, cursor) : sql`TRUE`}
     ORDER BY ${sql.join([
       ...keys.map(
         // NULLS LAST only where nulls occur: on a NOT NULL key it would still stop the planner
@@ -1053,9 +1182,9 @@ export async function itemQueryStatement(
         (k, i) =>
           sql`${sql.ref(`q.k${String(i)}`)} ${k.desc ? sql`DESC` : sql`ASC`}${k.nullable ? sql` NULLS LAST` : sql``}`,
       ),
-      idDesc ? sql`q.id DESC` : sql`q.id ASC`,
+      ...(tiebreak ? [idDesc ? sql`q.id DESC` : sql`q.id ASC`] : []),
     ])}
-    LIMIT ${query.limit + 1}
+    LIMIT ${query.limit + 1}${query.offset ? sql` OFFSET ${query.offset}` : sql``}
   `
-  return { statement, keys, sorted: sorts.length > 0, expand }
+  return { statement, keys, order, expand, folderId: folder.id, where, totalInWindow }
 }

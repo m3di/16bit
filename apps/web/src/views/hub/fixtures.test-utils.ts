@@ -6,6 +6,9 @@ import type { Fetch } from '../../api/client.ts'
 export const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
+/** An item, query or write response, which carries the workspace `seq` (D58). */
+export const withSeq = (body: object, seq = 1) => ({ ...body, seq })
+
 export const urlOf = (input: RequestInfo | URL) =>
   typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
 
@@ -83,6 +86,7 @@ export const attributes: Attribute[] = [
 
 export const description: HubDescription = {
   hub: { ...folder('bld', null, 'Build'), parentId: null, titleAttributeId: 'title' },
+  seq: 0,
   hubRole: 'hub_admin',
   folders: [folder('b', 'bld', 'Bugs'), folder('a', 'bld', 'Archive'), folder('a1', 'a', 'Old')],
   attributes,
