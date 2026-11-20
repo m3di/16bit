@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { sql, type Kysely } from 'kysely'
 import type { Database } from '../db/database.ts'
+import { SESSION_CHANNEL } from '../notify.ts'
 
 // Sessions are rows in Postgres (D42). The cookie holds a random token; only its SHA-256 is
 // stored, so a database read does not hand out live sessions. A session ends at the first of
@@ -71,8 +72,16 @@ export async function resolveSession(
   return { accountId: row.account_id, idHash }
 }
 
+/**
+ * Ends a session, and in the same statement sends a `session` NOTIFY so the feed closes its
+ * sockets at once (D58). Nothing is sent when there was no such session.
+ */
 export async function deleteSession(db: Kysely<Database>, idHash: string): Promise<void> {
-  await db.deleteFrom('session').where('id_hash', '=', idHash).execute()
+  await sql`
+    WITH gone AS (DELETE FROM session WHERE id_hash = ${idHash} RETURNING id_hash)
+    SELECT pg_notify(${SESSION_CHANNEL}, json_build_object('sessionIdHash', id_hash)::text)
+    FROM gone
+  `.execute(db)
 }
 
 /** Reads one cookie from a `Cookie` header. */

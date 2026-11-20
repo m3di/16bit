@@ -1,4 +1,4 @@
-import { encodeItemCursor, itemPageSchema, type Filter, type Sort } from '@16bit/core'
+import { encodeItemCursor, itemQueryResultSchema, type Filter, type Sort } from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -169,7 +169,7 @@ function query(body: object, ws = 'w1') {
 async function ids(body: { where?: Filter; sort?: Sort; limit?: number }): Promise<string[]> {
   const res = await query(body)
   expect(res.statusCode, res.body).toBe(200)
-  return itemPageSchema.parse(res.json()).items.map((i) => i.id)
+  return itemQueryResultSchema.parse(res.json()).items.map((i) => i.id)
 }
 
 /** IDs matching a filter, in ID order. */
@@ -419,7 +419,7 @@ describe('paging', () => {
     for (let pages = 0; pages < 20; pages++) {
       const res = await query({ ...body, limit, cursor })
       expect(res.statusCode, res.body).toBe(200)
-      const page = itemPageSchema.parse(res.json())
+      const page = itemQueryResultSchema.parse(res.json())
       expect(page.items.length).toBeLessThanOrEqual(limit)
       seen.push(...page.items.map((i) => i.id))
       cursor = page.nextCursor
@@ -448,7 +448,7 @@ describe('paging', () => {
 
   it('rejects a cursor that does not match the sort', async () => {
     const res = await query({ limit: 1 })
-    const { nextCursor } = itemPageSchema.parse(res.json())
+    const { nextCursor } = itemQueryResultSchema.parse(res.json())
     await expectInvalid(
       { sort: [{ attribute: 'points' }], cursor: nextCursor },
       'This cursor is from the updated order',
@@ -469,7 +469,7 @@ describe('paging', () => {
     // A sort cursor under the default order.
     const sorted = await query({ sort: [{ attribute: 'points' }], limit: 1 })
     await expectInvalid(
-      { cursor: itemPageSchema.parse(sorted.json()).nextCursor },
+      { cursor: itemQueryResultSchema.parse(sorted.json()).nextCursor },
       'This cursor is from the sort order',
     )
   })
@@ -491,7 +491,7 @@ describe('workspace isolation', () => {
     const idsIn = async (ws: string, body: object) => {
       const res = await query(body, ws)
       expect(res.statusCode, res.body).toBe(200)
-      return itemPageSchema.parse(res.json()).items.map((i) => `${i.workspaceId}/${i.id}`)
+      return itemQueryResultSchema.parse(res.json()).items.map((i) => `${i.workspaceId}/${i.id}`)
     }
     expect(await idsIn('w2', {})).toEqual(['w2/z', 'w2/a'])
     expect(await idsIn('w2', { where: cond('title', 'contains', 'apple') })).toEqual(['w2/z'])
@@ -524,7 +524,7 @@ describe('query plans (D20)', () => {
     expect(first).not.toMatch(/Sort/)
 
     const res = await query({ limit: 2 })
-    const { nextCursor } = itemPageSchema.parse(res.json())
+    const { nextCursor } = itemQueryResultSchema.parse(res.json())
     const next = await plan({ limit: 2, cursor: nextCursor })
     expect(next).toContain('item_folder_updated_idx')
     expect(next).not.toMatch(/Sort/)

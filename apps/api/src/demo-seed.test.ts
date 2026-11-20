@@ -8,7 +8,6 @@ import {
   indexEntries,
   itemQueryResultSchema,
   itemReadSchema,
-  itemSchema,
   meSchema,
   validateItemValues,
   workspacePageSchema,
@@ -25,6 +24,7 @@ import { applySeed, demoSeed, type SeedResult } from './demo-seed.ts'
 import { DEV_OWNER, DEV_PASSWORD } from './dev-accounts.ts'
 import { folderDefinitions } from './items.ts'
 import { hashAgentSecret } from './auth/agent-key.ts'
+import { itemOf } from './db/test-responses.ts'
 
 // Integration tests: the demo seed against a fresh, migrated Postgres database. The seed is
 // applied once in beforeAll; the later tests run it again, so they depend on test order.
@@ -588,7 +588,7 @@ describe('demo seed', () => {
         payload: { folderId, values },
       })
       expect(res.statusCode, res.body).toBe(201)
-      return itemSchema.parse(res.json())
+      return itemOf(res.json())
     }
     const design = await create('design', { 'design-title': 'Seed test design ref' })
     const from = await create('launch', {

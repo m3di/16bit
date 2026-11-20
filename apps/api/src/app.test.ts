@@ -2,8 +2,7 @@ import {
   conflictErrorSchema,
   hubDescriptionSchema,
   hubPageSchema,
-  itemPageSchema,
-  itemSchema,
+  itemQueryResultSchema,
   workspacePageSchema,
   type Item,
 } from '@16bit/core'
@@ -16,6 +15,7 @@ import { createTestDatabase } from './db/test-database.ts'
 import { sessionCookie } from './db/test-session.ts'
 import { workspaceSnapshot } from './db/test-snapshot.ts'
 import { encodeCursor } from './http.ts'
+import { itemOf } from './db/test-responses.ts'
 
 // Integration tests: the real app against a fresh, migrated Postgres database per test.
 
@@ -144,7 +144,7 @@ function request(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, paylo
 async function create(values: Record<string, unknown>, folderId = 'build'): Promise<Item> {
   const res = await request('POST', '/v1/workspaces/w1/items', { folderId, values })
   expect(res.statusCode).toBe(201)
-  return itemSchema.parse(res.json())
+  return itemOf(res.json())
 }
 
 async function hubCount(id: string): Promise<number> {
@@ -431,7 +431,7 @@ describe('get item', () => {
     const item = await create({ title: 'Read me' })
     const res = await request('GET', `/v1/workspaces/w1/items/${item.id}`)
     expect(res.statusCode).toBe(200)
-    expect(itemSchema.parse(res.json())).toEqual(item)
+    expect(itemOf(res.json())).toEqual(item)
     expect((await request('GET', '/v1/workspaces/w1/items/missing')).statusCode).toBe(404)
   })
 })
@@ -444,7 +444,7 @@ describe('patch item', () => {
       values: { title: 'New', points: null },
     })
     expect(res.statusCode).toBe(200)
-    const patched = itemSchema.parse(res.json())
+    const patched = itemOf(res.json())
     expect(patched.values).toEqual({ title: 'New' })
     expect(patched.version).toBe(2)
 
@@ -671,7 +671,7 @@ describe('query items', () => {
         cursor,
       })
       expect(res.statusCode).toBe(200)
-      const page = itemPageSchema.parse(res.json())
+      const page = itemQueryResultSchema.parse(res.json())
       expect(page.items.length).toBeLessThanOrEqual(2)
       seen.push(...page.items.map((i) => i.id))
       cursor = page.nextCursor

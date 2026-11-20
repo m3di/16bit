@@ -117,7 +117,7 @@ export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> =
 
 /**
  * A response without the workspace `seq` it carries (D58, issue 168), so the store holds
- * items only. The API sends `seq` from M3-03; until then this changes nothing.
+ * items only. The store subscribing with it comes with the feed (M3-08).
  */
 export function withoutSeq<T extends Item & { seq?: number | undefined }>(
   response: T,
@@ -218,7 +218,7 @@ export function useItems(
    * Keeps what an expanded page says about its linked items. An ID in an expanded value with
    * no entry was deleted, unless the server cut `linked` short.
    */
-  function absorbLinked(page: ItemQueryResult, attributes: readonly string[]) {
+  function absorbLinked(page: Omit<ItemQueryResult, 'seq'>, attributes: readonly string[]) {
     for (const [id, entry] of Object.entries(page.linked ?? {})) linked.value[id] = entry
     if (page.linkedTruncated || attributes.length === 0) return
     for (const item of page.items) {

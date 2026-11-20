@@ -1,6 +1,7 @@
 import {
   can,
   changeMemberRoleSchema,
+  changesQuerySchema,
   createAgentKeySchema,
   createAttributeSchema,
   createFolderSchema,
@@ -20,9 +21,12 @@ import {
   updateFolderSchema,
   updateHubSchema,
   effectiveHubRole,
+  type ChangesPage,
   type HubDescription,
   type HubListEntry,
+  type ItemQueryResult,
   type ItemRead,
+  type ItemWriteResult,
   type Page,
   type Workspace,
 } from '@16bit/core'
@@ -31,6 +35,7 @@ import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
 import { checkHub, folderHub, itemHub } from './access.ts'
+import { readChanges } from './changes.ts'
 import {
   registerAuthHook,
   requireIdentity,
@@ -41,7 +46,7 @@ import { RateLimiter, type RateLimitPolicy } from './auth/rate-limit.ts'
 import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
 import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
-import { withScope } from './db/scope.ts'
+import { withScope, workspaceSeq } from './db/scope.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
 import {
   backlinks,
@@ -53,6 +58,7 @@ import {
   queryItems,
 } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
+import { idempotentWrite, type KnownMutation } from './mutations.ts'
 import {
   changeMemberRole,
   createHub,
@@ -215,6 +221,35 @@ export function buildApp(options: AppOptions): FastifyInstance {
               },
               fn,
             )
+          /**
+           * `scoped`, in one `REPEATABLE READ READ ONLY` transaction, for reads that carry the
+           * workspace `seq`: it and the rows come from one snapshot (D58).
+           */
+          const snapshot = <T>(
+            request: FastifyRequest,
+            fn: (trx: Transaction<Database>) => Promise<T>,
+          ): Promise<T> =>
+            withScope(
+              db,
+              {
+                workspaceId: parse(workspaceParams, request.params).workspaceId,
+                principalId: request.principal.id,
+              },
+              fn,
+              { snapshot: true },
+            )
+          /**
+           * A retry's answer for create and patch (D59): the item as it is now, or 404 if it
+           * has been deleted since, with the `seq` read before it.
+           */
+          const currentItem = async (
+            trx: Transaction<Database>,
+            workspaceId: string,
+            first: KnownMutation,
+          ): Promise<ItemWriteResult> => {
+            const seq = await workspaceSeq(trx, workspaceId)
+            return { ...(await getItem(trx, workspaceId, first.itemId)), seq }
+          }
 
           // A workspace exists for the caller only if the caller is a principal in it.
           ws.addHook('preHandler', async (request) => {
@@ -322,7 +357,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
           ws.get('/hubs/:hubId', async (request): Promise<HubDescription> => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
-            return scoped(request, async (db) => {
+            return snapshot(request, async (db) => {
               const hubRole = await checkHub(
                 db,
                 workspaceId,
@@ -376,6 +411,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
                   attributes: attributes.length > maxHubEntries,
                   folderAttributes: folderAttributes.length > faCap,
                 },
+                seq: await workspaceSeq(db, workspaceId),
               }
             })
           })
@@ -391,36 +427,64 @@ export function buildApp(options: AppOptions): FastifyInstance {
                 'offset, count and order "number" are not supported yet',
               )
             }
-            return scoped(request, async (trx) => {
+            return snapshot(request, async (trx): Promise<ItemQueryResult> => {
               const hubId = await folderHub(trx, workspaceId, query.from)
               await checkHub(trx, workspaceId, request.principal, hubId, 'hub.read', 'Folder')
-              return queryItems(trx, workspaceId, request.principal, query, { maxLinkedItems })
+              const result = await queryItems(trx, workspaceId, request.principal, query, {
+                maxLinkedItems,
+              })
+              return { ...result, seq: await workspaceSeq(trx, workspaceId) }
             })
           })
 
           // Item writes check the caller's grant in the write's own transaction and hold it
           // (FOR SHARE) until commit, so a revoke can't land between the check and the write.
+          // With a `clientMutationId`, a retry answers as the first attempt did and writes
+          // nothing (D59, mutations.ts). A write's `seq` is read in its own transaction, which
+          // still holds the workspace row: it is the write's own revision.
+          const run =
+            (request: FastifyRequest) =>
+            <R>(fn: (trx: Transaction<Database>) => Promise<R>) =>
+              scoped(request, fn)
+
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createItemSchema, request.body)
-            const item = await scoped(request, async (trx) => {
-              const hubId = await folderHub(trx, workspaceId, body.folderId)
-              await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Folder')
-              return createItem(trx, workspaceId, request.principal.id, body)
-            })
+            const actor = request.principal.id
+            const item = await idempotentWrite(
+              run(request),
+              { workspaceId, actor, clientMutationId: body.clientMutationId },
+              { op: 'create', itemId: body.id, folderId: body.folderId },
+              async (trx): Promise<ItemWriteResult> => {
+                const hubId = await folderHub(trx, workspaceId, body.folderId)
+                await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Folder')
+                const created = await createItem(trx, workspaceId, actor, body)
+                return { ...created, seq: await workspaceSeq(trx, workspaceId) }
+              },
+              (trx, first) => currentItem(trx, workspaceId, first),
+            )
             return reply.status(201).send(item)
+          })
+
+          ws.get('/changes', async (request): Promise<ChangesPage> => {
+            const { workspaceId } = parse(workspaceParams, request.params)
+            const { after, limit } = parse(changesQuerySchema, request.query)
+            // Every hub the caller can read, as row-level security decides; an agent's is its own.
+            return snapshot(request, (trx) => readChanges(trx, workspaceId, { after, limit }))
           })
 
           ws.get('/items/:itemId', async (request): Promise<ItemRead> => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { expand } = parse(getItemQuerySchema, request.query)
-            return scoped(request, async (trx) => {
+            return snapshot(request, async (trx) => {
               const item = await getItem(trx, workspaceId, itemId)
               await checkHub(trx, workspaceId, request.principal, item.hubId, 'hub.read', 'Item')
-              if (expand.length === 0) return item
-              return expandItem(trx, workspaceId, request.principal, item, expand, {
+              const seq = await workspaceSeq(trx, workspaceId)
+              if (expand.length === 0) return { ...item, seq }
+              const read = await expandItem(trx, workspaceId, request.principal, item, expand, {
                 maxLinkedItems,
               })
+              return { ...read, seq }
             })
           })
 
@@ -435,21 +499,37 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            return scoped(request, async (trx) => {
-              const hubId = await itemHub(trx, workspaceId, itemId)
-              await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
-              return patchItem(trx, workspaceId, request.principal.id, itemId, body)
-            })
+            const actor = request.principal.id
+            return idempotentWrite(
+              run(request),
+              { workspaceId, actor, clientMutationId: body.clientMutationId },
+              { op: 'update', itemId },
+              async (trx): Promise<ItemWriteResult> => {
+                const hubId = await itemHub(trx, workspaceId, itemId)
+                await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
+                const patched = await patchItem(trx, workspaceId, actor, itemId, body)
+                return { ...patched, seq: await workspaceSeq(trx, workspaceId) }
+              },
+              (trx, first) => currentItem(trx, workspaceId, first),
+            )
           })
 
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
-            const { version } = parse(deleteItemQuerySchema, request.query)
-            await scoped(request, async (trx) => {
-              const hubId = await itemHub(trx, workspaceId, itemId)
-              await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
-              await deleteItem(trx, workspaceId, request.principal.id, itemId, version)
-            })
+            const { version, clientMutationId } = parse(deleteItemQuerySchema, request.query)
+            const actor = request.principal.id
+            await idempotentWrite(
+              run(request),
+              { workspaceId, actor, clientMutationId },
+              { op: 'delete', itemId },
+              async (trx) => {
+                const hubId = await itemHub(trx, workspaceId, itemId)
+                await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
+                await deleteItem(trx, workspaceId, actor, itemId, version, clientMutationId)
+              },
+              // The first delete answered 204; so does its retry.
+              () => Promise.resolve(),
+            )
             return reply.status(204).send()
           })
 
