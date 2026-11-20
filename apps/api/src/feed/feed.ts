@@ -1,6 +1,7 @@
 import {
   FEED_CLOSE_CODES,
   MAX_MISSED_CHANGES,
+  MAX_PENDING_CLIENT_MESSAGES,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
   type FeedServerMessage,
@@ -37,12 +38,6 @@ import { Listener } from './listener.ts'
 
 /** Most sockets one session (or agent key) holds open at once. */
 export const MAX_SOCKETS_PER_SESSION = 10
-/**
- * Most client messages one socket may have waiting for an answer. Each holds up to 64 KiB and a
- * subscribe costs a transaction, so a client sending faster than it is answered is closed (1008)
- * rather than queued without bound.
- */
-export const MAX_PENDING_CLIENT_MESSAGES = 32
 /**
  * Most bytes waiting to go out to one socket. A client that stops reading is closed (1011,
  * reconnect and resume) instead of the server buffering every change for it.
@@ -313,6 +308,8 @@ export class Connection {
     this.context = context
     // Attached at once, so no message is dropped while earlier work runs.
     socket.on('message', (data, isBinary) => {
+      // Each waiting message holds up to 64 KiB and a subscribe costs a transaction: a client
+      // sending faster than it is answered is closed rather than queued without bound.
       if (this.#pendingMessages >= MAX_PENDING_CLIENT_MESSAGES) {
         this.close(CLOSE_POLICY, 'Too many messages waiting for an answer')
         return

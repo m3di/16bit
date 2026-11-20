@@ -15,6 +15,7 @@ import {
   itemWriteResultSchema,
   MAX_CHANGES_LIMIT,
   MAX_CLIENT_MESSAGE_BYTES,
+  MAX_PENDING_CLIENT_MESSAGES,
   MAX_QUERY_OFFSET,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
@@ -260,6 +261,13 @@ describe('feed client messages (D57)', () => {
     expect(parseFeedClientMessage('x'.repeat(1_000_000))).toMatchObject({
       code: 'message_too_large',
     })
+  })
+})
+
+describe('feed client message cap (#171)', () => {
+  it('lets a client resubscribe every hub after a reconnect, and unsubscribe them all, in one burst', () => {
+    expect(MAX_PENDING_CLIENT_MESSAGES).toBe(32)
+    expect(MAX_PENDING_CLIENT_MESSAGES).toBeGreaterThanOrEqual(MAX_SUBSCRIPTIONS_PER_SOCKET)
   })
 })
 

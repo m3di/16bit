@@ -1,6 +1,7 @@
 import {
   createdAgentKeySchema,
   FEED_CLOSE_CODES,
+  MAX_PENDING_CLIENT_MESSAGES,
   feedServerMessageSchema,
   itemWriteResultSchema,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
@@ -20,7 +21,7 @@ import { sessionCookie } from '../db/test-session.ts'
 import { DEV_OWNER } from '../dev-accounts.ts'
 import { applyLargeSeed, LARGE_HUB, LARGE_WORKSPACE } from '../large-seed.ts'
 import { resetPassword } from '../reset-password.ts'
-import { MAX_PENDING_CLIENT_MESSAGES, MAX_SOCKETS_PER_SESSION } from './feed.ts'
+import { MAX_SOCKETS_PER_SESSION } from './feed.ts'
 import { LISTENER_APPLICATION_NAME } from './listener.ts'
 
 // The WebSocket feed (D57, D58) over a real socket, against a real Postgres under row-level
@@ -730,14 +731,18 @@ describe('a socket that misbehaves', () => {
     // Each subscribe costs a transaction; a burst far faster than they are answered.
     for (let i = 0; i < 300; i++) ed.subscribe('h1', 0)
     expect(await ed.closed).toBe(FEED_CLOSE_CODES.policy)
-    // The answers it did get came in order, each a catch-up for h1.
-    const vw = await person('vw')
-    for (let i = 0; i < MAX_PENDING_CLIENT_MESSAGES; i++) vw.subscribe('h1', 0)
-    for (let i = 0; i < MAX_PENDING_CLIENT_MESSAGES; i++) {
-      expect((await changes(vw)).hubIds).toEqual(['h1'])
-    }
-    expect(vw.socket.readyState).toBe(WebSocket.OPEN)
-    vw.socket.close()
+
+    // A burst at the cap, as the client rule allows: every message answered, in the order sent.
+    const again = await person('ed')
+    const hubs = Array.from({ length: MAX_PENDING_CLIENT_MESSAGES }, (_, i) =>
+      i % 2 ? 'h2' : 'h1',
+    )
+    for (const hub of hubs) again.subscribe(hub, 0)
+    const answered: string[] = []
+    for (let i = 0; i < hubs.length; i++) answered.push(...(await changes(again)).hubIds)
+    expect(answered).toEqual(hubs)
+    expect(again.socket.readyState).toBe(WebSocket.OPEN)
+    again.socket.close()
   })
 
   it('closes a frame over 64 KiB with frameTooLarge', async () => {

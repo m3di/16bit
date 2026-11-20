@@ -112,7 +112,11 @@ export class Listener {
     this.#client = client
     this.#drop = () => {
       onLost(new Error('no answer to the health check'))
-      void client.end().catch(() => undefined)
+      // Not `end()`: on a half-open connection it waits for TCP to give up. Destroying the
+      // socket frees it at once; the client is already discarded.
+      ;(
+        client as unknown as { connection?: { stream?: { destroy(): void } } }
+      ).connection?.stream?.destroy()
     }
     this.#attempt = 0
     this.#handlers.connected()

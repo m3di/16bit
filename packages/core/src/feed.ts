@@ -11,6 +11,18 @@ import { idSchema, itemSchema } from './entities.ts'
 export const MAX_CLIENT_MESSAGE_BYTES = 4096
 /** Most hubs one socket subscribes to at once. */
 export const MAX_SUBSCRIPTIONS_PER_SOCKET = 20
+/**
+ * The client rule: never have more than this many messages sent since the last message received
+ * on the socket. The server closes a socket with `FEED_CLOSE_CODES.policy` (1008) when more than
+ * this many of its messages are waiting to be handled, so a client that keeps the rule is never
+ * closed for it.
+ *
+ * `subscribe` is always answered (`changes`, `resync` or `error`); `unsubscribe` never is. With at
+ * most `MAX_SUBSCRIPTIONS_PER_SOCKET` subscriptions a client never needs more unsubscribes in a
+ * row than that, so the rule only makes it wait for answers, never blocks it for good. Resubscribing
+ * every hub after a reconnect fits in one burst.
+ */
+export const MAX_PENDING_CLIENT_MESSAGES = 32
 /** Past this many missed changes the subscriber could see, the server answers `resync` (D58). */
 export const MAX_MISSED_CHANGES = 1000
 /** Largest `limit` of `GET /changes`. */
