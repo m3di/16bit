@@ -150,7 +150,7 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 | Aggregate | `POST /v1/aggregate` | M4 |
 | View data | `GET /v1/views/:id/data` | M4 |
 | Search | `GET /v1/search` | M6 |
-| Changes | `GET /v1/changes?after=seq` | M3 |
+| Changes | `GET /v1/workspaces/:workspaceId/changes?after=seq`, and the WebSocket `GET /v1/workspaces/:workspaceId/feed` (D57) | M3 |
 | Digest | `GET /v1/views/:id/digest` | M5 |
 
 Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE /v1/items/:id`.

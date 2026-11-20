@@ -4,13 +4,13 @@ The initial plan for M3. Each entry becomes a GitHub issue during planning; afte
 
 **Sprint goal:** two browsers and one agent editing the same folder stay consistent without reloading, and a 50,000-item folder scrolls smoothly (the M3 exit criterion in `docs/ROADMAP.md`).
 
-**Decisions this plan rests on:** D57 (feed transport: one WebSocket per tab plus an HTTP changes route, subscriptions per hub), D58 (events read under the subscriber's identity, item as it is now, resume and resync), D59 (client mutation IDs), D60 (the client store), D61 (virtual scrolling, offset windows, and what "smooth" means; amends D20). From the M2 report: D56 (unique hub ID prefixes), D18 reworded to five states, and #138.
+**Decisions this plan rests on:** D57 (feed transport: one WebSocket per tab plus an HTTP changes route, subscriptions per hub), D58 (events read under the subscriber's identity, item as it is now, resume and resync), D59 (client mutation IDs), D60 (the client store), D61 (virtual scrolling, offset windows, the stable `number` order, and what "smooth" means; amends D20). After the review of the planning PR (#167) the plan gained a `seq` on read responses and a high-water `seq` on every `changes` message, HTTP confirmation of writes, the WebSocket security rules in D57, immediate socket closing on sign-out and revocation, the `number` order, and a bound for attribute sorts. From the M2 report: D56 (unique hub ID prefixes), D18 reworded to five states, and #138.
 
 ## Answers to the M2 report
 
 The maintainer asked the lead to decide all five questions:
 
-1. **ID prefixes** are unique per workspace, ignoring case (D56, M3-10).
+1. **ID prefixes** are unique per workspace (D56, M3-10).
 2. **The New hub dialog** stays as built.
 3. **Table headers** stay 32px, on the 4px grid; `docs/DESIGN.md` already says so and the mockups' 30px is superseded.
 4. **"What each role can do"** is built, generated from `can()` so it cannot drift from `docs/ROLES.md` (#138, M3-11).
@@ -22,30 +22,30 @@ The maintainer asked the lead to decide all five questions:
 - **Role:** backend
 - **Depends on:** nothing
 - **Gate:** needs-human (`packages/core` contracts)
-- **Acceptance:** `packages/core` exports: the feed protocol (client messages `subscribe`, `unsubscribe` with a hub ID and `after`; server messages `changes` with `{ seq, hubId, itemId, item | null, clientMutationId? }[]`, `hub` with the hub's version, `access_lost`, `resync`, `error`), the `GET /changes` request and response (paged by `after` and `limit`, up to 1,000), an optional `clientMutationId` on item create, patch and delete, and `offset` (0 to 100,000, not with `cursor`) and `count: true` (adds `total`) on the query. Contract tests for each shape, including `offset` with `cursor` refused.
+- **Acceptance:** `packages/core` exports: the feed protocol (client messages `subscribe`, `unsubscribe` with a hub ID and `after`; server messages `changes` with a high-water `seq` and `{ seq, hubId, itemId, item | null, clientMutationId? }[]`, `hub` with the hub's version, `access_lost`, `resync`, `error` with `not_found` among its codes), the `GET /changes` request and response (paged by `after` and `limit`, up to 1,000, with the high-water `seq`), an optional `clientMutationId` on item create, patch and delete, a `seq` on item, query and hub responses (D58), and on the query `offset` (0 to 100,000, not with `cursor`), `count: true` (adds `total`) and `order: "updated" | "number"` (D61). Client messages have a 4 KiB cap. Contract tests for each shape, including `offset` with `cursor` refused and an oversized message.
 
 ## M3-02 Mutation ID migration
 - **Role:** backend
 - **Depends on:** nothing (alongside M3-01)
 - **Gate:** needs-human (migration)
-- **Acceptance:** `revision.client_mutation_id uuid NULL` with a unique index on `(workspace_id, actor, client_mutation_id)` where it is set (D59), and the API role's insert grant on it. Tests apply it to an empty database and one migrated to `0011`.
+- **Acceptance:** migration `0012`: `revision.client_mutation_id uuid NULL` with a unique index on `(workspace_id, actor, client_mutation_id)` where it is set (D59), the API role's insert grant on it, and the index `(workspace_id, folder_id, seq_id DESC)` on `item` for the `number` order (D61). Tests apply it to an empty database and one migrated to `0011`.
 
 ## M3-03 Changes reader, HTTP route and idempotent writes
 - **Role:** backend
 - **Depends on:** M3-01, M3-02
 - **Gate:** needs-human (reads under row-level security)
-- **Acceptance:** one function reads changes after a sequence for a list of hubs under the caller's identity and collapses each item to its latest state (D58); `GET /changes` serves it to people and agents. Item writes store `clientMutationId`; a retry with a known ID returns the first answer's status with the current item and writes nothing (D59), also when two retries race. Schema writes and access changes `NOTIFY` so the feed can tell clients (D58). Integration tests: a viewer never sees changes in a hub they lack, a revoked grant stops changes, collapse, the retry race.
+- **Acceptance:** one function reads changes after a sequence for a list of hubs under the caller's identity and collapses each item to its latest state (D58); `GET /changes` serves it to people and agents. Every `GET /changes` page carries the high-water `seq`. Item, query and hub responses carry the workspace `seq` from the same snapshot (D58). Item writes store `clientMutationId`; a retry with a known ID returns the first answer's status with the current item and writes nothing, also when two retries race, and the same ID with a different item or operation is a 422 (D59). Schema writes, access changes, sign-out, member removal, key revocation and password resets `NOTIFY` so the feed can act on them (D58). Integration tests: a viewer never sees changes in a hub they lack, the high-water `seq` moves past hidden changes, a revoked grant stops changes, collapse, the retry race, a reused ID refused, and an item changed between a query and `GET /changes` after its `seq` is not missed.
 
 ## M3-04 WebSocket feed
 - **Role:** backend
 - **Depends on:** M3-03
 - **Gate:** needs-human (authentication: session and key on the upgrade, origin check)
-- **Acceptance:** `GET /feed` upgrades with `@fastify/websocket` (current release); a session cookie needs a matching `Origin`, a key needs `Authorization`. One dedicated `LISTEN` connection per process, reconnected when Postgres drops it (as #107 did for the pool). Subscriptions per hub with resume from `after`; `resync` past 1,000 missed changes; 50 ms coalescing; `hub` and `access_lost` events; the session or key checked on delivery and every minute, closing the socket when it ends; a cap of 20 subscriptions per socket and 10 sockets per session. Integration tests with two sockets in different roles, a dropped `LISTEN` connection, sign-out closing the socket, and a cross-origin upgrade refused.
+- **Acceptance:** `GET /feed` upgrades with `@fastify/websocket` (current release), following D57: authentication, D49 and the workspace checked before the upgrade as plain HTTP errors, a cookie upgrade only with an `Origin` whose host equals `Host`, client messages parsed with the core schemas and capped at 4 KiB, and the same `not_found` for a missing, hidden or out-of-scope hub. One dedicated `LISTEN` connection per process, reconnected when Postgres drops it (as #107 did for the pool). Subscriptions per hub with resume from `after`; `resync` past 1,000 missed changes the subscriber could see; 50 ms coalescing; `hub` and `access_lost` events; sockets closed at once on sign-out, member removal, key revocation and password reset, and the session or key checked every minute; a cap of 20 subscriptions per socket and 10 sockets per session. `ws: true` on the `/v1` proxy in `apps/web/vite.config.ts` so the feed works under `pnpm dev`. Integration tests with two sockets in different roles, a dropped `LISTEN` connection, sign-out and key revocation closing the socket within a second, a cross-origin upgrade refused, cookie and `Authorization` together refused, and a hidden hub answering like a missing one.
 
-## M3-05 Query windows by offset and total count
+## M3-05 Query windows by offset, total count and the number order
 - **Role:** backend
-- **Depends on:** M3-01
-- **Acceptance:** the query accepts `offset` and `count` (D61). EXPLAIN tests show the default sort stays an index scan with an offset; a 50,000-item folder answers a window at offset 49,800 in under 100 ms on CI hardware, and `total` in the same time.
+- **Depends on:** M3-01, M3-02, M3-06
+- **Acceptance:** the query accepts `offset`, `count` and `order: "number"` (D61). `total` comes from `folder.item_count` when there is no `where`. EXPLAIN tests show both orders stay index scans with an offset. On a 50,000-item folder a window at offset 49,800 answers in under 500 ms on CI hardware, and one with an attribute sort and a filter in under two seconds.
 
 ## M3-06 Large-folder seed
 - **Role:** backend
@@ -65,13 +65,13 @@ The maintainer asked the lead to decide all five questions:
 ## M3-09 Large folders in the dashboard
 - **Role:** frontend
 - **Depends on:** M3-05, M3-07, M3-08
-- **Acceptance:** the folder view uses the virtual DataTable with 200-row offset windows and `total`, keeps loaded windows in the store, and refetches the visible window on changes that may reorder it (D61). Sorting and filtering reset the windows. Component tests.
+- **Acceptance:** the folder view uses the virtual DataTable with 200-row offset windows, `total` and the `number` order by default, keeps loaded windows in the store, updates rows in place, and with an attribute sort or a filter refetches the visible window on changes that may reorder it, keeping the selected row in view (D61). Sorting and filtering reset the windows. Component tests.
 
 ## M3-10 Unique hub ID prefixes
 - **Role:** backend, then frontend
-- **Depends on:** nothing
+- **Depends on:** M3-02 (its migration is `0013`)
 - **Gate:** needs-human (migration)
-- **Acceptance:** a unique index on the hub's prefix per workspace, ignoring case and only on hub rows; the migration stops with a message naming the duplicates if a database already has some. `POST /hubs` answers 409 `prefix_taken`, and the New hub dialog shows it on the prefix field. Tests.
+- **Acceptance:** a unique index on the hub's prefix per workspace, only on hub rows; the migration stops with a message naming the duplicates if a database already has some. `POST /hubs` answers 409 `prefix_taken`, and the New hub dialog shows it on the prefix field. Tests.
 
 ## M3-11 "What each role can do" (#138)
 - **Role:** frontend
@@ -81,7 +81,7 @@ The maintainer asked the lead to decide all five questions:
 ## M3-12 Sync end-to-end suite and exit check
 - **Role:** qa
 - **Depends on:** M3-08, M3-09, M3-06
-- **Acceptance:** two browser contexts and one agent key edit the same folder (create, edit the same and different items, delete, a conflicting edit); both browsers show the same rows and values within two seconds of each write, checked against the API. A dropped connection catches up after reconnect. A 50,000-item folder from `seed:large` meets D61's numbers (rows within one second of a jump, no task over 50 ms while scrolling, under 100 rows in the DOM). Runs in the required End-to-end check; if the large folder makes it slower than five minutes, the large-folder test gets its own required job.
+- **Acceptance:** two browser contexts and one agent key edit the same folder (create, edit the same and different items, delete, a conflicting edit); both browsers show the same rows and values within two seconds of each write, checked against the API. A dropped connection catches up after reconnect, and an HTTP write made while the socket is down is confirmed. A 50,000-item folder from `seed:large` meets D61's numbers for the default order (rows within one second of a jump, no `longtask` over 50 ms while scrolling, under 100 rows in the DOM). Runs in the required End-to-end check. If the large folder makes it slower than five minutes, QA proposes a separate required job; changing the required checks is gated.
 
 ## M3-13 M3 report
 - **Role:** lead
