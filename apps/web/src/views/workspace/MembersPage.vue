@@ -19,6 +19,7 @@ import {
 } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import InviteDialog from './InviteDialog.vue'
+import RoleMatrixSection from './RoleMatrixSection.vue'
 import {
   canManage,
   canRevokeInvite,
@@ -347,6 +348,8 @@ const inviteSectionState = computed((): SettingsState => {
     >
       {{ status }}
     </p>
+
+    <RoleMatrixSection />
 
     <SettingsSection
       title="People"
