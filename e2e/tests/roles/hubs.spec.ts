@@ -13,6 +13,7 @@ import {
   people,
   test,
   uniqueHubName,
+  uniquePrefix,
   uniqueTitle,
   workspaceSection,
   type Client,
@@ -170,7 +171,7 @@ test('owners and admins create hubs and become their hub admin; nobody else can'
     const res = await as(person).post('/hubs', {
       name: uniqueHubName(`by ${person}`),
       color: 'lime',
-      idPrefix: 'EZE',
+      idPrefix: uniquePrefix(),
     })
     await expectStatus(res, 201)
     const hub = hubListEntrySchema.parse(await res.json())
@@ -205,7 +206,11 @@ for (const [creator, granter] of [
     pageAs,
   }) => {
     const name = uniqueHubName(`self-grant ${granter}`)
-    const created = await as(creator).post('/hubs', { name, color: 'teal', idPrefix: 'SLF' })
+    const created = await as(creator).post('/hubs', {
+      name,
+      color: 'teal',
+      idPrefix: uniquePrefix(),
+    })
     await expectStatus(created, 201)
     const hub = hubListEntrySchema.parse(await created.json())
     const me = as(granter)

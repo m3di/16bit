@@ -118,6 +118,7 @@ describe('migrations', () => {
       '0010_invite_update_owner',
       '0011_deleted_attribute',
       '0012_mutation_ids',
+      '0013_hub_prefix_unique',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -789,6 +790,7 @@ describe('0009_schema_writes', () => {
       '0010_invite_update_owner',
       '0011_deleted_attribute',
       '0012_mutation_ids',
+      '0013_hub_prefix_unique',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -840,6 +842,7 @@ describe('0010_invite_update_owner', () => {
       '0010_invite_update_owner',
       '0011_deleted_attribute',
       '0012_mutation_ids',
+      '0013_hub_prefix_unique',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -868,7 +871,11 @@ describe('0011_deleted_attribute', () => {
       DELETE FROM attribute WHERE id IN ('gone', 'old');
     `.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0011_deleted_attribute', '0012_mutation_ids'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0011_deleted_attribute',
+      '0012_mutation_ids',
+      '0013_hub_prefix_unique',
+    ])
     const backfilled = await db
       .selectFrom('deleted_attribute')
       .select(['workspace_id', 'id', 'hub_id', 'deleted_by'])
@@ -925,7 +932,7 @@ describe('0012_mutation_ids', () => {
         VALUES ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1');
     `.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0012_mutation_ids'])
+    expect(await migrateToLatest(db)).toEqual(['0012_mutation_ids', '0013_hub_prefix_unique'])
     // Existing revisions carry no ID.
     expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
       [{ seq: 1, client_mutation_id: null }],
@@ -991,6 +998,79 @@ describe('0012_mutation_ids', () => {
       })
       expect(plan).toContain('item_folder_number_idx')
       expect(plan).not.toMatch(/Sort/)
+    })
+  })
+})
+
+describe('0013_hub_prefix_unique', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+  const hub = (workspace: string, id: string, prefix: string) =>
+    sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
+        VALUES (${workspace}, ${id}, ${id}, NULL, ${id}, 'blue', ${prefix})`.execute(db)
+
+  it('stops with a message naming hubs that share a prefix, then applies once they are fixed', async () => {
+    expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
+    await seedHub()
+    await sql`INSERT INTO workspace (id, name) VALUES ('w2', 'Second')`.execute(db)
+    await hub('w1', 'h3', 'BLD')
+    await hub('w1', 'h4', 'OTH')
+    await hub('w1', 'h5', 'OTH')
+    // Another workspace may use the same prefix.
+    await hub('w2', 'h1', 'BLD')
+
+    const { error } = await migrator().migrateToLatest()
+    expect((error as Error).message).toBe(
+      'hub ID prefixes must be unique in a workspace (D56); 2 shared: ' +
+        'workspace w1, prefix BLD: hubs h1, h3; workspace w1, prefix OTH: hubs h2, h4, h5',
+    )
+    expect((error as { hint?: string }).hint).toMatch(/new prefix/)
+
+    await sql`UPDATE folder SET id_prefix = 'NEW' WHERE workspace_id = 'w1' AND hub_id = 'h3';
+              DELETE FROM folder WHERE workspace_id = 'w1' AND id IN ('h4', 'h5')`.execute(db)
+    expect(await migrateToLatest(db)).toEqual(['0013_hub_prefix_unique'])
+
+    expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
+    await hub('w1', 'h6', 'BLD')
+  })
+
+  it('names at most 20 prefixes and counts the rest', async () => {
+    expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
+    await sql`INSERT INTO workspace (id, name) VALUES ('w1', 'Workspace')`.execute(db)
+    for (let n = 0; n < 22; n++) {
+      const prefix = `P${String(n).padStart(2, '0')}`
+      await hub('w1', `a${String(n)}`, prefix)
+      await hub('w1', `b${String(n)}`, prefix)
+    }
+    const { error } = await migrator().migrateToLatest()
+    const message = (error as Error).message
+    expect(message).toMatch(/^hub ID prefixes must be unique in a workspace \(D56\); 22 shared: /)
+    expect(message).toContain('prefix P19: hubs a19, b19; and 2 more')
+    expect(message).not.toContain('P20')
+  })
+
+  describe('on the latest schema', () => {
+    beforeEach(async () => {
+      await migrateToLatest(db)
+      await seedHub()
+    })
+
+    it('refuses a second hub with a prefix in its workspace', async () => {
+      await expect(hub('w1', 'h3', 'BLD')).rejects.toMatchObject({
+        code: '23505',
+        constraint: 'folder_hub_prefix_key',
+      })
+    })
+
+    it('allows the prefix in another workspace, on subfolders, and once its hub is gone', async () => {
+      await sql`INSERT INTO workspace (id, name) VALUES ('w2', 'Second')`.execute(db)
+      await hub('w2', 'h1', 'BLD')
+      // Subfolders carry their hub's prefix.
+      await sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
+                VALUES ('w1', 'f2', 'h1', 'h1', 'More', 'blue', 'BLD'),
+                       ('w1', 'f3', 'h2', 'h2', 'Also', 'red', 'BLD')`.execute(db)
+      await sql`DELETE FROM folder WHERE workspace_id = 'w1' AND id IN ('f3', 'h2')`.execute(db)
+      await hub('w1', 'h3', 'OTH')
     })
   })
 })

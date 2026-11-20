@@ -65,6 +65,8 @@ watch(name, (next) => {
 // Shown in capitals as typed: the prefix is permanent, so the field shows what is stored.
 function onPrefix(value: string) {
   idPrefix.value = value.toUpperCase()
+  // A refusal of the old prefix (prefix_taken) no longer applies.
+  delete errors.value.idPrefix
   // Clearing the field hands it back to the name.
   prefixEdited.value = value.trim() !== ''
 }
@@ -84,7 +86,8 @@ async function submit() {
   const result = await create(request.body)
   busy.value = false
   if (!result.ok) {
-    error.value = result.message
+    if (result.field) errors.value = { [result.field]: result.message }
+    else error.value = result.message
     return
   }
   open.value = false

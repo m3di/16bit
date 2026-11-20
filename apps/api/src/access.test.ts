@@ -126,7 +126,8 @@ async function seed(): Promise<void> {
     parent_id: null,
     name: id,
     color: 'blue',
-    id_prefix: 'H',
+    // Unique per workspace among hubs (D56).
+    id_prefix: id.toUpperCase(),
   })
   await db
     .insertInto('folder')
@@ -610,6 +611,71 @@ describe('creating a hub', () => {
     }
     const hubs = await db.selectFrom('folder').select('id').where('parent_id', 'is', null).execute()
     expect(hubs.map((h) => h.id).sort()).toEqual(['build', 'docs', 'secret'])
+  })
+
+  describe('ID prefix (D56)', () => {
+    const create = (who: string, idPrefix: string, extra: object = {}, workspace = 'w1') =>
+      call(who, 'POST', `/v1/workspaces/${workspace}/hubs`, {
+        name: 'New',
+        color: 'teal',
+        idPrefix,
+        ...extra,
+      })
+
+    it('refuses a prefix another hub in the workspace has, and changes nothing', async () => {
+      const seq = await nextLogSeq()
+      // `own` holds no grant on `docs`, but owners see every hub row already.
+      const res = await create('own', 'DOCS', { id: 'dup' })
+      expect(res.statusCode).toBe(409)
+      expect(res.json()).toEqual({
+        error: 'prefix_taken',
+        message: 'Another hub in this workspace uses this ID prefix',
+      })
+      expect(
+        await db.selectFrom('folder').select('id').where('id', '=', 'dup').executeTakeFirst(),
+      ).toBeUndefined()
+      expect(await grantOf('dup', 'own')).toBeNull()
+      expect(await logSince(seq)).toEqual([])
+    })
+
+    it('reports a taken ID before a taken prefix', async () => {
+      const res = await create('own', 'DOCS', { id: 'build' })
+      expect(res.statusCode).toBe(409)
+      expect(res.json()).toMatchObject({ error: 'id_taken' })
+    })
+
+    it('allows a prefix used in another workspace, or only by a subfolder', async () => {
+      // w2 has SECRET; `bugs`, a folder in build, carries BUGS.
+      expect((await create('x', 'BUILD', {}, 'w2')).statusCode).toBe(201)
+      expect((await create('own', 'SECRET')).statusCode).toBe(201)
+      expect((await create('own', 'BUGS')).statusCode).toBe(201)
+    })
+
+    it('frees the prefix once its hub is deleted', async () => {
+      expect((await create('own', 'TMP', { id: 'tmp' })).statusCode).toBe(201)
+      expect((await create('own', 'TMP')).json()).toMatchObject({ error: 'prefix_taken' })
+      expect((await call('own', 'DELETE', '/v1/workspaces/w1/hubs/tmp?version=0')).statusCode).toBe(
+        204,
+      )
+      expect((await create('own', 'TMP', { id: 'tmp2' })).statusCode).toBe(201)
+    })
+
+    it('lets one of two concurrent creates with a prefix win', async () => {
+      const results = await Promise.all([
+        create('own', 'RACE', { id: 'race1' }),
+        create('adm', 'RACE', { id: 'race2' }),
+      ])
+      expect(results.map((r) => r.statusCode).sort()).toEqual([201, 409])
+      expect(results.find((r) => r.statusCode === 409)?.json()).toMatchObject({
+        error: 'prefix_taken',
+      })
+      const hubs = await db
+        .selectFrom('folder')
+        .select('id')
+        .where('id_prefix', '=', 'RACE')
+        .execute()
+      expect(hubs).toHaveLength(1)
+    })
   })
 
   it('gives a server-made ID when none is sent', async () => {

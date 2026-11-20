@@ -95,7 +95,13 @@ export function hubRequest(
 }
 
 export type CreateHubResult =
-  { ok: true; hub: Extract<HubListEntry, { access: 'granted' }> } | { ok: false; message: string }
+  | { ok: true; hub: Extract<HubListEntry, { access: 'granted' }> }
+  /** `field` names the dialog field the message belongs on; without it, the whole form. */
+  | { ok: false; message: string; field?: 'idPrefix' }
+
+/** 409 `prefix_taken` (D56): another hub in the workspace has the prefix. */
+export const PREFIX_TAKEN =
+  'Another hub in this workspace uses this prefix. Choose a different one.'
 
 /**
  * Sends the create. Nothing is shown as created until the server answers: the reader goes
@@ -125,6 +131,9 @@ export async function createHub(
     }
     if (error.isNotFound) {
       return { ok: false, message: 'This workspace is no longer available.' }
+    }
+    if (error.code === 'prefix_taken') {
+      return { ok: false, message: PREFIX_TAKEN, field: 'idPrefix' }
     }
     if (error.code === 'id_taken') {
       return { ok: false, message: 'That hub ID is already used. Try again.' }

@@ -11,6 +11,7 @@ import * as m0009 from './0009_schema_writes.ts'
 import * as m0010 from './0010_invite_update_owner.ts'
 import * as m0011 from './0011_deleted_attribute.ts'
 import * as m0012 from './0012_mutation_ids.ts'
+import * as m0013 from './0013_hub_prefix_unique.ts'
 
 // Listed explicitly instead of read from disk, so migrations survive bundling into the image.
 // Names sort in run order.
@@ -27,4 +28,5 @@ export const migrations: Record<string, Migration> = {
   '0010_invite_update_owner': m0010,
   '0011_deleted_attribute': m0011,
   '0012_mutation_ids': m0012,
+  '0013_hub_prefix_unique': m0013,
 }

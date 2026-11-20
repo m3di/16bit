@@ -68,7 +68,8 @@ export const hubPageSchema = pageSchema(hubListEntrySchema)
 /**
  * `POST /v1/workspaces/:workspaceId/hubs`, owners and admins. The creator becomes the hub's
  * hub admin (docs/ROLES.md). `id` is optional; the server makes one if absent. Returns 201 with
- * the new hub as a `granted` hub list entry.
+ * the new hub as a `granted` hub list entry. An `idPrefix` another hub of the workspace has is
+ * 409 `prefix_taken` (D56); an `id` a hub has or had is 409 `id_taken`.
  */
 export const createHubSchema = z.strictObject({
   id: idSchema.optional(),
@@ -315,6 +316,11 @@ export const API_ERROR_CODES = [
   'conflict',
   /** `POST /items` with an `id` that is already used in the workspace. */
   'id_taken',
+  /**
+   * `POST /hubs` with an `idPrefix` another hub in the workspace has (D56). A deleted hub's
+   * prefix is free again.
+   */
+  'prefix_taken',
   /** Accepting an invite as a new account with an email that already has one. */
   'email_taken',
   /** Accepting an invite into a workspace the account already belongs to. */
