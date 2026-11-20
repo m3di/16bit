@@ -1,4 +1,4 @@
-import { itemPageSchema, type Filter, type Sort } from '@16bit/core'
+import { encodeItemCursor, itemPageSchema, type Filter, type Sort } from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -449,11 +449,37 @@ describe('paging', () => {
   it('rejects a cursor that does not match the sort', async () => {
     const res = await query({ limit: 1 })
     const { nextCursor } = itemPageSchema.parse(res.json())
-    await expectInvalid({ sort: [{ attribute: 'points' }], cursor: nextCursor }, 'Invalid cursor')
+    await expectInvalid(
+      { sort: [{ attribute: 'points' }], cursor: nextCursor },
+      'This cursor is from the updated order',
+    )
+    // A cursor from before #168, with no order recorded.
     await expectInvalid(
       { sort: [{ attribute: 'points' }], cursor: encodeCursor(['x', 'a']) },
       'Invalid cursor',
     )
+    // The right order, but keys of the wrong type for this sort.
+    await expectInvalid(
+      {
+        sort: [{ attribute: 'points' }],
+        cursor: encodeItemCursor({ order: 'sort', after: ['x', 'a'] }),
+      },
+      'Invalid cursor',
+    )
+    // A sort cursor under the default order.
+    const sorted = await query({ sort: [{ attribute: 'points' }], limit: 1 })
+    await expectInvalid(
+      { cursor: itemPageSchema.parse(sorted.json()).nextCursor },
+      'This cursor is from the sort order',
+    )
+  })
+
+  it('refuses offset, count and order "number" until they are served (M3-05)', async () => {
+    for (const body of [{ offset: 0 }, { count: true }, { order: 'number' }]) {
+      await expectInvalid(body, 'not supported yet')
+    }
+    const res = await query({ order: 'updated', limit: 5 })
+    expect(res.statusCode, res.body).toBe(200)
   })
 })
 

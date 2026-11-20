@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import {
   compileItemQuery,
+  decodeItemCursor,
+  encodeItemCursor,
   indexEntries,
   validateItemValues,
   MAX_HIDDEN_BACKLINKS,
@@ -12,6 +14,7 @@ import {
   type Filter,
   type FolderAttributeDefinition,
   type Item,
+  type ItemCursor,
   type ItemQueryResult,
   type ItemRead,
   type ItemValues,
@@ -760,7 +763,7 @@ export async function queryItems(
   query: ItemQuery,
   caps: { maxLinkedItems?: number } = {},
 ): Promise<ItemQueryResult> {
-  const { statement, keys, expand } = await itemQueryStatement(db, workspaceId, query)
+  const { statement, keys, sorted, expand } = await itemQueryStatement(db, workspaceId, query)
   const { rows } = await statement.execute(db)
   const page = rows.slice(0, query.limit)
   const last = page.at(-1)
@@ -768,10 +771,13 @@ export async function queryItems(
     items: page.map((row) => toItem(row)),
     nextCursor:
       rows.length > query.limit && last
-        ? encodeCursor([
-            ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
-            last.id,
-          ])
+        ? encodeItemCursor({
+            order: sorted ? 'sort' : 'updated',
+            after: [
+              ...keys.map((_, i) => last[`c${String(i)}`] as string | number | null),
+              last.id,
+            ],
+          } as ItemCursor)
         : null,
   }
   if (expand.length > 0) {
@@ -968,7 +974,12 @@ export async function itemQueryStatement(
   db: Db,
   workspaceId: string,
   query: ItemQuery,
-): Promise<{ statement: RawBuilder<QueryRow>; keys: SortKey[]; expand: string[] }> {
+): Promise<{
+  statement: RawBuilder<QueryRow>
+  keys: SortKey[]
+  sorted: boolean
+  expand: string[]
+}> {
   const folder = await db
     .selectFrom('folder')
     .select('id')
@@ -996,13 +1007,24 @@ export async function itemQueryStatement(
   // Ties end on the ID, in the direction of the default order when there is no sort.
   const idDesc = sorts.length === 0
 
+  // The cursor records its order (core's `itemQuerySchema` refuses one from another order at
+  // the edge); its keys must also fit this sort's key types.
   let cursor: unknown[] | null = null
   if (query.cursor) {
+    const decoded = decodeItemCursor(query.cursor)
     const schema = z.tuple([
       ...keys.map((k) => (k.nullable ? CURSOR_VALUE[k.kind].nullable() : CURSOR_VALUE[k.kind])),
       z.string().min(1).max(64),
     ] as unknown as [z.ZodType, ...z.ZodType[]])
-    cursor = decodeCursor(schema, query.cursor)
+    const keysFit = decoded && schema.safeParse(decoded.after)
+    if (
+      !decoded ||
+      decoded.order !== (sorts.length > 0 ? 'sort' : 'updated') ||
+      !keysFit?.success
+    ) {
+      throw new HttpError('invalid_request', 'Invalid cursor')
+    }
+    cursor = keysFit.data
   }
 
   // Timestamps go into the cursor in microsecond text form: a JS Date would drop precision and
@@ -1033,5 +1055,5 @@ export async function itemQueryStatement(
     ])}
     LIMIT ${query.limit + 1}
   `
-  return { statement, keys, expand }
+  return { statement, keys, sorted: sorts.length > 0, expand }
 }
