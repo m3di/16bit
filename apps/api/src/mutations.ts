@@ -1,6 +1,6 @@
 import type { Transaction } from 'kysely'
 import type { Database } from './db/database.ts'
-import { HttpError, notFound, sqlState } from './http.ts'
+import { HttpError, notFound } from './http.ts'
 import { MutationReplayed } from './items.ts'
 
 // Safe retries of item writes (D59). A write may carry a `clientMutationId`, stored on its
@@ -68,6 +68,24 @@ export async function findMutation(
   return { op, itemId: row.item_id }
 }
 
+/** The unique index on a revision's mutation ID (migration 0012). */
+const MUTATION_KEY = 'revision_client_mutation_key'
+
+/**
+ * The failures of a write that may mean its first attempt committed while it waited, so the ID
+ * is worth a second lookup: the index refused the revision, or the item it locked had moved
+ * (409 `conflict`), was gone (404) or was taken by the first create (409 `id_taken`). Anything
+ * else, a 403 or a 422 among them, is the answer as it stands.
+ */
+function mayBeFirstAttempt(error: unknown): boolean {
+  if (error instanceof MutationReplayed) return true
+  if ((error as { constraint?: unknown } | null)?.constraint === MUTATION_KEY) return true
+  return (
+    error instanceof HttpError &&
+    (error.code === 'conflict' || error.code === 'not_found' || error.code === 'id_taken')
+  )
+}
+
 /**
  * Runs an item write with `clientMutationId` safely (D59). `run` opens a request-scoped
  * transaction. `write` is the write itself; `answer` answers a retry from the first attempt's
@@ -94,11 +112,7 @@ export async function idempotentWrite<T>(
       return first ? answer(trx, first) : write(trx)
     })
   } catch (error) {
-    const retryable =
-      error instanceof MutationReplayed ||
-      (error instanceof HttpError && error.code !== 'mutation_id_reused') ||
-      sqlState(error) === '23505'
-    if (!retryable) throw error
+    if (!mayBeFirstAttempt(error)) throw error
     const replayed = await run(async (trx) => {
       const first = await known(trx)
       return first ? { value: await answer(trx, first) } : null

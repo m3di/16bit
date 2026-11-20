@@ -20,7 +20,7 @@ import { withScope, workspaceSeq } from './db/scope.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { itemOf } from './db/test-responses.ts'
 import { sessionCookie } from './db/test-session.ts'
-import { queryItems } from './items.ts'
+import { createItem, queryItems } from './items.ts'
 import { resetPassword } from './reset-password.ts'
 
 // The change reader and `GET /changes` (D58), the workspace `seq` on reads and writes, and
@@ -219,9 +219,17 @@ describe('GET /changes (D58)', () => {
     const b = await create('ed', 'h1', 'B')
     const page = await changes('vw', 0)
     expect(page.changes).toEqual([
-      { seq: a3.seq, hubId: 'h1', itemId: a.id, item: itemOf(a3), clientMutationId: mutation },
+      { seq: a3.seq, hubId: 'h1', itemId: a.id, item: itemOf(a3) },
       { seq: b.seq, hubId: 'h1', itemId: b.id, item: itemOf(b) },
     ])
+    // The mutation ID is echoed to its writer only (D59).
+    expect((await changes('ed', 0)).changes[0]).toEqual({
+      seq: a3.seq,
+      hubId: 'h1',
+      itemId: a.id,
+      item: itemOf(a3),
+      clientMutationId: mutation,
+    })
 
     const del = await as('ed', 'DELETE', `/items/${b.id}?version=1`)
     expect(del.statusCode).toBe(204)
@@ -254,7 +262,7 @@ describe('GET /changes (D58)', () => {
       withScope(
         appDb,
         { workspaceId: WS, principalId: 'vw' },
-        (trx) => readChanges(trx, WS, { after, limit: 100, maxScan: 2 }),
+        (trx) => readChanges(trx, WS, { principalId: 'vw', after, limit: 100, maxScan: 2 }),
         { snapshot: true },
       )
     expect(await read(0)).toEqual({ changes: [], seq: 2, more: true })
@@ -264,12 +272,44 @@ describe('GET /changes (D58)', () => {
     expect(last).toMatchObject({ seq: 6, more: false })
   })
 
+  it('does not skip a write that holds a seq but has not committed yet', async () => {
+    await create('ed', 'h1', 'A')
+    // A create in flight: it has taken seq 2 and holds the workspace row, uncommitted.
+    let commit: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      commit = resolve
+    })
+    let taken: () => void = () => undefined
+    const holding = new Promise<void>((resolve) => {
+      taken = resolve
+    })
+    const inFlight = withScope(appDb, { workspaceId: WS, principalId: 'ed' }, async (trx) => {
+      const item = await createItem(trx, WS, 'ed', { folderId: 'h1', values: { t1: 'B' } })
+      taken()
+      await gate
+      return item
+    })
+    await holding
+
+    // The reader neither waits for it nor moves past it.
+    const page = await changes('vw', 0)
+    expect(page).toMatchObject({ seq: 1, more: false })
+    expect(page.changes).toHaveLength(1)
+    expect(await changes('vw', page.seq)).toEqual({ changes: [], seq: 1, more: false })
+
+    commit()
+    const b = await inFlight
+    const next = await changes('vw', page.seq)
+    expect(next.changes.map((c) => [c.seq, c.itemId])).toEqual([[2, b.id]])
+    expect(next.seq).toBe(2)
+  })
+
   it('reads only the hubs asked for', async () => {
     await create('ed', 'h1', 'one')
     await create('ed', 'h2', 'two')
     const read = (hubIds: string[]) =>
       withScope(appDb, { workspaceId: WS, principalId: 'ed' }, (trx) =>
-        readChanges(trx, WS, { after: 0, limit: 10, hubIds }),
+        readChanges(trx, WS, { principalId: 'ed', after: 0, limit: 10, hubIds }),
       )
     expect((await read(['h2'])).changes.map((c) => c.hubId)).toEqual(['h2'])
     expect(await read([])).toEqual({ changes: [], seq: 2, more: false })
