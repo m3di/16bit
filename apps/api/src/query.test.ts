@@ -1,4 +1,10 @@
-import { encodeItemCursor, itemPageSchema, type Filter, type Sort } from '@16bit/core'
+import {
+  encodeItemCursor,
+  itemPageSchema,
+  itemQueryResultSchema,
+  type Filter,
+  type Sort,
+} from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -473,13 +479,179 @@ describe('paging', () => {
       'This cursor is from the sort order',
     )
   })
+})
 
-  it('refuses offset, count and order "number" until they are served (M3-05)', async () => {
-    for (const body of [{ offset: 0 }, { count: true }, { order: 'number' }]) {
-      await expectInvalid(body, 'not supported yet')
+/** The result of a query that must succeed, checked against core's response schema. */
+async function result(body: object, ws = 'w1') {
+  const res = await query(body, ws)
+  expect(res.statusCode, res.body).toBe(200)
+  return itemQueryResultSchema.parse(res.json())
+}
+
+function patchItem(id: string, version: number, values: object) {
+  return app.inject({
+    method: 'PATCH',
+    url: `/v1/workspaces/w1/items/${id}`,
+    headers: auth,
+    payload: { version, values },
+  })
+}
+
+describe('the number order (D61)', () => {
+  it('lists newest item number first, and an edit does not move the row', async () => {
+    const numbers = async () =>
+      (await result({ order: 'number' })).items.map((i) => `${i.id}${String(i.seqId)}`)
+    expect(await numbers()).toEqual(['e5', 'd4', 'c3', 'b2', 'a1'])
+    expect((await patchItem('a', 1, { points: 7 })).statusCode).toBe(200)
+    expect(await numbers()).toEqual(['e5', 'd4', 'c3', 'b2', 'a1'])
+    // The updated order does move it.
+    expect((await result({})).items.map((i) => i.id)).toEqual(['a', 'e', 'd', 'c', 'b'])
+  })
+
+  it('pages by a cursor on the item number alone, and refuses one from another order', async () => {
+    const seen: string[] = []
+    let cursor: string | null = null
+    for (let pages = 0; pages < 5; pages++) {
+      const page = await result({ order: 'number', limit: 2, cursor })
+      seen.push(...page.items.map((i) => i.id))
+      cursor = page.nextCursor
+      if (!cursor) break
     }
-    const res = await query({ order: 'updated', limit: 5 })
-    expect(res.statusCode, res.body).toBe(200)
+    expect(seen).toEqual(['e', 'd', 'c', 'b', 'a'])
+
+    const first = await result({ order: 'number', limit: 2 })
+    expect(first.nextCursor).toBe(encodeItemCursor({ order: 'number', after: [4] }))
+    await expectInvalid({ cursor: first.nextCursor }, 'This cursor is from the number order')
+    const updated = await result({ limit: 2 })
+    await expectInvalid(
+      { order: 'number', cursor: updated.nextCursor },
+      'This cursor is from the updated order',
+    )
+    await expectInvalid({ order: 'number', sort: [{ attribute: 'points' }] }, 'order')
+  })
+
+  it('keeps the number order apart per folder and per workspace', async () => {
+    await seedWorkspace('w2')
+    await createIn('w2', 'z', { title: 'Zebra' })
+    expect((await result({ order: 'number' }, 'w2')).items.map((i) => i.id)).toEqual(['z'])
+    expect((await result({ order: 'number' })).items).toHaveLength(5)
+  })
+})
+
+describe('windows by offset (D61)', () => {
+  it('skips `offset` rows in each order, with a cursor that carries on after the window', async () => {
+    const window = await result({ order: 'number', offset: 1, limit: 2 })
+    expect(window.items.map((i) => i.id)).toEqual(['d', 'c'])
+    const next = await result({ order: 'number', limit: 2, cursor: window.nextCursor })
+    expect(next.items.map((i) => i.id)).toEqual(['b', 'a'])
+
+    expect((await result({ offset: 3, limit: 5 })).items.map((i) => i.id)).toEqual(['b', 'a'])
+    const sorted = await result({ sort: [{ attribute: 'points' }], offset: 2, limit: 2 })
+    expect(sorted.items.map((i) => i.id)).toEqual(['d', 'b'])
+    const filtered = await result({
+      where: cond('done', 'is_not_empty'),
+      sort: [{ attribute: 'title' }],
+      offset: 1,
+      limit: 2,
+    })
+    expect(filtered.items.map((i) => i.id)).toEqual(['a', 'e'])
+  })
+
+  it('answers an empty window past the end, and offset 0 like no offset', async () => {
+    const past = await result({ order: 'number', offset: 5, limit: 10 })
+    expect(past).toMatchObject({ items: [], nextCursor: null })
+    const zero = await result({ order: 'number', offset: 0, limit: 2 })
+    expect(zero).toEqual(await result({ order: 'number', limit: 2 }))
+  })
+
+  it('refuses an offset with a cursor, a negative one, or one over 100,000', async () => {
+    const { nextCursor } = await result({ limit: 1 })
+    await expectInvalid({ offset: 1, cursor: nextCursor }, 'offset or by cursor')
+    await expectInvalid({ offset: -1 })
+    await expectInvalid({ offset: 100_001 })
+    await expectInvalid({ offset: 1.5 })
+    expect((await result({ offset: 100_000 })).items).toEqual([])
+  })
+})
+
+describe('total (D61)', () => {
+  it('is the folder’s item count with no `where`, and follows creates and deletes', async () => {
+    expect((await result({ count: true, limit: 1 })).total).toBe(5)
+    expect((await result({ limit: 1 })).total).toBeUndefined()
+    await createIn('w1', 'f', { title: 'Fig' })
+    expect((await result({ order: 'number', count: true, limit: 1 })).total).toBe(6)
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/v1/workspaces/w1/items/b?version=1',
+      headers: auth,
+    })
+    expect(res.statusCode).toBe(204)
+    expect((await result({ count: true, offset: 4, limit: 1 })).total).toBe(5)
+  })
+
+  it('reads the counters, not the items, when there is no `where`', async () => {
+    // A counter set out of step with the items shows where the total comes from.
+    await db.updateTable('folder').set({ item_count: 42 }).where('id', '=', 'h').execute()
+    expect((await result({ count: true })).total).toBe(42)
+    // With a `where`, even one that matches everything, the items are counted.
+    expect((await result({ count: true, where: { and: [] } })).total).toBe(5)
+  })
+
+  it('counts the items that pass `where`, over all pages', async () => {
+    const page = await result({ where: cond('points', 'gte', 3), count: true, limit: 1 })
+    expect(page.items).toHaveLength(1)
+    expect(page.total).toBe(3)
+    const sorted = await result({
+      where: cond('title', 'contains', 'apple'),
+      sort: [{ attribute: 'title', direction: 'desc' }],
+      count: true,
+      offset: 5,
+    })
+    expect(sorted).toMatchObject({ items: [], total: 2 })
+    expect((await result({ where: { or: [] }, count: true })).total).toBe(0)
+  })
+
+  it('counts a hub’s own items, not those in its folders, and each folder its own', async () => {
+    const folder = (id: string, parent: string) =>
+      db
+        .insertInto('folder')
+        .values({
+          workspace_id: 'w1',
+          id,
+          hub_id: 'h',
+          parent_id: parent,
+          name: id,
+          color: 'blue',
+          id_prefix: 'H',
+        })
+        .execute()
+    await folder('sub', 'h')
+    await folder('deep', 'sub')
+    const createInFolder = async (id: string, folderId: string) => {
+      const res = await post('/v1/workspaces/w1/items', { id, folderId, values: {} })
+      expect(res.statusCode, res.body).toBe(201)
+    }
+    await createInFolder('s1', 'sub')
+    await createInFolder('s2', 'sub')
+    await createInFolder('d1', 'deep')
+
+    const total = async (from: string) => {
+      const page = await result({ from, count: true, order: 'number' })
+      expect(page.total).toBe(page.items.length)
+      return page.total
+    }
+    expect(await total('h')).toBe(5)
+    expect(await total('sub')).toBe(2)
+    expect(await total('deep')).toBe(1)
+  })
+
+  it('answers 404 for a folder in another workspace, and counts only its own workspace', async () => {
+    await seedWorkspace('w2')
+    await createIn('w2', 'z', { points: 3 })
+    expect((await result({ count: true }, 'w2')).total).toBe(1)
+    expect((await result({ count: true, where: cond('points', 'eq', 3) }, 'w2')).total).toBe(1)
+    const res = await query({ from: 'nope', count: true })
+    expect(res.statusCode).toBe(404)
   })
 })
 
@@ -506,7 +678,11 @@ describe('workspace isolation', () => {
 })
 
 describe('query plans (D20)', () => {
-  /** EXPLAIN of one page, with sorting priced out so only an index can supply the order. */
+  /**
+   * EXPLAIN of one page, with sorting priced out so only an index can supply the order. This
+   * proves the SQL can be served by the index at any offset; which plan Postgres picks on a
+   * real database is checked in query-window.test.ts.
+   */
   async function plan(query: Partial<ItemQuery>): Promise<string> {
     const full: ItemQuery = { from: 'h', where: null, sort: [], limit: 50, cursor: null, ...query }
     const { statement } = await itemQueryStatement(db, 'w1', full)
@@ -529,4 +705,28 @@ describe('query plans (D20)', () => {
     expect(next).toContain('item_folder_updated_idx')
     expect(next).not.toMatch(/Sort/)
   })
+
+  it('serves the number order from item_folder_number_idx without a sort, on every page', async () => {
+    const first = await plan({ order: 'number' })
+    expect(first).toContain('item_folder_number_idx')
+    expect(first).not.toMatch(/Sort/)
+
+    const res = await query({ order: 'number', limit: 2 })
+    const { nextCursor } = itemPageSchema.parse(res.json())
+    const next = await plan({ order: 'number', limit: 2, cursor: nextCursor })
+    expect(next).toContain('item_folder_number_idx')
+    expect(next).toMatch(/Index Cond: .*seq_id < /)
+    expect(next).not.toMatch(/Sort/)
+  })
+
+  it.each(['updated', 'number'] as const)(
+    'walks the index for an offset window in the %s order, at any depth',
+    async (order) => {
+      for (const offset of [1, 49_800, 100_000]) {
+        const window = await plan({ order, offset, limit: 200 })
+        expect(window).toContain(`item_folder_${order}_idx`)
+        expect(window).not.toMatch(/Sort/)
+      }
+    },
+  )
 })
