@@ -122,6 +122,17 @@ describe('createHub', () => {
     }
   })
 
+  it('puts a taken prefix on the prefix field (D56)', async () => {
+    const api = fakeApi({
+      'POST /v1/workspaces/w/hubs': () => json({ error: 'prefix_taken', message: 'Taken' }, 409),
+    })
+    expect(await createHub('w', body, api.fetchFn)).toEqual({
+      ok: false,
+      message: 'Another hub in this workspace uses this prefix. Choose a different one.',
+      field: 'idPrefix',
+    })
+  })
+
   it('says when the server cannot be reached', async () => {
     const result = await createHub('w', body, () => Promise.reject(new Error('offline')))
     expect(result).toEqual({

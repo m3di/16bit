@@ -408,7 +408,7 @@ describe('delete_hub (D52)', () => {
     // One statement each: parameters can't go into a multi-statement query.
     const statements = [
       sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
-          VALUES ('w1', ${id}, ${id}, NULL, ${`Hub ${id}`}, 'blue', 'D')`,
+          VALUES ('w1', ${id}, ${id}, NULL, ${`Hub ${id}`}, 'blue', ${id.toUpperCase()})`,
       sql`INSERT INTO attribute (workspace_id, id, hub_id, name, type, config) VALUES
           ('w1', ${`${id}-t`}, ${id}, 'Title', 'text', '{}'),
           ('w1', ${`${id}-r`}, ${id}, 'Self', 'relation',
@@ -615,7 +615,7 @@ describe('delete_hub (D52)', () => {
 
     const recreate = (trx: Transaction<Database> | Kysely<Database>) =>
       sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
-          VALUES ('w1', ${id}, ${id}, NULL, 'Again', 'blue', 'D')`.execute(trx)
+          VALUES ('w1', ${id}, ${id}, NULL, 'Again', 'blue', 'AGAIN')`.execute(trx)
     expect(await attempt(w1('own'), recreate)).toBe(UNIQUE)
     await expect(recreate(db)).rejects.toMatchObject({ code: UNIQUE })
     // The API role can't read the tombstones.
@@ -664,7 +664,7 @@ describe('delete_hub (D52)', () => {
     // As the owner of the tables, so only hub_id_check stands in the way.
     const reuse =
       sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
-                      VALUES ('w1', ${id}, ${id}, NULL, 'Again', 'blue', 'D')`
+                      VALUES ('w1', ${id}, ${id}, NULL, 'Again', 'blue', 'AGAIN')`
         .execute(db)
         .then(
           () => 'ok',

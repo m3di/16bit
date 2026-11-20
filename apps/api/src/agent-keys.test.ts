@@ -111,7 +111,8 @@ async function seed(): Promise<void> {
     parent_id: null,
     name: id,
     color: 'blue',
-    id_prefix: 'H',
+    // Unique per workspace among hubs (D56).
+    id_prefix: id.toUpperCase(),
   })
   await db
     .insertInto('folder')

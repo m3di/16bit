@@ -10,7 +10,15 @@ import {
 } from '@16bit/core'
 import type { Page } from '@playwright/test'
 import { people } from './support/auth-state.ts'
-import { expect, expectStatus, test, uniqueHubName, WS, type Client } from './support/roles.ts'
+import {
+  expect,
+  expectStatus,
+  test,
+  uniqueHubName,
+  uniquePrefix,
+  WS,
+  type Client,
+} from './support/roles.ts'
 
 // Hub settings, general, access, agent keys and danger zone (#116). Every test works in a hub it
 // creates, so the seeded hubs never change; each outcome is checked through the API.
@@ -21,10 +29,12 @@ async function newHub(owner: Client, label: string) {
   const res = await owner.post('/hubs', {
     name: uniqueHubName(label),
     color: 'teal',
-    idPrefix: 'ACC',
+    idPrefix: uniquePrefix(),
   })
   await expectStatus(res, 201)
-  return hubListEntrySchema.parse(await res.json())
+  const hub = hubListEntrySchema.parse(await res.json())
+  if (hub.access !== 'granted') throw new Error('A new hub is granted to its creator')
+  return hub
 }
 
 async function describeHub(client: Client, hubId: string): Promise<HubDescription> {
@@ -78,7 +88,9 @@ test('a hub admin renames and recolours the hub and sets its title attribute (D5
   await expect(general.getByText('2 items in this hub, counting every folder.')).toBeVisible()
   // The ID prefix shows read-only: it is set when the hub is created (#150).
   await expect(general.locator('[data-hub-prefix]')).toContainText('ID prefix')
-  await expect(general.locator('[data-hub-prefix]')).toContainText('Items are numbered ACC-1')
+  await expect(general.locator('[data-hub-prefix]')).toContainText(
+    `Items are numbered ${hub.idPrefix}-1`,
+  )
   await expect(general.getByRole('textbox', { name: 'ID prefix' })).toHaveCount(0)
 
   const renamed = `${hub.name} renamed`

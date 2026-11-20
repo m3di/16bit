@@ -421,10 +421,15 @@ export async function createHub(
       .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
       .returningAll()
       .executeTakeFirst()
-      // hub_id_check (migration 0009): a deleted hub had this ID (D52).
       .catch((error: unknown) => {
-        if (sqlState(error) === '23505') return undefined
-        throw error
+        if (sqlState(error) !== '23505') throw error
+        // folder_hub_prefix_key (migration 0013): another hub has this prefix (D56). Two creates
+        // racing with one ID and one prefix: the loser gets this, not id_taken; both are true.
+        if ((error as { constraint?: unknown }).constraint === 'folder_hub_prefix_key') {
+          throw new HttpError('prefix_taken', 'Another hub in this workspace uses this ID prefix')
+        }
+        // hub_id_check (migration 0009): a deleted hub had this ID (D52).
+        return undefined
       })
     if (!row) throw new HttpError('id_taken', 'This folder ID is already used')
     await trx
