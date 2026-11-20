@@ -364,8 +364,11 @@ test('everyone in the workspace sees what each role can do, and the API agrees',
 }) => {
   const page = await pageAs('leo')
   await page.goto(membersPath)
-  const section = page.getByRole('region', { name: 'What each role can do' })
-  await expect(section).toBeVisible()
+  await expect(page.getByRole('region', { name: 'What each role can do' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'What each hub role can do' })).toContainText(
+    'Viewer and Finance act as viewer at most',
+  )
+  const sections = page.locator('[data-role-matrix]')
   await expect(roleTable(page, 'workspace').getByRole('columnheader')).toHaveText([
     'Action',
     'Owner',
@@ -383,8 +386,8 @@ test('everyone in the workspace sees what each role can do, and the API agrees',
     'Viewer',
   ])
   // Read-only: no controls in either table.
-  await expect(section.getByRole('button')).toHaveCount(0)
-  await expect(section.getByRole('combobox')).toHaveCount(0)
+  await expect(sections.getByRole('button')).toHaveCount(0)
+  await expect(sections.getByRole('combobox')).toHaveCount(0)
 
   // Footnotes ¹ and ³ show as limits.
   await expect(roleCell(page, 'workspace', 'invite', 'owner')).toHaveText('Yes')

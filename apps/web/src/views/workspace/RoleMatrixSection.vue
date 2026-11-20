@@ -34,12 +34,16 @@ const limitsOf = (row: MatrixRow, key: string) => {
 const tables = computed(() => [
   {
     key: 'workspace',
+    title: 'What each role can do',
+    description: 'A workspace role sets what someone can do; a hub grant sets where.',
     caption: 'What each workspace role and an agent key can do in this workspace',
     columns: columnsOf(matrices.workspace),
     rows: rowsOf(matrices.workspace),
   },
   {
     key: 'hub',
+    title: 'What each hub role can do',
+    description: capText,
     caption: 'What each hub role can do inside a hub',
     columns: columnsOf(matrices.hub),
     rows: rowsOf(matrices.hub),
@@ -49,45 +53,42 @@ const tables = computed(() => [
 
 <template>
   <SettingsSection
-    title="What each role can do"
-    :description="`A workspace role sets what someone can do; a hub grant sets where. ${capText}`"
-    data-role-matrix
+    v-for="t in tables"
+    :key="t.key"
+    :title="t.title"
+    :description="t.description"
+    :data-role-matrix="t.key"
   >
-    <div class="flex min-w-0 flex-col gap-6">
-      <DataTable
-        v-for="t in tables"
-        :key="t.key"
-        mode="static"
-        :caption="t.caption"
-        :columns="t.columns"
-        :rows="t.rows"
-        :min-width="720"
-        :row-attrs="(row) => ({ 'data-matrix-row': row.key })"
-        :data-role-matrix-table="t.key"
-      >
-        <template #cell="{ row, column }">
-          <template v-if="column.key === 'action'">{{ row.label }}</template>
+    <DataTable
+      mode="static"
+      :caption="t.caption"
+      :columns="t.columns"
+      :rows="t.rows"
+      :min-width="720"
+      :row-attrs="(row) => ({ 'data-matrix-row': row.key })"
+    >
+      <template #cell="{ row, column }">
+        <template v-if="column.key === 'action'">{{ row.label }}</template>
+        <span
+          v-else-if="cellOf(row, column.key)?.kind === 'limited'"
+          class="flex flex-col py-1"
+          :data-cell="column.key"
+        >
+          <span>{{ CELL_TEXT.yes }}</span>
           <span
-            v-else-if="cellOf(row, column.key)?.kind === 'limited'"
-            class="flex flex-col py-1"
-            :data-cell="column.key"
+            v-for="limit in limitsOf(row, column.key)"
+            :key="limit"
+            class="text-secondary text-ink3"
+            >{{ limit }}</span
           >
-            <span>{{ CELL_TEXT.yes }}</span>
-            <span
-              v-for="limit in limitsOf(row, column.key)"
-              :key="limit"
-              class="text-secondary text-ink3"
-              >{{ limit }}</span
-            >
-          </span>
-          <span
-            v-else-if="cellOf(row, column.key)"
-            :class="cellOf(row, column.key)?.kind === 'no' && 'text-secondary text-ink3'"
-            :data-cell="column.key"
-            >{{ CELL_TEXT[cellOf(row, column.key)!.kind] }}</span
-          >
-        </template>
-      </DataTable>
-    </div>
+        </span>
+        <span
+          v-else-if="cellOf(row, column.key)"
+          :class="cellOf(row, column.key)?.kind === 'no' && 'text-secondary text-ink3'"
+          :data-cell="column.key"
+          >{{ CELL_TEXT[cellOf(row, column.key)!.kind] }}</span
+        >
+      </template>
+    </DataTable>
   </SettingsSection>
 </template>
