@@ -229,7 +229,7 @@ Migration `0009_schema_writes` opens folders and attributes to hub admins and ad
 
 ## Client data layer (from M3)
 
-A normalised store keyed by item ID sits between the server and every component. Views hold ordered ID windows, not item copies. Writes are optimistic: applied locally, sent with a mutation ID, and rolled back if rejected. The client subscribes per folder over WebSocket, applies item changes to the store, and refetches aggregates when a folder's sequence moves.
+A normalised store keyed by item ID sits between the server and every component. Views hold ordered ID windows, not item copies. Writes are optimistic: applied locally, sent with a mutation ID, and rolled back if rejected. The client subscribes per hub over one WebSocket (D57), applies item changes to the store, and refetches what a change may have reordered (D58 to D61).
 
 **M0 scope:** plain fetch with an optimistic edit and rollback on 409 in the item panel. No WebSocket.
 
