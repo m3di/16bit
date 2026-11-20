@@ -60,6 +60,7 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm build`: build all packages.
 - `pnpm seed`: load the demo workspaces (`demo`, `acme`). Safe to re-run. Refuses `NODE_ENV=production` without `--force`.
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
+- `pnpm seed:large`: a `large` workspace whose Large hub has one folder of 50,000 items (every M1 type, six indexed, with revisions) for the M3 large-folder work. About 10 seconds; safe to re-run.
 - `pnpm account:reset-password <email>`: operator-only password reset; ends the account's sessions (D42).
 - `pnpm e2e`: Playwright end-to-end tests in `e2e`. Needs a seeded database; reuses a running `pnpm dev` or starts the API and web app itself.
 - `docker compose up --build`: the whole stack from the container image on http://localhost:8080. Seed it with `docker compose run --rm migrate node src/seed.ts --force`, then sign in as a seeded person (README). Compose sets `ALLOW_DEV_PASSWORD=1` on `app` behind its 127.0.0.1 binding; never set it on a deployment.

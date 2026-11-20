@@ -11,6 +11,7 @@
     "db:migrate": "pnpm --filter @16bit/api migrate",
     "seed": "pnpm --filter @16bit/api seed",
     "seed:build-hub": "pnpm --filter @16bit/api seed:build-hub",
+    "seed:large": "pnpm --filter @16bit/api seed:large",
     "account:reset-password": "pnpm --filter @16bit/api account:reset-password",
     "lint": "eslint . --max-warnings=0 && prettier --check .",
     "format": "prettier --write .",
