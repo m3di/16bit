@@ -349,8 +349,6 @@ const inviteSectionState = computed((): SettingsState => {
       {{ status }}
     </p>
 
-    <RoleMatrixSection />
-
     <SettingsSection
       title="People"
       :state="people.length ? 'ready' : 'empty'"
@@ -466,6 +464,8 @@ const inviteSectionState = computed((): SettingsState => {
         </DataTable>
       </div>
     </SettingsSection>
+    <!-- Reference, after the page's main job of managing people (lead, PR 186). -->
+    <RoleMatrixSection />
   </SettingsLayout>
 
   <InviteDialog

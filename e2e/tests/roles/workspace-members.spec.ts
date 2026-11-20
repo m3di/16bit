@@ -369,6 +369,12 @@ test('everyone in the workspace sees what each role can do, and the API agrees',
     'Viewer and Finance act as viewer at most',
   )
   const sections = page.locator('[data-role-matrix]')
+  // Reference comes after the page's main job, managing people.
+  await expect(page.getByRole('heading', { level: 2 })).toHaveText([
+    'People',
+    'What each role can do',
+    'What each hub role can do',
+  ])
   await expect(roleTable(page, 'workspace').getByRole('columnheader')).toHaveText([
     'Action',
     'Owner',
