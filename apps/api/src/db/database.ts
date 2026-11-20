@@ -170,6 +170,8 @@ export interface RevisionTable {
   actor: string
   cause: string | null
   at: Timestamp
+  /** The client's ID for the write (D59), unique per workspace and actor where set (0012). */
+  client_mutation_id: string | null
 }
 
 /** IDs of deleted hubs (D52, #111). Written by delete_hub() only; the API role can't read it. */

@@ -248,6 +248,9 @@ importers:
       '@fontsource/space-grotesk':
         specifier: 5.3.0
         version: 5.3.0
+      '@tanstack/vue-virtual':
+        specifier: 3.13.52
+        version: 3.13.52(vue@3.5.45(typescript@6.0.3))
       '@tiptap/core':
         specifier: 3.34.0
         version: 3.34.0(@tiptap/pm@3.34.0)
@@ -736,6 +739,14 @@ packages:
     resolution: {integrity: sha512-BCNiY0a1ZjdOHVqw7kyb7U72BwfMF3dfUuN+tQsLWky/J5JOI/r7abibglXfygrZhVO/3u3V+E25kkKTeMkXaQ==}
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
+
+  '@tanstack/virtual-core@3.19.11':
+    resolution: {integrity: sha512-/5iHb0RHBvj8Di59FDs4ESNm45jls33aZAi4zccVXZjc/6ZvwQP6nzEYeT6weXjTf9E6/vrp2JhYWRyO+ZP13A==}
+
+  '@tanstack/vue-virtual@3.13.52':
+    resolution: {integrity: sha512-qTwG7HNr5o+FPd/u+T05N73A8howtkB9FgQI71VcBzx6J2KsYzlVugRz/0ji17kl26D8SAdKux1Wmk3yhTI1Kw==}
+    peerDependencies:
+      vue: ^2.7.0 || ^3.0.0
 
   '@tiptap/core@3.34.0':
     resolution: {integrity: sha512-PwpE5MAXt586AxIO5bW2RyJ3OUXdPfG5M1M5v/LIMCkDwIgRKegx8uERlABoI6575mWqaH/P6Xm+tequJ5UUnw==}
@@ -2419,6 +2430,13 @@ snapshots:
       '@tailwindcss/oxide': 4.3.5
       tailwindcss: 4.3.5
       vite: 8.3.8(@types/node@26.6.6)(jiti@2.7.0)
+
+  '@tanstack/virtual-core@3.19.11': {}
+
+  '@tanstack/vue-virtual@3.13.52(vue@3.5.45(typescript@6.0.3))':
+    dependencies:
+      '@tanstack/virtual-core': 3.19.11
+      vue: 3.5.45(typescript@6.0.3)
 
   '@tiptap/core@3.34.0(@tiptap/pm@3.34.0)':
     dependencies:

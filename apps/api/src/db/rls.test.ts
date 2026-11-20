@@ -898,6 +898,12 @@ describe('the role matrix in the database', () => {
       1,
     ],
     [
+      'editor writes a revision with a client mutation ID (0012)',
+      'mem',
+      `INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor, client_mutation_id) VALUES ('w1', 100, 'i1', 'h1', 2, '{}', 'mem', '7f0c2a1e-3b4d-4c5e-8f60-718293a4b5c6')`,
+      1,
+    ],
+    [
       'editor writes a revision in someone else’s name',
       'mem',
       `INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor) VALUES ('w1', 100, 'i1', 'h1', 2, '{}', 'own')`,
