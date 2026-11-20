@@ -312,6 +312,7 @@ onScopeDispose(() => {
         caption="Kit items, virtual"
         mode="virtual"
         :columns="virtualColumns()"
+        :rows="[]"
         :row-count="VIRTUAL_COUNT"
         :row-at="(i: number) => loadedRows.get(i)"
         :selected-id="virtualSelected"

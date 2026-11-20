@@ -189,7 +189,8 @@ describe('DataTable virtual mode', () => {
     props: Partial<{ rowCount: number; loaded: number; selectedId: string; busy: boolean }> = {},
   ) => {
     const { rowCount = 50_000, loaded = 4, ...rest } = props
-    const rows: (Row | undefined)[] = []
+    // Rows past `loaded` are holes: not loaded yet.
+    const rows: Row[] = []
     for (let i = 0; i < loaded; i++) rows[i] = { id: `r${String(i)}`, title: `Row ${String(i)}` }
     return renderToString(
       createSSRApp({

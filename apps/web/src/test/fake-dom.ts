@@ -59,8 +59,23 @@ function node(tag: string, text = ''): FakeNode {
   return n
 }
 
+let layout: ((el: FakeNode) => void) | null = null
+
+/**
+ * Gives new elements what a browser's layout would, such as `clientHeight` or an
+ * `ownerDocument`, for code that measures or scrolls (DataTable's virtual mode). Pass null to
+ * stop. Applies to elements created after the call.
+ */
+export function setLayout(fn: ((el: FakeNode) => void) | null) {
+  layout = fn
+}
+
 const { createApp } = createRenderer<FakeNode, FakeNode>({
-  createElement: (tag) => node(tag),
+  createElement: (tag) => {
+    const el = node(tag)
+    layout?.(el)
+    return el
+  },
   createText: (text) => node('#text', text),
   createComment: (text) => node('#comment', text),
   setText: (n, text) => {

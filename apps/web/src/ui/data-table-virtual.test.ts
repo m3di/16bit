@@ -1,7 +1,7 @@
 // @vitest-environment client-node
 import { defineComponent, h, nextTick, reactive } from 'vue'
-import { describe, expect, it } from 'vitest'
-import { activeElement, findAll, fire, mount, type FakeNode } from '../test/fake-dom.ts'
+import { afterEach, describe, expect, it } from 'vitest'
+import { activeElement, findAll, fire, mount, setLayout, type FakeNode } from '../test/fake-dom.ts'
 import type { RowWindows } from './data-table.ts'
 import DataTable, { type TableColumn } from './DataTable.vue'
 
@@ -28,6 +28,7 @@ function setup(rowCount = 1000, loaded = 50) {
         {
           caption: 'Items',
           columns,
+          rows: [],
           mode: 'virtual',
           rowCount,
           height: 400,
@@ -137,6 +138,18 @@ describe('DataTable virtual mode, in use', () => {
     expect(t.selected.map((r) => r.id)).toEqual(['r999'])
   })
 
+  it('lets a click cancel a keyboard move still waiting for its row', async () => {
+    const t = setup(1000, 50)
+    await nextTick()
+    key(t.row(0), 'End')
+    await nextTick()
+    fire(t.row(3), 'click', { target: t.row(3) })
+    t.state.store.set(999, { id: 'r999', title: 'Last' })
+    await nextTick()
+    expect(t.selected.map((r) => r.id)).toEqual(['r3'])
+    expect(t.state.selectedId).toBe('r3')
+  })
+
   it('pages by the rows that fit in the box', async () => {
     const t = setup()
     await nextTick()
@@ -158,5 +171,69 @@ describe('DataTable virtual mode, in use', () => {
     if (!button) throw new Error('no sort button')
     fire(button, 'click')
     expect(t.sorted).toEqual(['stage'])
+  })
+})
+
+describe('DataTable virtual mode, scrolling', () => {
+  afterEach(() => {
+    setLayout(null)
+  })
+
+  // A scroll box the virtualizer can observe: a window for its timers, a 400px height, and
+  // the scroll height a browser would give 50,000 rows under the 36px header.
+  function scrollable() {
+    const win = {
+      setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+      clearTimeout: (id: ReturnType<typeof setTimeout>) => {
+        clearTimeout(id)
+      },
+      requestAnimationFrame: (fn: () => void) => setTimeout(fn, 0),
+      cancelAnimationFrame: (id: ReturnType<typeof setTimeout>) => {
+        clearTimeout(id)
+      },
+    }
+    setLayout((el) => {
+      if (el.tag === 'div')
+        Object.assign(el, {
+          ownerDocument: { defaultView: win },
+          clientWidth: 800,
+          clientHeight: 400,
+          scrollHeight: 36 + 50_000 * 38,
+          scrollLeft: 0,
+        })
+    })
+    const t = setup(50_000)
+    const scrollTo = async (top: number) => {
+      const el = box(t.root)
+      el.scrollTop = top
+      fire(el, 'scroll')
+      await nextTick()
+    }
+    return { ...t, scrollTo }
+  }
+
+  it('asks for the new window when scrolling reaches it', async () => {
+    const t = scrollable()
+    await nextTick()
+    expect(t.windows.map((w) => w.offsets)).toEqual([[0]])
+    // Scrolled 300 rows down, row 299 is at the top under the header: rows 291 to 317 render
+    // (8 above for a quick scroll), all in the window at 200.
+    await t.scrollTo(300 * 38)
+    expect(t.windows.map((w) => w.offsets)).toEqual([[0], [200]])
+    expect(t.rows()[0]?.props['data-index']).toBe(291)
+    // Across a window edge, both windows are asked for.
+    await t.scrollTo(395 * 38)
+    expect(t.windows.at(-1)).toMatchObject({ offsets: [200, 400] })
+  })
+
+  it('asks for nothing while scrolling inside the windows it already asked for', async () => {
+    const t = scrollable()
+    await nextTick()
+    await t.scrollTo(300 * 38)
+    const asked = t.windows.length
+    await t.scrollTo(320 * 38)
+    await t.scrollTo(250 * 38)
+    expect(t.rows()[0]?.props['data-index']).toBe(241)
+    expect(t.windows).toHaveLength(asked)
   })
 })

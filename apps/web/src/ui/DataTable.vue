@@ -51,7 +51,7 @@ export interface TableColumn {
 export type TableMode = 'select' | 'static' | 'virtual'
 
 const {
-  rows = [],
+  rows,
   mode = 'select',
   selectedId = null,
   busy,
@@ -66,10 +66,10 @@ const {
   caption: string
   columns: readonly TableColumn[]
   /**
-   * The rows, in order. In `virtual` mode this may be sparse (holes are rows not loaded yet);
-   * pass `rowAt` instead to read rows from a store.
+   * The rows, in order. In `virtual` mode it may have holes, rows not loaded yet, or be `[]`
+   * with `rowAt` reading rows from a store.
    */
-  rows?: readonly (Row | undefined)[]
+  rows: readonly Row[]
   mode?: TableMode
   /** The selected row. Ignored in `static` mode. */
   selectedId?: string | null
@@ -135,8 +135,6 @@ const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>(
 const items = computed(() => (virtual.value ? virtualizer.value.getVirtualItems() : []))
 const rowOf = (index: number): Row | undefined => (rowAt ? rowAt(index) : rows[index])
 
-/** Every row, outside `virtual` mode. */
-const allRows = computed(() => rows.filter((row): row is Row => row !== undefined))
 /** In `virtual` mode, the rows in view, loaded or not. Keyed by index, so a placeholder keeps
  * its element (and focus) when its row arrives. */
 const bodyRows = computed(() =>
@@ -243,6 +241,9 @@ function onRowKeydown(event: KeyboardEvent, index: number) {
 
 function onVirtualRowClick(event: MouseEvent, index: number, row: Row | undefined) {
   if (inControl(event)) return
+  // A click wins over a keyboard move still waiting for its row to load or render.
+  selectPending.value = -1
+  focusPending.value = -1
   active.value = index
   if (row) emit('select', row)
 }
@@ -377,7 +378,7 @@ defineExpose({
       </tbody>
       <tbody v-else>
         <tr
-          v-for="row in allRows"
+          v-for="row in rows"
           :key="row.id"
           v-bind="rowAttrs(row)"
           class="border-b border-line"
