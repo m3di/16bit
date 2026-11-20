@@ -1,12 +1,6 @@
-import {
-  encodeItemCursor,
-  itemPageSchema,
-  itemQueryResultSchema,
-  type Filter,
-  type Sort,
-} from '@16bit/core'
+import { encodeItemCursor, itemQueryResultSchema, type Filter, type Sort } from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
-import { sql, type Kysely } from 'kysely'
+import { sql, type Kysely, type KyselyPlugin } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { hashAgentSecret, newAgentSecret } from './auth/agent-key.ts'
@@ -176,7 +170,7 @@ function query(body: object, ws = 'w1') {
 async function ids(body: { where?: Filter; sort?: Sort; limit?: number }): Promise<string[]> {
   const res = await query(body)
   expect(res.statusCode, res.body).toBe(200)
-  return itemPageSchema.parse(res.json()).items.map((i) => i.id)
+  return itemQueryResultSchema.parse(res.json()).items.map((i) => i.id)
 }
 
 /** IDs matching a filter, in ID order. */
@@ -426,7 +420,7 @@ describe('paging', () => {
     for (let pages = 0; pages < 20; pages++) {
       const res = await query({ ...body, limit, cursor })
       expect(res.statusCode, res.body).toBe(200)
-      const page = itemPageSchema.parse(res.json())
+      const page = itemQueryResultSchema.parse(res.json())
       expect(page.items.length).toBeLessThanOrEqual(limit)
       seen.push(...page.items.map((i) => i.id))
       cursor = page.nextCursor
@@ -455,7 +449,7 @@ describe('paging', () => {
 
   it('rejects a cursor that does not match the sort', async () => {
     const res = await query({ limit: 1 })
-    const { nextCursor } = itemPageSchema.parse(res.json())
+    const { nextCursor } = itemQueryResultSchema.parse(res.json())
     await expectInvalid(
       { sort: [{ attribute: 'points' }], cursor: nextCursor },
       'This cursor is from the updated order',
@@ -476,7 +470,7 @@ describe('paging', () => {
     // A sort cursor under the default order.
     const sorted = await query({ sort: [{ attribute: 'points' }], limit: 1 })
     await expectInvalid(
-      { cursor: itemPageSchema.parse(sorted.json()).nextCursor },
+      { cursor: itemQueryResultSchema.parse(sorted.json()).nextCursor },
       'This cursor is from the sort order',
     )
   })
@@ -743,6 +737,68 @@ describe('total (D61)', () => {
   })
 })
 
+describe('total and rows from one snapshot (#170, #172)', () => {
+  /**
+   * An app whose database runs `write` once, right after the window statement returns and
+   * before anything else in the same request reads (the total, the `seq`). The write commits
+   * on its own connection, so only the request's snapshot keeps it out of the response.
+   */
+  function appWithWriteAfterWindow(write: () => Promise<void>) {
+    const state = { armed: true, fired: false, window: '' }
+    const hook: KyselyPlugin = {
+      transformQuery({ node, queryId }) {
+        if (
+          state.armed &&
+          node.kind === 'RawNode' &&
+          (node as unknown as { sqlFragments: string[] }).sqlFragments.join('').includes('ORDER BY')
+        ) {
+          state.window = queryId.queryId
+        }
+        return node
+      },
+      async transformResult({ queryId, result }) {
+        if (state.armed && queryId.queryId === state.window) {
+          state.armed = false
+          await write()
+          state.fired = true
+        }
+        return result
+      },
+    }
+    return { hooked: buildApp({ db: appDb.withPlugin(hook) }), state }
+  }
+
+  it.each([
+    ['the counters', { count: true }, 5],
+    // Past the end: an empty window, then a separate count of the filter.
+    ['a separate count', { where: cond('points', 'is_not_empty'), offset: 10, count: true }, 4],
+  ])(
+    'keeps a create committed between the window and %s out of the total',
+    async (_, body, before) => {
+      const { hooked, state } = appWithWriteAfterWindow(() =>
+        createIn('w1', 'f', { title: 'Fig', points: 1 }),
+      )
+      try {
+        const res = await hooked.inject({
+          method: 'POST',
+          url: '/v1/workspaces/w1/query',
+          headers: auth,
+          payload: { from: 'h', limit: 50, ...body },
+        })
+        expect(res.statusCode, res.body).toBe(200)
+        const page = itemQueryResultSchema.parse(res.json())
+        expect(state.fired).toBe(true)
+        expect(page.total).toBe(before)
+        if (!('offset' in body)) expect(page.items).toHaveLength(before)
+        // The write did land: the next read sees it.
+        expect((await result(body)).total).toBe(before + 1)
+      } finally {
+        await hooked.close()
+      }
+    },
+  )
+})
+
 describe('workspace isolation', () => {
   it('matches only the queried workspace’s rows, even with the same folder, attribute, and item IDs', async () => {
     await seedWorkspace('w2')
@@ -751,7 +807,7 @@ describe('workspace isolation', () => {
     const idsIn = async (ws: string, body: object) => {
       const res = await query(body, ws)
       expect(res.statusCode, res.body).toBe(200)
-      return itemPageSchema.parse(res.json()).items.map((i) => `${i.workspaceId}/${i.id}`)
+      return itemQueryResultSchema.parse(res.json()).items.map((i) => `${i.workspaceId}/${i.id}`)
     }
     expect(await idsIn('w2', {})).toEqual(['w2/z', 'w2/a'])
     expect(await idsIn('w2', { where: cond('title', 'contains', 'apple') })).toEqual(['w2/z'])
@@ -789,7 +845,7 @@ describe('query plans (D20)', () => {
     expect(first).not.toMatch(/Sort/)
 
     const res = await query({ limit: 2 })
-    const { nextCursor } = itemPageSchema.parse(res.json())
+    const { nextCursor } = itemQueryResultSchema.parse(res.json())
     const next = await plan({ limit: 2, cursor: nextCursor })
     expect(next).toContain('item_folder_updated_idx')
     expect(next).not.toMatch(/Sort/)
@@ -801,7 +857,7 @@ describe('query plans (D20)', () => {
     expect(first).not.toMatch(/Sort/)
 
     const res = await query({ order: 'number', limit: 2 })
-    const { nextCursor } = itemPageSchema.parse(res.json())
+    const { nextCursor } = itemQueryResultSchema.parse(res.json())
     const next = await plan({ order: 'number', limit: 2, cursor: nextCursor })
     expect(next).toContain('item_folder_number_idx')
     expect(next).toMatch(/Index Cond: .*seq_id < /)

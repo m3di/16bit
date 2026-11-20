@@ -107,7 +107,7 @@ describe('api contracts', () => {
     expect(query(['r1', 'r2', 'r3', 'r4']).success).toBe(false)
     expect(query(['r1', 'r1']).success).toBe(false)
 
-    const page = { items: [item], nextCursor: null }
+    const page = { items: [item], nextCursor: null, seq: 1 }
     expect(itemQueryResultSchema.parse(page)).toEqual(page)
     const linked = { i2: { access: 'read', item }, i3: { access: 'none' } }
     const expanded = itemQueryResultSchema.parse({ ...page, linked, linkedTruncated: false })
@@ -153,9 +153,10 @@ describe('api contracts', () => {
     expect(expand({ expand: 'r 1' }).success).toBe(false)
     expect(expand({ other: 'x' }).success).toBe(false)
 
-    expect(itemReadSchema.parse(item)).toEqual(item)
+    const read = { ...item, seq: 1 }
+    expect(itemReadSchema.parse(read)).toEqual(read)
     const linked = { i2: { access: 'read', item }, i3: { access: 'none' } }
-    expect(itemReadSchema.parse({ ...item, linked, linkedTruncated: false }).linked).toEqual(linked)
+    expect(itemReadSchema.parse({ ...read, linked, linkedTruncated: false }).linked).toEqual(linked)
     expect(
       itemReadSchema.safeParse({ ...item, linked: { i3: { access: 'none', item } } }).success,
     ).toBe(false)
@@ -180,6 +181,7 @@ describe('api contracts', () => {
       attributes: [],
       folderAttributes: [],
       truncated: { folders: false, attributes: false, folderAttributes: false },
+      seq: 0,
     }
     expect(hubDescriptionSchema.safeParse(body).success).toBe(false)
     expect(hubDescriptionSchema.parse({ ...body, hubRole: 'viewer' }).hubRole).toBe('viewer')

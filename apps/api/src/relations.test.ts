@@ -2,7 +2,6 @@ import {
   backlinkPageSchema,
   itemQueryResultSchema,
   itemReadSchema,
-  itemSchema,
   type HubRole,
   type Item,
 } from '@16bit/core'
@@ -14,6 +13,7 @@ import { buildApp, type AppOptions } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { sessionCookie } from './db/test-session.ts'
+import { itemOf } from './db/test-responses.ts'
 
 // Relations, the link table, auto IDs, expand and backlinks (#47, D7, D11) on a real Postgres.
 //
@@ -164,7 +164,7 @@ async function create(
     payload: { id, folderId, values },
   })
   expect(res.statusCode, res.body).toBe(201)
-  return itemSchema.parse(res.json())
+  return itemOf(res.json())
 }
 
 function createRaw(app: FastifyInstance, id: string, folderId: string, values: object) {
@@ -278,7 +278,7 @@ describe('link maintenance', () => {
 
     res = await patch(owner, 'c', c.version + 1, { rel: null, cross: [] })
     expect(res.statusCode, res.body).toBe(200)
-    expect(itemSchema.parse(res.json()).values).toEqual({ num: 3 })
+    expect(itemOf(res.json()).values).toEqual({ num: 3 })
     expect(await linksFrom('c')).toEqual([])
   })
 
@@ -375,7 +375,7 @@ describe('link maintenance', () => {
     // Re-sending the stored ID next to other changes is fine, and the link stays.
     const res = await patch(owner, 'c', await versionOf('c'), { secret: ['s'], rel: ['a', 'b'] })
     expect(res.statusCode, res.body).toBe(200)
-    expect(itemSchema.parse(res.json()).values['secret']).toEqual(['s'])
+    expect(itemOf(res.json()).values['secret']).toEqual(['s'])
     expect(await linksFrom('c')).toEqual(['rel:a', 'rel:b', 'secret:s'])
 
     // Adding another unreadable item is refused, and only that ID is named.
@@ -414,7 +414,7 @@ describe('link maintenance', () => {
     await create(owner, 'd', 'h1')
     let res = await patch(owner, 'c', c.version, { rel: ['a', 'b', 'd'] })
     expect(res.statusCode, res.body).toBe(200)
-    expect(itemSchema.parse(res.json()).values['rel']).toEqual(['a', 'd'])
+    expect(itemOf(res.json()).values['rel']).toEqual(['a', 'd'])
     expect(await linksFrom('c')).toEqual(['rel:a', 'rel:d'])
     const revision = await db
       .selectFrom('revision')
@@ -427,7 +427,7 @@ describe('link maintenance', () => {
     // Only stale IDs left: the value is cleared, as `[]` would be.
     res = await patch(owner, 'c', c.version + 1, { one: ['b'] })
     expect(res.statusCode, res.body).toBe(200)
-    expect(itemSchema.parse(res.json()).values).not.toHaveProperty('one')
+    expect(itemOf(res.json()).values).not.toHaveProperty('one')
 
     // A deleted ID that was never stored in this attribute is new, so it is still a 422.
     const errors = valueErrors(await patch(owner, 'c', c.version + 2, { one: ['b'] }))
@@ -462,7 +462,7 @@ describe('link maintenance', () => {
     // A live target left alongside the stale one is enough.
     const res = await patch(owner, 'c', c.version, { rel: ['b', 'a'] })
     expect(res.statusCode, res.body).toBe(200)
-    expect(itemSchema.parse(res.json()).values['rel']).toEqual(['a'])
+    expect(itemOf(res.json()).values['rel']).toEqual(['a'])
     expect(await linksFrom('c')).toEqual(['rel:a'])
   })
 
@@ -605,9 +605,9 @@ describe('expand', () => {
     expect(body.linked).toEqual({})
   })
 
-  it('has no `linked` without expand, so the M0 page shape is unchanged', async () => {
+  it('has no `linked` without expand: the M0 page shape plus seq (D58)', async () => {
     const res = await query(owner, {})
-    expect(Object.keys(res.json<object>()).sort()).toEqual(['items', 'nextCursor'])
+    expect(Object.keys(res.json<object>()).sort()).toEqual(['items', 'nextCursor', 'seq'])
   })
 
   it('refuses attributes that are not relations of the folder', async () => {
@@ -671,7 +671,7 @@ describe('expand on a single item (#73)', () => {
     for (const qs of ['', '?expand=']) {
       const res = await read(owner, 'c', qs)
       expect(res.statusCode, res.body).toBe(200)
-      expect(itemSchema.parse(res.json()).id).toBe('c')
+      expect(itemOf(res.json()).id).toBe('c')
     }
   })
 

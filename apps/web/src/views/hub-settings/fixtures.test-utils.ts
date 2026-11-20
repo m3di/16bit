@@ -67,6 +67,7 @@ export const attributeList = (): Attribute[] => [
 export function description(hubRole: HubRole = 'hub_admin'): HubDescription {
   return {
     hub: { ...folderOf(HUB, null, 'Build', 5), parentId: null, titleAttributeId: 'title' },
+    seq: 0,
     hubRole,
     folders: [
       folderOf('backlog', HUB, 'Backlog', 3),

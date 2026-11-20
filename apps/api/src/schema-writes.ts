@@ -38,6 +38,7 @@ import {
 } from './http.ts'
 import { appendRevisions } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
+import { notifyHub } from './notify.ts'
 import { lockHubSchema } from './schema-lock.ts'
 
 // Schema writes for hub settings (#112): the hub itself, its folders and attributes, which
@@ -145,6 +146,7 @@ export async function updateHub(
   await requireHub(trx, workspaceId, hubId)
   const hubGrant = await ownGrant(trx, workspaceId, hubId, me.id, 'share')
   enforce(can(me, 'hub.rename', { hubGrant }), 'Hub')
+  await notifyHub(trx, workspaceId, hubId)
 
   if (input.titleAttributeId) {
     // Step 3, before the hub row: an attribute delete holds the attribute and then takes the
@@ -213,6 +215,9 @@ export async function deleteHub(
   await sql`SAVEPOINT delete_hub`.execute(trx)
   try {
     await sql`SELECT delete_hub(${hubId}, ${version})`.execute(trx)
+    // delete_hub() logs its grant and key changes in SQL, not through appendAccessLog: one
+    // hub notice tells the feed the hub is gone (D58).
+    await notifyHub(trx, workspaceId, hubId)
   } catch (error) {
     await sql`ROLLBACK TO SAVEPOINT delete_hub`.execute(trx)
     switch (sqlState(error)) {
@@ -323,6 +328,7 @@ export async function createFolder(
 ): Promise<Folder> {
   await requireHub(trx, workspaceId, hubId)
   await requireManage(trx, workspaceId, me, hubId, 'Hub')
+  await notifyHub(trx, workspaceId, hubId)
   const hub = await lockHubRow(trx, workspaceId, hubId)
   const parent = await trx
     .selectFrom('folder')
@@ -374,6 +380,7 @@ export async function updateFolder(
 ): Promise<Folder> {
   const hubId = await hubOfFolder(trx, workspaceId, folderId)
   await requireManage(trx, workspaceId, me, hubId, 'Folder')
+  await notifyHub(trx, workspaceId, hubId)
   if (folderId === hubId) throw invalid('A hub is changed with PATCH /hubs/:hubId')
 
   if (input.parentId !== undefined) {
@@ -435,6 +442,7 @@ export async function deleteFolder(
 ): Promise<void> {
   const hubId = await hubOfFolder(trx, workspaceId, folderId)
   await requireManage(trx, workspaceId, me, hubId, 'Folder')
+  await notifyHub(trx, workspaceId, hubId)
   if (folderId === hubId) throw invalid('A hub is deleted with DELETE /hubs/:hubId')
 
   // The hub row first (step 5): an item create in this folder has then either committed, and
@@ -542,6 +550,7 @@ export async function setFolderAttributes(
       required: a.required,
     }))
   } else {
+    await notifyHub(trx, workspaceId, hubId)
     let detach = trx
       .deleteFrom('folder_attribute')
       .where('workspace_id', '=', workspaceId)
@@ -620,6 +629,7 @@ export async function createAttribute(
 ): Promise<Attribute> {
   await requireHub(trx, workspaceId, hubId)
   await requireManage(trx, workspaceId, me, hubId, 'Hub')
+  await notifyHub(trx, workspaceId, hubId)
   const parsed = attributeSchema.safeParse({
     ...input,
     id: input.id ?? randomUUID(),
@@ -876,6 +886,7 @@ export async function updateAttribute(
 ): Promise<Attribute> {
   const hubId = await hubOfAttribute(trx, workspaceId, attributeId)
   await requireManage(trx, workspaceId, me, hubId, 'Attribute')
+  await notifyHub(trx, workspaceId, hubId)
   // Which options go is decided on the attribute as the client saw it. Every write moves the
   // version, so if the locked row below still has that version, it has these options too.
   const seen = await trx
@@ -951,6 +962,7 @@ export async function deleteAttribute(
 ): Promise<void> {
   const hubId = await hubOfAttribute(trx, workspaceId, attributeId)
   await requireManage(trx, workspaceId, me, hubId, 'Attribute')
+  await notifyHub(trx, workspaceId, hubId)
   await lockHubSchema(trx, workspaceId, hubId, 'exclusive')
   const row = await lockAttribute(trx, workspaceId, attributeId, query.version, 'update')
   const attribute = toAttribute(row)

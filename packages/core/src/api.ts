@@ -34,10 +34,9 @@ export const seqSchema = z.int().min(0)
 
 /**
  * The workspace's `seq` as of a read: a client keeping the response live subscribes with it as
- * `after` (D58). It is never newer than the rows it came with. Optional until the API sends it
- * (M3-03); a client that gets none must not subscribe from that read.
+ * `after` (D58). It is never newer than the rows it came with.
  */
-const responseSeq = { seq: seqSchema.optional() }
+const responseSeq = { seq: seqSchema }
 
 /**
  * A client's ID for one item write, so a retry is safe (D59). Unique per workspace and actor:
@@ -414,6 +413,11 @@ export const API_ERROR_CODES = [
   'conflict',
   /** `POST /items` with an `id` that is already used in the workspace. */
   'id_taken',
+  /**
+   * An item write whose `clientMutationId` the caller already used for another item or
+   * another operation (422, D59).
+   */
+  'mutation_id_reused',
   /**
    * `POST /hubs` with an `idPrefix` another hub in the workspace has (D56). A deleted hub's
    * prefix is free again.

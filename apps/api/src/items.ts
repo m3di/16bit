@@ -69,6 +69,17 @@ const REVISION_VERSION_KEY = 'revision_workspace_id_item_id_version_key'
 // SHARE does not conflict with another write's own row lock (FOR NO KEY UPDATE), only with a
 // delete, and a delete takes only its own item row before the hub, folder and workspace rows.
 
+/**
+ * Thrown when a write's revision finds its `clientMutationId` already taken by the same actor
+ * (D59): a retry that raced its first attempt and lost. The write's transaction must roll back;
+ * the route then answers as the first attempt did (`replayMutation`).
+ */
+export class MutationReplayed extends Error {
+  constructor() {
+    super('This clientMutationId was already used')
+  }
+}
+
 export async function appendRevision(
   trx: Trx,
   workspaceId: string,
@@ -77,6 +88,7 @@ export async function appendRevision(
   version: number,
   patch: RevisionPatch,
   actor: string,
+  clientMutationId?: string,
 ): Promise<number> {
   const { seq } = await trx
     .updateTable('workspace')
@@ -94,8 +106,21 @@ export async function appendRevision(
       version,
       patch: JSON.stringify(patch),
       actor,
+      client_mutation_id: clientMutationId ?? null,
     })
-    .execute()
+    // The partial unique index (0012) is the arbiter only if its WHERE is repeated here. A
+    // racing retry waits for the first attempt, then inserts nothing.
+    .onConflict((oc) =>
+      oc
+        .columns(['workspace_id', 'actor', 'client_mutation_id'])
+        .where('client_mutation_id', 'is not', null)
+        .doNothing(),
+    )
+    .returning('seq')
+    .executeTakeFirst()
+    .then((row) => {
+      if (!row) throw new MutationReplayed()
+    })
   await sql`SELECT pg_notify(${REVISION_CHANNEL}, ${`${workspaceId}:${String(seq)}`})`.execute(trx)
   return seq
 }
@@ -417,7 +442,12 @@ export async function createItem(
   db: Db,
   workspaceId: string,
   actor: string,
-  input: { id?: string | undefined; folderId: string; values: Record<string, unknown> },
+  input: {
+    id?: string | undefined
+    folderId: string
+    values: Record<string, unknown>
+    clientMutationId?: string | undefined
+  },
 ): Promise<Item> {
   return inTransaction(db, async (trx) => {
     const folder = await trx
@@ -496,6 +526,7 @@ export async function createItem(
         row.version,
         { op: 'create', folderId: folder.id, values: stored },
         actor,
+        input.clientMutationId,
       )
     } catch (error) {
       // The ID belonged to an item since deleted in a hub the writer can't read, so the check
@@ -567,6 +598,7 @@ export async function patchItem(
       row.version,
       { op: 'update', values: patch },
       actor,
+      input.clientMutationId,
     )
     return toItem(row)
   })
@@ -578,6 +610,7 @@ export async function deleteItem(
   actor: string,
   id: string,
   version: number,
+  clientMutationId?: string,
 ): Promise<void> {
   await inTransaction(db, async (trx) => {
     const row = await trx
@@ -596,7 +629,16 @@ export async function deleteItem(
     // revision is checked against the deleted item by revision_guard (migration 0008).
     await bumpCounts(trx, workspaceId, row.hub_id, row.folder_id, -1)
     // The delete is the item's last version, so `(item_id, version)` stays unique in the log.
-    await appendRevision(trx, workspaceId, row.hub_id, id, row.version + 1, { op: 'delete' }, actor)
+    await appendRevision(
+      trx,
+      workspaceId,
+      row.hub_id,
+      id,
+      row.version + 1,
+      { op: 'delete' },
+      actor,
+      clientMutationId,
+    )
   })
 }
 
@@ -791,13 +833,13 @@ export async function queryItems(
   actor: Subject,
   query: ItemQuery,
   caps: { maxLinkedItems?: number } = {},
-): Promise<ItemQueryResult> {
+): Promise<Omit<ItemQueryResult, 'seq'>> {
   const { statement, keys, order, expand, folderId, where, totalInWindow } =
     await itemQueryStatement(db, workspaceId, query)
   const { rows } = await statement.execute(db)
   const page = rows.slice(0, query.limit)
   const last = page.at(-1)
-  const result: ItemQueryResult = {
+  const result: Omit<ItemQueryResult, 'seq'> = {
     items: page.map((row) => toItem(row)),
     nextCursor: rows.length > query.limit && last ? nextItemCursor(order, keys, last) : null,
   }
@@ -940,7 +982,7 @@ export async function expandItem(
   item: Item,
   expand: string[],
   caps: { maxLinkedItems?: number } = {},
-): Promise<ItemRead> {
+): Promise<Omit<ItemRead, 'seq'>> {
   const definitions = await folderDefinitions(db, workspaceId, item.folderId)
   const compiled = compileOrThrow(definitions, { where: null, sort: [], expand })
   const { linked, truncated } = await linkedItems(

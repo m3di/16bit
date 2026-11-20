@@ -16,13 +16,22 @@ export const isScoped = (db: Kysely<Database>): boolean =>
 /**
  * Runs `fn` in a transaction scoped to `principalId` in `workspaceId`. The settings end with the
  * transaction, so a pooled connection never carries them into the next request.
+ *
+ * Transactions run at READ COMMITTED. With `snapshot`, it is `REPEATABLE READ READ ONLY`
+ * instead: every statement sees one snapshot, so a read of the workspace `seq` is never newer
+ * than the rows read with it (D58).
  */
 export async function withScope<T>(
   db: Kysely<Database>,
   scope: { workspaceId: string; principalId: string },
   fn: (trx: Transaction<Database>) => Promise<T>,
+  options: { snapshot?: boolean } = {},
 ): Promise<T> {
-  return db.transaction().execute(async (trx) => {
+  let transaction = db.transaction()
+  if (options.snapshot) {
+    transaction = transaction.setIsolationLevel('repeatable read').setAccessMode('read only')
+  }
+  return transaction.execute(async (trx) => {
     await sql`
       SELECT set_config('app.workspace_id', ${scope.workspaceId}, true),
              set_config('app.principal_id', ${scope.principalId}, true)
@@ -70,4 +79,22 @@ export async function unsafeRoleReason(db: Kysely<Database>): Promise<string | n
   if (row.owner) return `role ${row.role} owns the tables, so row-level security does not apply`
   if (!row.member) return `role ${row.role} is not a member of ${APP_ROLE}`
   return null
+}
+
+/**
+ * The workspace's `seq` (D58): the last revision number handed out, `0` before the first. A
+ * write holds the workspace row from taking its number until it commits, so every revision up
+ * to this one is committed in the snapshot that reads it. Read it in the same transaction as
+ * the rows it goes with: under `snapshot` anywhere in it, at READ COMMITTED before the rows.
+ */
+export async function workspaceSeq(
+  trx: Transaction<Database>,
+  workspaceId: string,
+): Promise<number> {
+  const row = await trx
+    .selectFrom('workspace')
+    .select(sql<number>`next_revision_seq - 1`.as('seq'))
+    .where('id', '=', workspaceId)
+    .executeTakeFirstOrThrow()
+  return row.seq
 }

@@ -1,10 +1,12 @@
 import { sql, type Transaction } from 'kysely'
 import type { Database, HubGrantTable } from './db/database.ts'
 import { HttpError } from './http.ts'
+import { ACCESS_CHANNEL, notify } from './notify.ts'
 
 /**
  * Appends to `access_log` (D48), taking `seq` from `workspace.next_access_seq`. Call it in the
  * same transaction as the access change; the row lock on the workspace orders concurrent ones.
+ * It also sends an `access` NOTIFY (notify.ts), delivered on commit.
  *
  * The actor's principal row is locked FOR KEY SHARE before the workspace row (#92, lock order
  * in members.ts). The access_log row's foreign key takes that lock anyway; taken after the
@@ -51,6 +53,15 @@ export async function appendAccessLog(
       detail: JSON.stringify(entry.detail ?? {}),
     })
     .execute()
+  // Every access change is logged here, so the feed hears of each one on commit (D58).
+  const hubId = entry.detail?.['hubId']
+  await notify(trx, ACCESS_CHANNEL, {
+    workspaceId: entry.workspaceId,
+    seq,
+    action: entry.action,
+    target: entry.target,
+    hubId: typeof hubId === 'string' ? hubId : null,
+  })
   return seq
 }
 
