@@ -9,6 +9,7 @@ packages/core     shared types, attribute type contracts, block registry, query 
 apps/api          HTTP API, WebSocket, MCP server, migrations, seed scripts
 apps/web          Vue dashboard
 e2e               Playwright tests
+examples/agent-memory  reserved for the outside team's reference layer (D62); the core team does not build it
 design/mockups    reference screens from the design phase (not shipped)
 docs              product, decisions, architecture, design, roadmap, workflow
 ```
