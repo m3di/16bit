@@ -1,4 +1,4 @@
-import type { AttributeTypeName, ItemValues } from '@16bit/core'
+import type { AttributeTypeName, ItemCause, ItemValues } from '@16bit/core'
 import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely'
 import { Migrator } from 'kysely/migration'
 import pg from 'pg'
@@ -168,7 +168,8 @@ export interface RevisionTable {
   version: number
   patch: Json<Record<string, unknown>>
   actor: string
-  cause: string | null
+  /** Why the write happened (D63), the shape of `itemCauseSchema`; jsonb since 0014. */
+  cause: Json<ItemCause | null>
   at: Timestamp
   /** The client's ID for the write (D59), unique per workspace and actor where set (0012). */
   client_mutation_id: string | null
