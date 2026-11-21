@@ -1,5 +1,5 @@
 import type { Attribute, Item } from '@16bit/core'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   attributes,
   fakeApi,
@@ -26,6 +26,38 @@ import {
 // The store is one per workspace and tab; every test starts with an empty one.
 beforeEach(resetWorkspaceStores)
 
+/**
+ * Holds the next `yieldToMain`, so a window read stops part-way through its slices (issue 218).
+ * Every other yield is the real one.
+ */
+const yields = vi.hoisted(() => ({ next: null as null | (() => Promise<void>) }))
+vi.mock('../../api/yield.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/yield.ts')>()
+  return {
+    yieldToMain: () => {
+      const next = yields.next
+      yields.next = null
+      return next ? next() : actual.yieldToMain()
+    },
+  }
+})
+/** `at` resolves when a read reaches the next yield; it waits there until `release`. */
+function holdNextYield() {
+  let reached: () => void = () => undefined
+  const at = new Promise<void>((resolve) => {
+    reached = resolve
+  })
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  yields.next = () => {
+    reached()
+    return held
+  }
+  return { at, release }
+}
+
 /** A window of the folder query (D61), with the folder's total. */
 const page = (items: Item[], total = items.length) =>
   json(withSeq({ items, nextCursor: null, total }))
@@ -33,7 +65,10 @@ const page = (items: Item[], total = items.length) =>
 /** The table shows rows `start` to `end`, held by the windows at `offsets`. */
 const inView = (start: number, end: number, offsets: number[]) => ({ start, end, offsets })
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+/** Lets a window read finish: it checks and takes in its rows over several tasks (issue 218). */
+const tick = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 /** A promise that resolves when `release` is called, to hold a request open. */
 function gate<T>() {
@@ -138,6 +173,39 @@ describe('useItems: reading', () => {
     slow.release(page([item('old', 2)]))
     await first
     expect(rowsOf(s).map((r) => r.id)).toEqual(['new'])
+  })
+
+  it('drops a window part-way through its slices when another folder opens', async () => {
+    const slow = gate<Response>()
+    const old = Array.from({ length: 120 }, (_, i) => item(`o${String(i)}`, 200 - i))
+    const api = fakeApi((call) =>
+      (call.body as { from: string }).from === 'old' ? slow.promise : page([item('new', 1)]),
+    )
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    const first = s.openFolder('old')
+    const pause = holdNextYield()
+    slow.release(page(old))
+    // The first 50 items are checked; the window waits between slices.
+    await pause.at
+    await s.openFolder('new')
+    pause.release()
+    await first
+    await tick()
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['new'])
+    // It stopped at its next slice: its rows were never taken into the store.
+    expect(s.view('o0')).toBeUndefined()
+  })
+
+  it('checks every item of a window, in slices, and refuses a window with a bad one', async () => {
+    const good = Array.from({ length: 120 }, (_, i) => item(`i${String(i)}`, 200 - i))
+    const bad = [...good.slice(0, 70), { ...good[70], version: 'two' }, ...good.slice(71)]
+    const ok = useItems('w', () => 'BLD', fakeApi(() => page(good)).fetchFn)
+    await ok.openFolder('bld')
+    expect(rowsOf(ok)).toHaveLength(120)
+    // The bad item is in the second slice of 50: the window is still refused as a whole.
+    const refused = useItems('w2', () => 'BLD', fakeApi(() => page(bad as Item[])).fetchFn)
+    await refused.openFolder('bld')
+    expect(refused.list.value).toMatchObject({ state: 'error', error: { code: 'bad_response' } })
   })
 
   it('shows the empty state for a folder with no items', async () => {

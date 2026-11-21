@@ -49,7 +49,10 @@ const changed = (it: Item, seq: number, clientMutationId?: string): Change => ({
 })
 const removed = (id: string, seq: number): Change => ({ seq, hubId: 'bld', itemId: id, item: null })
 const ids = (s: ReturnType<typeof useItems>) => rowsOf(s).map((r) => r.id)
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+/** Lets reads finish: a window is checked and taken in over several tasks (issue 218). */
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 describe('live reads (D58)', () => {
   it('subscribes the hub with the seq the folder query came with', async () => {

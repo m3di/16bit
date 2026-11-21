@@ -77,9 +77,9 @@ describe('DataTable virtual mode, in use', () => {
   it('renders only the rows in view and asks for the window that holds them', async () => {
     const t = setup(50_000)
     await nextTick()
-    // 400px box, 36px header, 38px rows: 10 rows in view and 8 rendered below for a quick scroll.
-    expect(t.rows()).toHaveLength(18)
-    expect(t.windows).toEqual([{ start: 0, end: 18, offsets: [0] }])
+    // 400px box, 36px header, 38px rows: 10 rows in view and 2 rendered below for a quick scroll.
+    expect(t.rows()).toHaveLength(12)
+    expect(t.windows).toEqual([{ start: 0, end: 12, offsets: [0] }])
   })
 
   it('selects a row on click, but not a placeholder or a click on a link', async () => {
@@ -255,11 +255,11 @@ describe('DataTable virtual mode, scrolling', () => {
     const t = scrollable()
     await nextTick()
     expect(t.windows.map((w) => w.offsets)).toEqual([[0]])
-    // Scrolled 300 rows down, row 299 is at the top under the header: rows 291 to 317 render
-    // (8 above for a quick scroll), all in the window at 200.
+    // Scrolled 300 rows down, row 299 is at the top under the header: rows 297 to 311 render
+    // (2 above for a quick scroll), all in the window at 200.
     await t.scrollTo(300 * 38)
     expect(t.windows.map((w) => w.offsets)).toEqual([[0], [200]])
-    expect(t.rows()[0]?.props['data-index']).toBe(291)
+    expect(t.rows()[0]?.props['data-index']).toBe(297)
     // Across a window edge, both windows are asked for.
     await t.scrollTo(395 * 38)
     expect(t.windows.at(-1)).toMatchObject({ offsets: [200, 400] })
@@ -273,11 +273,11 @@ describe('DataTable virtual mode, scrolling', () => {
     const focused = t.row(1)
     expect(activeElement(t.root)).toBe(focused)
     await t.scrollTo(300 * 38)
-    // Row 1 stays where it belongs, between a spacer for row 0 and one up to row 291, and
+    // Row 1 stays where it belongs, between a spacer for row 0 and one up to row 297, and
     // keeps focus, so the next arrow key moves on from it.
     expect(t.rows().map((r) => r.props['data-index'])).toEqual([
       1,
-      ...Array.from({ length: 27 }, (_, i) => 291 + i),
+      ...Array.from({ length: 15 }, (_, i) => 297 + i),
     ])
     expect(t.row(1)).toBe(focused)
     expect(activeElement(t.root)).toBe(focused)
@@ -324,7 +324,7 @@ describe('DataTable virtual mode, scrolling', () => {
     const asked = t.windows.length
     await t.scrollTo(320 * 38)
     await t.scrollTo(250 * 38)
-    expect(t.rows()[0]?.props['data-index']).toBe(241)
+    expect(t.rows()[0]?.props['data-index']).toBe(247)
     expect(t.windows).toHaveLength(asked)
   })
 })
