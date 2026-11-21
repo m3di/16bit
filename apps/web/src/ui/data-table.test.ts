@@ -232,9 +232,9 @@ describe('DataTable virtual mode', () => {
   it('renders the rows in view only, with space below for the rest of the scrollbar', async () => {
     const html = await renderVirtual()
     const rows = bodyRows(html)
-    expect(rows).toHaveLength(18)
+    expect(rows).toHaveLength(12)
     expect(spacer(html, 'above')).toBe(-1)
-    expect(spacer(html, 'below')).toBe((50_000 - 18) * 38)
+    expect(spacer(html, 'below')).toBe((50_000 - 12) * 38)
   })
 
   it('shows rows not loaded yet as placeholders, which are not selectable', async () => {

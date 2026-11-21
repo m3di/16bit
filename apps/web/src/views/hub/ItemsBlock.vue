@@ -14,7 +14,7 @@ import {
   type Reorder,
   type SortKey,
 } from './useItems.ts'
-import ValueCell from './ValueCell.vue'
+import { ValueCell } from './value-cell.ts'
 
 const {
   folderName,
