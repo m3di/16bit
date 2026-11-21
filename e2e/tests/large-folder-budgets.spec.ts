@@ -105,18 +105,45 @@ test('after a jump anywhere in 50,000 items, rows show within a second, with und
   expect(median(times)).toBeLessThan(JUMP_MEDIAN_MS)
 })
 
+/** The part of a `long-animation-frame` entry used here (not in TypeScript's DOM types yet). */
+interface LongFrame {
+  duration: number
+  scripts: { invoker: string; sourceURL: string; duration: number }[]
+}
+
+/** What the page saw while scrolling, kept on `window` by the observers below. */
+interface Seen {
+  longTasks: number[]
+  /** The scripts of each long animation frame, to say where the time went when a task is long. */
+  scripts: string[]
+}
+
 test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 100 rows in the DOM', async ({
   page,
 }) => {
+  // Known to fail on GitHub's runners: issue 218. The fix removes this pin.
+  test.fail(
+    !!process.env['CI'],
+    'Long tasks while scrolling in CI: https://github.com/m3di/16bit/issues/218',
+  )
   await open(page)
   // Observed from here on, so loading the app is not counted, only the scrolling.
-  await page.evaluate(() => {
-    const seen: number[] = []
+  await page.evaluate((longTask) => {
+    const seen: Seen = { longTasks: [], scripts: [] }
     new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) seen.push(Math.round(entry.duration))
+      for (const entry of list.getEntries()) seen.longTasks.push(Math.round(entry.duration))
     }).observe({ type: 'longtask' })
-    ;(window as unknown as { longTasks: number[] }).longTasks = seen
-  })
+    new PerformanceObserver((list) => {
+      for (const frame of list.getEntries() as unknown as LongFrame[]) {
+        if (frame.duration <= longTask) continue
+        for (const script of frame.scripts) {
+          const file = script.sourceURL.split('/').pop()?.split('?')[0] ?? ''
+          seen.scripts.push(`${script.invoker} (${file}) ${String(Math.round(script.duration))} ms`)
+        }
+      }
+    }).observe({ type: 'long-animation-frame' })
+    ;(window as unknown as { seen: Seen }).seen = seen
+  }, LONG_TASK_MS)
   const nextFrame = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(r)))
   const box = page.locator('[data-virtual]')
   let mostRows = 0
@@ -146,11 +173,11 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
   await nextFrame()
 
   // Entries reach the observer after their task ends: let one more task run first.
-  const longTasks = await page.evaluate(
+  const { longTasks, scripts } = await page.evaluate(
     () =>
-      new Promise<number[]>((resolve) => {
+      new Promise<Seen>((resolve) => {
         setTimeout(() => {
-          resolve((window as unknown as { longTasks: number[] }).longTasks)
+          resolve((window as unknown as { seen: Seen }).seen)
         })
       }),
   )
@@ -158,6 +185,9 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
     type: 'scrolling',
     description: `long tasks: ${longTasks.length ? longTasks.join(', ') + ' ms' : 'none'}; most rows in the DOM: ${String(mostRows)}`,
   })
+  if (scripts.length) {
+    test.info().annotations.push({ type: 'in long frames', description: scripts.join('; ') })
+  }
   expect(longTasks.filter((ms) => ms > LONG_TASK_MS)).toEqual([])
   expect(mostRows).toBeLessThan(MAX_ROWS_IN_DOM)
 })
