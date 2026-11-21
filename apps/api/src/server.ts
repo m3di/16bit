@@ -23,7 +23,13 @@ const refuseDevPassword = devPasswordRefused(process.env)
 if (process.env['NODE_ENV'] === 'production' && !refuseDevPassword) {
   console.warn("api: ALLOW_DEV_PASSWORD=1, the seeds' published password signs in. Local only.")
 }
-const app = buildApp({ db, webRoot, secureCookies, refuseDevPassword })
+const app = buildApp({
+  db,
+  webRoot,
+  secureCookies,
+  refuseDevPassword,
+  feed: { listenUrl: databaseUrl },
+})
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`api received ${signal}, closing`)

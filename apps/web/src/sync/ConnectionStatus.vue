@@ -13,5 +13,9 @@ defineProps<{ status: FeedStatus }>()
       <StatusDot tone="warning" label="Offline" />
       <span class="sr-only">Live updates are paused while the connection comes back.</span>
     </template>
+    <template v-else-if="status === 'stopped'">
+      <StatusDot tone="warning" label="Offline" />
+      <span class="sr-only">Live updates have stopped. Reload the page to see changes.</span>
+    </template>
   </span>
 </template>

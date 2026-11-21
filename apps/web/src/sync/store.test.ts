@@ -128,6 +128,7 @@ describe('workspace store: the feed', () => {
     socket()?.push({
       type: 'changes',
       seq: 5,
+      hubIds: ['bld'],
       changes: [
         { seq: 4, hubId: 'bld', itemId: 'i1', item: at('i1', 2, 'Mine'), clientMutationId: MINE },
         { seq: 5, hubId: 'bld', itemId: 'i2', item: null },

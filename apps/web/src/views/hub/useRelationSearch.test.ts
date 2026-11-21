@@ -1,6 +1,6 @@
 import type { HubDescription } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
-import { attributes, description, fakeApi, item, json } from './fixtures.test-utils.ts'
+import { attributes, description, fakeApi, item, json, withSeq } from './fixtures.test-utils.ts'
 import { PICKER_PAGE, useRelationSearch } from './useRelationSearch.ts'
 
 const indexed: HubDescription = {
@@ -12,7 +12,7 @@ const results = [item('a', 1, { title: 'Alpha' }), item('b', 2, { title: 'Beta' 
 
 describe('useRelationSearch', () => {
   it('searches the title on the server when it is indexed', async () => {
-    const api = fakeApi(() => json({ items: results, nextCursor: null }))
+    const api = fakeApi(() => json(withSeq({ items: results, nextCursor: null })))
     const s = useRelationSearch('w', () => indexed, api.fetchFn)
     s.text.value = ' alp '
     await s.search()
@@ -42,7 +42,7 @@ describe('useRelationSearch', () => {
   })
 
   it('filters loaded items itself when the title is not indexed', async () => {
-    const api = fakeApi(() => json({ items: results, nextCursor: 'c1' }))
+    const api = fakeApi(() => json(withSeq({ items: results, nextCursor: 'c1' })))
     const s = useRelationSearch('w', () => description, api.fetchFn)
     s.text.value = 'bet'
     await s.search()
@@ -55,7 +55,7 @@ describe('useRelationSearch', () => {
   })
 
   it('searches another folder of the target hub', async () => {
-    const api = fakeApi(() => json({ items: [], nextCursor: null }))
+    const api = fakeApi(() => json(withSeq({ items: [], nextCursor: null })))
     const s = useRelationSearch('w', () => description, api.fetchFn)
     s.setFolder('b')
     await new Promise((r) => setTimeout(r, 0))

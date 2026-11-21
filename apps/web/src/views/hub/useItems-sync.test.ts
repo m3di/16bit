@@ -1,14 +1,14 @@
 import type { Change, Item } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
 import { liveStore } from '../../sync/fake-feed.test-utils.ts'
-import { fakeApi, item, json, type Call } from './fixtures.test-utils.ts'
+import { fakeApi, item, json, withSeq, type Call } from './fixtures.test-utils.ts'
 import { useItems } from './useItems.ts'
 
 // The folder list, the panel and the item page on the workspace store with a live feed
 // (D58, D59, D60), the feed running on a fake socket.
 
-const page = (items: Item[], seq?: number, nextCursor: string | null = null) =>
-  json(seq === undefined ? { items, nextCursor } : { items, nextCursor, seq })
+const page = (items: Item[], seq: number, nextCursor: string | null = null) =>
+  json({ items, nextCursor, seq })
 
 /** A promise that resolves when `release` is called, to hold a request open. */
 function gate<T>() {
@@ -31,7 +31,12 @@ async function live(query: Handler, other: Handler = () => json({}, 500)) {
   return { s, calls: api.calls, ...feed }
 }
 
-const changes = (seq: number, list: Change[]) => ({ type: 'changes' as const, seq, changes: list })
+const changes = (seq: number, list: Change[]) => ({
+  type: 'changes' as const,
+  seq,
+  hubIds: ['bld'],
+  changes: list,
+})
 const changed = (it: Item, seq: number, clientMutationId?: string): Change => ({
   seq,
   hubId: it.hubId,
@@ -52,12 +57,6 @@ describe('live reads (D58)', () => {
   it('subscribes an empty folder too, by the hub it belongs to', async () => {
     const { socket } = await live(() => page([], 7))
     expect(socket()?.sent).toEqual([{ type: 'subscribe', hubId: 'bld', after: 7 }])
-  })
-
-  it('subscribes nothing while the API sends no seq', async () => {
-    const { socket, store } = await live(() => page([item('i1', 1)]))
-    expect(socket()).toBeUndefined()
-    expect(store.status.value).toBe('idle')
   })
 
   it('subscribes an item opened by ID with the seq of its read', async () => {
@@ -115,7 +114,7 @@ describe('applying changes', () => {
   it('never lets a stale version or a late event overwrite a newer item', async () => {
     const { s, socket } = await live(
       () => page([item('i1', 1, { title: 'A' }, 1)], 10),
-      () => json(item('i1', 1, { title: 'Mine' }, 3)),
+      () => json(withSeq(item('i1', 1, { title: 'Mine' }, 3), 13)),
     )
     expect(await s.save('i1', { title: 'Mine' })).toBe(true)
     // Events for versions 2 and 3 arrive after the response that gave version 3.
@@ -140,7 +139,7 @@ describe('applying changes', () => {
     const reads = [page([item('i2', 2), item('i1', 1)], 10)]
     const { s, socket } = await live(
       () => reads.shift() ?? page([item('i2', 2), item('i1', 1)], 9),
-      () => json(item('i1', 1)),
+      () => json(withSeq(item('i1', 1), 12)),
     )
     socket()?.push(changes(11, [removed('i1', 11)]))
     await s.openFolder('bld')
@@ -157,7 +156,9 @@ describe('own writes and their echo (D59)', () => {
     const { s, calls } = await live(
       () => page([item('i1', 1)], 10),
       (call) =>
-        call.method === 'DELETE' ? new Response(null, { status: 204 }) : json(item('i1', 1, {}, 2)),
+        call.method === 'DELETE'
+          ? new Response(null, { status: 204 })
+          : json(withSeq(item('i1', 1, {}, 2), 11)),
     )
     await s.save('i1', { title: 'x' })
     await s.remove('i1')

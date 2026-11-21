@@ -11,6 +11,18 @@ import { idSchema, itemSchema } from './entities.ts'
 export const MAX_CLIENT_MESSAGE_BYTES = 4096
 /** Most hubs one socket subscribes to at once. */
 export const MAX_SUBSCRIPTIONS_PER_SOCKET = 20
+/**
+ * The client rule: never have more than this many messages sent since the last message received
+ * on the socket. The server closes a socket with `FEED_CLOSE_CODES.policy` (1008) when more than
+ * this many of its messages are waiting to be handled, so a client that keeps the rule is never
+ * closed for it.
+ *
+ * `subscribe` is always answered (`changes`, `resync` or `error`); `unsubscribe` never is. With at
+ * most `MAX_SUBSCRIPTIONS_PER_SOCKET` subscriptions a client never needs more unsubscribes in a
+ * row than that, so the rule only makes it wait for answers, never blocks it for good. Resubscribing
+ * every hub after a reconnect fits in one burst.
+ */
+export const MAX_PENDING_CLIENT_MESSAGES = 32
 /** Past this many missed changes the subscriber could see, the server answers `resync` (D58). */
 export const MAX_MISSED_CHANGES = 1000
 /** Largest `limit` of `GET /changes`. */
@@ -58,17 +70,27 @@ export type FeedClientMessage = z.infer<typeof feedClientMessageSchema>
 // Server to client.
 
 /**
- * Changes after the client's `after`, in `seq` order. `seq` is the high-water mark: every
- * change up to it that the subscriber may see is in this message or an earlier one, even when
- * all of them were hidden and `changes` is empty, so the client's `after` never stalls. A batch
- * cut short by its limit reports its last change's `seq` (D58).
+ * Changes after the client's `after`, in `seq` order, for the hubs in `hubIds`. `seq` is the
+ * high-water mark for those hubs only: every change in them up to it that the subscriber may see
+ * is in this message or an earlier one, even when all of them were hidden and `changes` is
+ * empty, so the client's `after` never stalls. A batch cut short by its limit reports its last
+ * change's `seq` (D58). A client advances only the hubs in `hubIds`.
+ *
+ * The server handles a socket's client messages in order. A `subscribe` is answered by a
+ * `changes` message for that hub alone (its catch-up from `after`, possibly empty), or by
+ * `resync` or `error`, before the hub appears in any later message.
  */
 export const changesMessageSchema = z.strictObject({
   type: z.literal('changes'),
   seq: seqSchema,
+  hubIds: z.array(idSchema).min(1).max(MAX_SUBSCRIPTIONS_PER_SOCKET),
   changes: z.array(changeSchema),
 })
-/** The hub's schema or settings changed: reload `GET /hubs/:hubId` if `version` is newer. */
+/**
+ * The hub's schema or settings changed (folders, attributes, the hub row): reload
+ * `GET /hubs/:hubId`, always. Folder and attribute writes don't bump the hub's `version`, so it
+ * is informational only: the hub row's version when the event was sent.
+ */
 export const hubMessageSchema = z.strictObject({
   type: z.literal('hub'),
   hubId: idSchema,
@@ -116,6 +138,33 @@ export const feedServerMessageSchema = z.discriminatedUnion('type', [
   feedErrorMessageSchema,
 ])
 export type FeedServerMessage = z.infer<typeof feedServerMessageSchema>
+
+/**
+ * Codes the server closes a feed socket with. Upgrade refusals are plain HTTP errors instead
+ * (D57); a browser `WebSocket` sees those only as a failed connection.
+ */
+export const FEED_CLOSE_CODES = {
+  /** The process is shutting down: reconnect with backoff and resume. */
+  goingAway: 1001,
+  /**
+   * Over a cap: sockets per session or agent key (close another tab's socket first), or client
+   * messages sent faster than the server answers them (wait for answers before sending more).
+   */
+  policy: 1008,
+  /** A frame over the server's frame cap (64 KiB): a client bug, not worth a retry as is. */
+  frameTooLarge: 1009,
+  /**
+   * The server could not read changes, or the client stopped reading what it was sent: reconnect
+   * with backoff and resume from the positions held.
+   */
+  internal: 1011,
+  /**
+   * The session, agent key or membership ended (sign-out, password reset, revocation, removal,
+   * expiry): sign in again; a reconnect would be refused (401 or 404).
+   */
+  credentialsEnded: 4401,
+} as const
+export type FeedCloseCode = (typeof FEED_CLOSE_CODES)[keyof typeof FEED_CLOSE_CODES]
 
 export type ParsedClientMessage =
   | { ok: true; message: FeedClientMessage }

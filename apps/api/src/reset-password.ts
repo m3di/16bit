@@ -8,6 +8,7 @@ import type { Kysely } from 'kysely'
 import { hashPassword } from './auth/password.ts'
 import type { Database } from './db/database.ts'
 import { DEV_PASSWORD, DEV_PASSWORD_REFUSED } from './dev-accounts.ts'
+import { notify, SESSION_CHANNEL } from './notify.ts'
 
 /**
  * Sets an account's password and ends all its sessions (D42: operator-only reset).
@@ -38,6 +39,8 @@ export async function resetPassword(
       .executeTakeFirst()
     if (!account) return false
     await trx.deleteFrom('session').where('account_id', '=', account.id).execute()
+    // The feed closes the account's sockets on commit (D58).
+    await notify(trx, SESSION_CHANNEL, { accountId: account.id })
     return true
   })
 }

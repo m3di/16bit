@@ -33,8 +33,8 @@ export class FakeSocket implements FeedSocket {
     this.onmessage?.({ data: typeof message === 'string' ? message : JSON.stringify(message) })
   }
   /** The connection drops, or never opened. */
-  drop() {
-    this.onclose?.({})
+  drop(code?: number) {
+    this.onclose?.(code === undefined ? {} : { code })
   }
 }
 

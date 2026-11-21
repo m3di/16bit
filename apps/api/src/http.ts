@@ -9,6 +9,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   invalid_values: 422,
   conflict: 409,
   id_taken: 409,
+  mutation_id_reused: 422,
   prefix_taken: 409,
   email_taken: 409,
   already_member: 409,
