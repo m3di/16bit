@@ -6,6 +6,7 @@ import {
   decodeItemCursor,
   deleteItemQuerySchema,
   encodeItemCursor,
+  FEED_CLOSE_CODES,
   feedServerMessageSchema,
   hubDescriptionSchema,
   itemQueryResultSchema,
@@ -14,7 +15,9 @@ import {
   itemWriteResultSchema,
   MAX_CHANGES_LIMIT,
   MAX_CLIENT_MESSAGE_BYTES,
+  MAX_PENDING_CLIENT_MESSAGES,
   MAX_QUERY_OFFSET,
+  MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
   patchItemSchema,
   utf8ByteLength,
@@ -261,29 +264,58 @@ describe('feed client messages (D57)', () => {
   })
 })
 
+describe('feed client message cap (#171)', () => {
+  it('lets a client resubscribe every hub after a reconnect, and unsubscribe them all, in one burst', () => {
+    expect(MAX_PENDING_CLIENT_MESSAGES).toBe(32)
+    expect(MAX_PENDING_CLIENT_MESSAGES).toBeGreaterThanOrEqual(MAX_SUBSCRIPTIONS_PER_SOCKET)
+  })
+})
+
+describe('feed close codes (#171)', () => {
+  it('pins each code, so client and server agree on what a close means', () => {
+    expect(FEED_CLOSE_CODES).toEqual({
+      goingAway: 1001,
+      policy: 1008,
+      frameTooLarge: 1009,
+      internal: 1011,
+      credentialsEnded: 4401,
+    })
+  })
+
+  it('keeps codes distinct, and its own in the range RFC 6455 leaves to applications', () => {
+    const codes = Object.values(FEED_CLOSE_CODES)
+    expect(new Set(codes).size).toBe(codes.length)
+    for (const code of codes) {
+      // Standard codes a server may send, or 4000 to 4999 for application use.
+      expect([1001, 1008, 1009, 1011].includes(code) || (code >= 4000 && code <= 4999)).toBe(true)
+    }
+  })
+})
+
 describe('feed server messages (D58)', () => {
   const change = { seq: 5, hubId: 'h1', itemId: 'i1', item }
 
-  it('sends changes with a high-water seq, even when all were hidden', () => {
+  it('sends changes with a high-water seq for the hubs it names, even when all were hidden', () => {
     const parse = (m: object) => feedServerMessageSchema.safeParse(m)
-    expect(parse({ type: 'changes', seq: 9, changes: [change] }).success).toBe(true)
-    expect(parse({ type: 'changes', seq: 9, changes: [] }).success).toBe(true)
-    expect(parse({ type: 'changes', changes: [change] }).success).toBe(false)
+    const base = { type: 'changes', seq: 9, hubIds: ['h1'] }
+    expect(parse({ ...base, changes: [change] }).success).toBe(true)
+    expect(parse({ ...base, changes: [] }).success).toBe(true)
+    expect(parse({ ...base, hubIds: ['h1', 'h2'], changes: [] }).success).toBe(true)
+    expect(parse({ type: 'changes', hubIds: ['h1'], changes: [change] }).success).toBe(false)
+    // Which hubs the high-water mark covers is always said, and never as an empty list (#171).
+    expect(parse({ type: 'changes', seq: 9, changes: [change] }).success).toBe(false)
+    expect(parse({ ...base, hubIds: [], changes: [] }).success).toBe(false)
+    const many = Array.from({ length: MAX_SUBSCRIPTIONS_PER_SOCKET + 1 }, (_, i) => `h${String(i)}`)
+    expect(parse({ ...base, hubIds: many, changes: [] }).success).toBe(false)
     // A deletion is the item as null; the echo of a writer's mutation ID is optional.
     expect(
-      parse({
-        type: 'changes',
-        seq: 9,
-        changes: [{ ...change, item: null, clientMutationId: MUTATION }],
-      }).success,
+      parse({ ...base, changes: [{ ...change, item: null, clientMutationId: MUTATION }] }).success,
     ).toBe(true)
-    expect(
-      parse({ type: 'changes', seq: 9, changes: [{ ...change, item: undefined }] }).success,
-    ).toBe(false)
+    expect(parse({ ...base, changes: [{ ...change, item: undefined }] }).success).toBe(false)
     // No patch is ever sent, only the item as it is now.
-    expect(
-      parse({ type: 'changes', seq: 9, changes: [{ ...change, patch: { op: 'delete' } }] }).success,
-    ).toBe(false)
+    expect(parse({ ...base, changes: [{ ...change, patch: { op: 'delete' } }] }).success).toBe(
+      false,
+    )
   })
 
   it('sends hub, access_lost, resync and error', () => {

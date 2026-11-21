@@ -14,7 +14,9 @@ export default defineConfig({
   server: {
     proxy: {
       // Only forwards: people sign in, and the session cookie comes back through this origin.
-      '/v1': { target: api },
+      // `ws` forwards the feed's WebSocket upgrade (D57). No `changeOrigin`: the API checks a
+      // cookie upgrade's `Origin` against `Host`, and both stay this dev server's.
+      '/v1': { target: api, ws: true },
     },
   },
 })
