@@ -4,6 +4,7 @@ import {
   MAX_PENDING_CLIENT_MESSAGES,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
+  type Change,
   type FeedServerMessage,
   type Subject,
 } from '@16bit/core'
@@ -44,6 +45,56 @@ export const MAX_SOCKETS_PER_SESSION = 10
  */
 export const MAX_BUFFERED_BYTES = 4 * 1024 * 1024
 
+/**
+ * Most bytes (UTF-8 JSON) of one `changes` message, short of a single change larger than that.
+ * A read of up to `MAX_MISSED_CHANGES` changes, each with an item and a cause of up to about
+ * 21 KB (D63), is split into several messages of at most this size (#197).
+ */
+export const MAX_CHANGES_MESSAGE_BYTES = 256 * 1024
+/**
+ * How long a socket may take to make room for the next part of a split `changes` batch before it
+ * is treated as not reading (closed with 1011, like `MAX_BUFFERED_BYTES`).
+ */
+export const DRAIN_TIMEOUT_MS = 10_000
+
+type ChangesMessage = Extract<FeedServerMessage, { type: 'changes' }>
+
+/**
+ * One read's changes for `hubIds` as `changes` messages of at most `maxBytes` each (one change
+ * larger than that goes alone). Every message but the last reports its last change's `seq` as
+ * its high-water mark, as a batch cut short by a limit does (D58): changes are in `seq` order,
+ * so every change the subscriber may see up to it has been sent. The last reports `seq`.
+ */
+export function splitChanges(
+  seq: number,
+  hubIds: string[],
+  changes: Change[],
+  maxBytes: number = MAX_CHANGES_MESSAGE_BYTES,
+): ChangesMessage[] {
+  const header = Buffer.byteLength(JSON.stringify({ type: 'changes', seq, hubIds, changes: [] }))
+  const parts: Change[][] = []
+  let part: Change[] = []
+  let size = header
+  for (const change of changes) {
+    // The comma between changes counts too.
+    const bytes = Buffer.byteLength(JSON.stringify(change)) + 1
+    if (part.length > 0 && size + bytes > maxBytes) {
+      parts.push(part)
+      part = []
+      size = header
+    }
+    part.push(change)
+    size += bytes
+  }
+  parts.push(part)
+  return parts.map((p, i) => ({
+    type: 'changes',
+    seq: i === parts.length - 1 ? seq : (p.at(-1)?.seq ?? seq),
+    hubIds,
+    changes: p,
+  }))
+}
+
 const {
   credentialsEnded: CLOSE_CREDENTIALS_ENDED,
   policy: CLOSE_POLICY,
@@ -63,6 +114,8 @@ export interface FeedOptions {
   recheckMs?: number
   /** `MAX_BUFFERED_BYTES`; lowered in tests. */
   maxBufferedBytes?: number
+  /** `DRAIN_TIMEOUT_MS`; lowered in tests. */
+  drainTimeoutMs?: number
   /** Past this many missed changes the subscriber could see, `resync`. Lowered in tests. */
   maxMissedChanges?: number
   /** Passed to the reader; lowered in tests. */
@@ -94,6 +147,7 @@ export class Feed {
   readonly maxMissed: number
   readonly maxScan: number | undefined
   readonly maxBuffered: number
+  readonly drainTimeoutMs: number
   readonly #coalesceMs: number
   readonly #recheckMs: number
   readonly #listener: Listener
@@ -109,6 +163,7 @@ export class Feed {
     this.maxMissed = options.maxMissedChanges ?? MAX_MISSED_CHANGES
     this.maxScan = options.maxScan
     this.maxBuffered = options.maxBufferedBytes ?? MAX_BUFFERED_BYTES
+    this.drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS
     this.#coalesceMs = options.coalesceMs ?? 50
     this.#recheckMs = options.recheckMs ?? 60_000
     this.#listener = new Listener(
@@ -388,6 +443,24 @@ export class Connection {
     })
   }
 
+  /**
+   * Waits until `bytes` more fit under the socket's send limit (D58). False, with the socket
+   * closed as for a client that stopped reading, if it is closed or makes no room in time.
+   */
+  async #room(bytes: number): Promise<boolean> {
+    const limit = Math.max(0, this.feed.maxBuffered - bytes)
+    const started = Date.now()
+    while (this.socket.bufferedAmount > limit) {
+      if (this.#closed || this.socket.readyState !== this.socket.OPEN) return false
+      if (Date.now() - started > this.feed.drainTimeoutMs) {
+        this.close(CLOSE_INTERNAL, 'Client is not reading')
+        return false
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    return true
+  }
+
   #send(message: FeedServerMessage): void {
     if (this.#closed || this.socket.readyState !== this.socket.OPEN) return
     if (this.socket.bufferedAmount > this.feed.maxBuffered) {
@@ -395,7 +468,12 @@ export class Connection {
       this.close(CLOSE_INTERNAL, 'Client is not reading')
       return
     }
-    this.socket.send(JSON.stringify(message))
+    this.#sendText(JSON.stringify(message))
+  }
+
+  #sendText(text: string): void {
+    if (this.#closed || this.socket.readyState !== this.socket.OPEN) return
+    this.socket.send(text)
   }
 
   async #message(text: string): Promise<void> {
@@ -434,7 +512,7 @@ export class Connection {
       this.#send({ type: 'error', code: 'not_found', message: 'Hub not found', hubId })
       return
     }
-    this.#deliver([hubId], result)
+    await this.#deliver([hubId], result)
   }
 
   #readBatch(trx: Trx, after: number, hubIds: string[]): Promise<Batch> {
@@ -449,7 +527,7 @@ export class Connection {
   }
 
   /** Sends one read's result for `hubIds` and moves them to its high-water mark. */
-  #deliver(hubIds: string[], result: Batch): void {
+  async #deliver(hubIds: string[], result: Batch): Promise<void> {
     if (result.cut) {
       // More than the subscriber could take in: it reloads and subscribes again (D58).
       for (const hubId of hubIds) {
@@ -459,7 +537,13 @@ export class Connection {
       return
     }
     const { page } = result
-    this.#send({ type: 'changes', seq: page.seq, hubIds, changes: page.changes })
+    // Several messages when the batch is large, each sent once the socket has room for it, so
+    // a healthy client is never pushed to the send limit by a large batch (#197).
+    for (const message of splitChanges(page.seq, hubIds, page.changes)) {
+      const text = JSON.stringify(message)
+      if (!(await this.#room(Buffer.byteLength(text)))) return
+      this.#sendText(text)
+    }
     for (const hubId of hubIds) this.#subs.set(hubId, page.seq)
     if (page.more) this.requestPump(Number.MAX_SAFE_INTEGER)
   }
@@ -486,11 +570,11 @@ export class Connection {
           const one = await this.feed.read(this.context, (trx) =>
             this.#readBatch(trx, after, [hubId]),
           )
-          if (one.page.seq > after || one.cut) this.#deliver([hubId], one)
+          if (one.page.seq > after || one.cut) await this.#deliver([hubId], one)
         }
         continue
       }
-      this.#deliver(hubIds, result)
+      await this.#deliver(hubIds, result)
     }
   }
 

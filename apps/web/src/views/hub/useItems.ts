@@ -503,7 +503,6 @@ export function useItems(
     list.value = { state: 'loading' }
     // The table is mounted afresh at the top once the rows arrive.
     inView = null
-    highestSeen = 0
     try {
       const reads = await readWindows(folder, [0], order)
       if (gen !== generation) return
@@ -538,6 +537,8 @@ export function useItems(
     if (id !== folderId.value) {
       sort.value = null
       where.value = null
+      // Item numbers only grow, so the mark stays valid while the same folder is open.
+      highestSeen = 0
     } else if (sort.value && sortableIds && !sortableIds.includes(sort.value.attribute)) {
       sort.value = null
       dropped = true

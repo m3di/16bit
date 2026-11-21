@@ -277,13 +277,15 @@ function server(n: number) {
   let items = Array.from({ length: n }, (_, i) => item(`i${String(n - i)}`, n - i))
   const holds = new Set<number>()
   const held: (() => void)[] = []
-  const answer = (offset: number) => page(items.slice(offset, offset + 200), items.length)
+  // Any attribute sort reads oldest first here, so a sorted window differs from the default one.
+  const answer = (offset: number, sorted: boolean) =>
+    page((sorted ? [...items].reverse() : items).slice(offset, offset + 200), items.length)
   return {
     get items() {
       return items
     },
     query(body: QueryBody): Response | Promise<Response> {
-      const response = answer(body.offset)
+      const response = answer(body.offset, body.sort.length > 0)
       if (!holds.delete(body.offset)) return response
       return new Promise((resolve) => {
         held.push(() => {
@@ -426,7 +428,34 @@ describe('several windows while rows shift (D61)', () => {
     // The sorted read predates the create, so the view is read again in the new order.
     expect(reads().length).toBeGreaterThan(before)
     expectLoaded(s, 400, 420)
-    expectInStep(s, folder.items)
+    // In the sort, which this server reads oldest first.
+    expectInStep(s, [...folder.items].reverse())
+  })
+
+  it('keeps the highest number seen when the same folder is read again in a sort', async () => {
+    const folder = server(600)
+    const store = createWorkspaceStore('w')
+    const api = fakeApi((call) => folder.query(call.body as QueryBody))
+    const s = useItems('w', () => 'BLD', api.fetchFn, {
+      store,
+      hubId: () => 'bld',
+      refetchDelay: 5,
+    })
+    await s.openFolder('bld')
+    await s.setSort({ attribute: 'stage', direction: 'asc' })
+    // Retry on the same folder keeps the sort: only the oldest items are read.
+    await s.openFolder('bld', [], ['stage'])
+    s.showWindows({ start: 200, end: 220, offsets: [200] })
+    await tick()
+    await s.setSort(null)
+    s.showWindows({ start: 200, end: 220, offsets: [200] })
+    await tick()
+    // An edit of an older item not loaded is not taken for a new one.
+    store.receive([changed(item('i550', 550, { title: 'Edited' }, 2))])
+    await settle()
+    expect(s.rowAt(0)?.id).not.toBe('i550')
+    expect(s.indexOf('i550')).toBe(-1)
+    expect(total(s)).toBe(600)
   })
 
   it('does not read again for a delete in another hub', async () => {

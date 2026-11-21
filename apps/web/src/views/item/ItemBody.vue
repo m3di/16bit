@@ -16,18 +16,21 @@ import FieldEditor from '../hub/FieldEditor.vue'
 import { displayId } from '../hub/relations.ts'
 import { formatTimestamp } from '../hub/values.ts'
 import BacklinksBlock from './BacklinksBlock.vue'
+import HistoryBlock from './HistoryBlock.vue'
 import { itemTitle } from '../hub/relations.ts'
 import { folderLink, itemFolder } from './item-page.ts'
 import type { BacklinkList } from './useBacklinks.ts'
+import type { HistoryList } from './useHistory.ts'
 
 // One item on its own page, after the task mockup: the trail and title, the folder's
-// attributes as editors, then details and the items that link here beside them.
+// attributes as editors, then details, the items that link here, and the history beside them.
 const {
   workspaceId,
   item,
   hub,
   columns,
   backlinks,
+  history,
   readOnly,
   saving,
   notice = null,
@@ -39,6 +42,7 @@ const {
   /** The attributes of the item's folder, in position order. */
   columns: readonly FolderAttributeDefinition[]
   backlinks: Load<BacklinkList>
+  history: Load<HistoryList>
   /** The reader's hub role does not let them change items, or the server refused a write. */
   readOnly: boolean
   /** An edit is on its way to the server. */
@@ -57,6 +61,9 @@ const emit = defineEmits<{
   dismiss: []
   retryBacklinks: []
   moreBacklinks: []
+  retryHistory: []
+  moreHistory: []
+  refreshHistory: []
 }>()
 
 const fieldsId = useId()
@@ -192,6 +199,13 @@ function commit(attributeId: string, value: ItemValues[string], basedOn: number 
       :list="backlinks"
       @retry="emit('retryBacklinks')"
       @more="emit('moreBacklinks')"
+    />
+    <HistoryBlock
+      :list="history"
+      :hub="hub"
+      @retry="emit('retryHistory')"
+      @more="emit('moreHistory')"
+      @refresh="emit('refreshHistory')"
     />
   </aside>
 </template>

@@ -6,10 +6,12 @@ import {
   hubSchema,
   idSchema,
   itemSchema,
+  itemValuesSchema,
   principalSchema,
   timestampSchema,
   workspaceSchema,
 } from './entities.ts'
+import { urlValueSchema } from './attribute-types/url.ts'
 import { decodeItemCursor, type ItemCursorOrder } from './cursor.ts'
 import { paletteColorSchema } from './palette.ts'
 import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
@@ -44,6 +46,31 @@ const responseSeq = { seq: seqSchema }
  * as it is now; the same ID with another item or operation is a 422.
  */
 export const clientMutationIdSchema = z.uuid()
+
+export const CAUSE_NOTE_MAX_LENGTH = 500
+export const MAX_CAUSE_EVIDENCE = 10
+
+/**
+ * Why an item write happened (D63), stored on its revision and returned wherever revisions are
+ * read. At least one field is set.
+ *
+ * - `note`: 1 to 500 characters, surrounding whitespace trimmed.
+ * - `evidence`: 1 to 10 absolute `http` or `https` URLs, each at most 2,048 characters, checked
+ *   as the URL attribute type checks its values.
+ * - `causedBy`: the `seq` of an earlier revision in the workspace that the writer can read.
+ *   One it can't read, or that doesn't exist, is a 422 `invalid_cause`, alike in both cases.
+ *   A reader who can't read that revision still sees the number, but not what it changed.
+ */
+export const itemCauseSchema = z
+  .strictObject({
+    note: z.string().trim().min(1).max(CAUSE_NOTE_MAX_LENGTH).optional(),
+    evidence: z.array(urlValueSchema).min(1).max(MAX_CAUSE_EVIDENCE).optional(),
+    causedBy: z.int().min(1).optional(),
+  })
+  .refine((c) => c.note !== undefined || c.evidence !== undefined || c.causedBy !== undefined, {
+    message: 'A cause needs a note, evidence or causedBy',
+  })
+export type ItemCause = z.infer<typeof itemCauseSchema>
 
 /** Query string of the list endpoints (workspaces, hubs). */
 export const pageQuerySchema = z.strictObject({
@@ -325,6 +352,7 @@ export const createItemSchema = z.strictObject({
   folderId: idSchema,
   values: itemValuesInputSchema.default({}),
   clientMutationId: clientMutationIdSchema.optional(),
+  cause: itemCauseSchema.optional(),
 })
 export type CreateItem = z.input<typeof createItemSchema>
 
@@ -335,6 +363,7 @@ export type CreateItem = z.input<typeof createItemSchema>
 export const patchItemSchema = z.strictObject({
   version: z.int().min(1),
   clientMutationId: clientMutationIdSchema.optional(),
+  cause: itemCauseSchema.optional(),
   values: itemValuesInputSchema.refine((v) => Object.keys(v).length > 0, {
     message: 'At least one value is required',
   }),
@@ -348,12 +377,54 @@ export const deleteItemQuerySchema = z.strictObject({
 })
 
 /**
+ * Optional JSON body of `DELETE /v1/workspaces/:workspaceId/items/:itemId`: the delete's cause
+ * (D63). The version and mutation ID stay in the query string. No body is the same as `{}`.
+ */
+export const deleteItemBodySchema = z.strictObject({
+  cause: itemCauseSchema.optional(),
+})
+export type DeleteItemBody = z.infer<typeof deleteItemBodySchema>
+
+/**
  * The response of `POST /items` (201) and `PATCH /items/:itemId`: the item as written, with the
  * workspace `seq` read inside the write's own transaction (D58). A retry with a known
  * `clientMutationId` answers the same way, with the item as it is now (D59).
  */
 export const itemWriteResultSchema = itemSchema.extend(responseSeq)
 export type ItemWriteResult = z.infer<typeof itemWriteResultSchema>
+
+export const REVISION_OPS = ['create', 'update', 'delete'] as const
+export type RevisionOp = (typeof REVISION_OPS)[number]
+
+/**
+ * What a revision changed, as stored. `update` holds only the keys it changed, `null` for a
+ * cleared value. Values are as written then: an attribute or option removed since may appear.
+ */
+export const revisionPatchSchema = z.discriminatedUnion('op', [
+  z.strictObject({ op: z.literal('create'), folderId: idSchema, values: itemValuesSchema }),
+  z.strictObject({ op: z.literal('update'), values: itemValuesSchema }),
+  z.strictObject({ op: z.literal('delete') }),
+])
+export type RevisionPatch = z.infer<typeof revisionPatchSchema>
+
+/** One entry of an item's history (D9, D63). `actor` is the principal who wrote it. */
+export const revisionEntrySchema = z.strictObject({
+  seq: seqSchema,
+  version: z.int().min(1),
+  op: z.enum(REVISION_OPS),
+  patch: revisionPatchSchema,
+  actor: idSchema,
+  at: timestampSchema,
+  cause: itemCauseSchema.nullable(),
+})
+export type RevisionEntry = z.infer<typeof revisionEntrySchema>
+
+/**
+ * `GET /v1/workspaces/:workspaceId/items/:itemId/revisions?limit=&cursor=`: the item's
+ * revisions, newest first, `limit` 1 to 200 (default 50). It answers 404 exactly where
+ * `GET /items/:itemId` does, so a deleted item's history is not readable (M3).
+ */
+export const revisionPageSchema = pageSchema(revisionEntrySchema)
 
 /**
  * An agent key (D47). `id` is the key's agent principal. Its hub and role are the principal's
@@ -423,6 +494,11 @@ export const API_ERROR_CODES = [
    * prefix is free again.
    */
   'prefix_taken',
+  /**
+   * An item write whose `cause.causedBy` names no revision the writer can read: missing and
+   * hidden answer alike (422, D63). A malformed cause is a 400 `invalid_request`.
+   */
+  'invalid_cause',
   /** Accepting an invite as a new account with an email that already has one. */
   'email_taken',
   /** Accepting an invite into a workspace the account already belongs to. */
