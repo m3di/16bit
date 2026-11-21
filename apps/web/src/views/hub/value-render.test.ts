@@ -91,6 +91,33 @@ const editor = (attribute: Attribute, value: unknown, extra: Record<string, unkn
   render(FieldEditor, { attribute, value, ...extra })
 
 describe('cells', () => {
+  // The fallback branch of value-cell.ts: a coloured option is a palette chip with its label,
+  // anything else is bare text (issue 218 moved this from a template slot to a render function).
+  it('shows a select option with a colour as a palette chip with its label', async () => {
+    const stage = attributes.find((a) => a.id === 'stage') as Attribute
+    const html = await cell(stage, 'done')
+    expect(html).toMatch(
+      /<span class="inline-flex items-center rounded-chip px-1\.5 text-caption" style="background:var\(--pal-green-tint\);color:var\(--pal-green-ink\);">(<!--\[-->)?Done(<!--\]-->)?<\/span>/,
+    )
+    // An option without a colour is its label alone.
+    const plain = await cell(stage, 'todo')
+    expect(plain).toContain('To do')
+    expect(plain).not.toContain('<span')
+  })
+
+  it('shows text and numbers as bare text', async () => {
+    const title = attributes.find((a) => a.id === 'title') as Attribute
+    const points = attributes.find((a) => a.id === 'points') as Attribute
+    for (const [attribute, value, text] of [
+      [title, 'Ship it', 'Ship it'],
+      [points, 3, '3'],
+    ] as const) {
+      const html = await cell(attribute, value)
+      expect(html).toContain(text)
+      expect(html).not.toMatch(/<(span|a|ul)\b/)
+    }
+  })
+
   it('shows multi-select values as chips, two at most and a count', async () => {
     const html = await cell(tags, ['ui', 'api', 'db'])
     expect(html).toContain('aria-label="Tags"')
