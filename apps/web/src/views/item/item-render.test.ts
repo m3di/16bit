@@ -376,6 +376,7 @@ describe('HistoryBlock', () => {
     const missing = await failed(404)
     expect(missing).toContain('data-state="not-found"')
     expect(text(missing)).toContain('This history is not available')
+    expect(text(missing)).toContain('It may not exist, or it may not be shared with you.')
     expect(missing).not.toContain('Try again')
   })
 

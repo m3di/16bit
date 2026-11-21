@@ -17,11 +17,16 @@ export interface HistoryList {
 /**
  * An item's history (`GET /items/:itemId/revisions`), newest first, page by page. `refresh`
  * reads the first page again after the item changed and puts the new entries on top.
+ *
+ * `version` is the item's version as the page shows it. `catchUp` refreshes when the history is
+ * behind it, and runs after every first read too, so a change written while that read was on
+ * its way is not missed.
  */
 export function useHistory(
   workspaceId: string,
   itemId: string,
   fetchFn: Fetch = (...args) => fetch(...args),
+  version: () => number | null = () => null,
 ) {
   const list = ref<Load<HistoryList>>({ state: 'loading' })
   const path = (cursor: string | null) => {
@@ -57,7 +62,9 @@ export function useHistory(
       }
     } catch (thrown) {
       if (gen === generation) list.value = { state: 'error', error: asRequestError(thrown) }
+      return
     }
+    await catchUp()
   }
 
   async function loadMore() {
@@ -97,7 +104,10 @@ export function useHistory(
       const newest = data.entries[0]?.seq ?? 0
       const fresh = page.items.filter((e) => e.seq > newest)
       if (fresh.length === page.items.length && page.nextCursor) {
-        // More changes than one page since the last read: start again from this page.
+        // More changes than one page since the last read: start again from this page. A "Show
+        // older" on its way holds the old cursor and would leave a gap, so it is dropped.
+        generation++
+        data.more = false
         data.entries = page.items
         data.nextCursor = page.nextCursor
         data.moreError = null
@@ -131,5 +141,12 @@ export function useHistory(
     }
   }
 
-  return { list, load, loadMore, refresh, newestVersion }
+  /** Refreshes when the item is at a newer version than the history holds. */
+  async function catchUp() {
+    const current = version()
+    const newest = newestVersion()
+    if (current !== null && newest !== null && current > newest) await refresh()
+  }
+
+  return { list, load, loadMore, refresh, catchUp, newestVersion }
 }

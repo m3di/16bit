@@ -62,7 +62,10 @@ const principals = usePrincipals(
   fetchFn,
 )
 const backlinks = useBacklinks(workspaceId, itemId, fetchFn)
-const history = useHistory(workspaceId, itemId, fetchFn)
+// The page's version of the item, read only after setup (`page` is declared below).
+const history = useHistory(workspaceId, itemId, fetchFn, () =>
+  page.value.state === 'ready' ? page.value.item.version : null,
+)
 
 provideValueContext({
   workspaceId,
@@ -197,10 +200,7 @@ const deleteLabel = computed(() =>
 // last: `page` reads refs declared above, so the watcher cannot run before them.
 watch(
   () => (page.value.state === 'ready' ? page.value.item.version : null),
-  (version) => {
-    const newest = history.newestVersion()
-    if (version !== null && newest !== null && version > newest) void history.refresh()
-  },
+  () => void history.catchUp(),
 )
 </script>
 

@@ -1,5 +1,5 @@
 import type { RevisionEntry } from '@16bit/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fakeApi, json } from '../hub/fixtures.test-utils.ts'
 import { changesOf, evidenceLink } from './history.ts'
 import { useHistory } from './useHistory.ts'
@@ -178,5 +178,92 @@ describe('useHistory', () => {
     const h = useHistory('w', 'i1', api.fetchFn)
     await h.load()
     expect(h.list.value.state === 'error' && h.list.value.error.isNotFound).toBe(true)
+  })
+
+  const page = (seqs: number[], nextCursor: string | null = null) =>
+    json({ items: seqs.map((seq) => rev(seq, seq, { op: 'update', values: {} })), nextCursor })
+  const seqsOf = (h: ReturnType<typeof useHistory>) =>
+    h.list.value.state === 'ready' ? h.list.value.data.entries.map((e) => e.seq) : null
+
+  /** A response the test answers when it wants. */
+  function deferred() {
+    let answer: (r: Response) => void = () => undefined
+    const promise = new Promise<Response>((resolve) => (answer = resolve))
+    return { promise, answer }
+  }
+
+  it('starts again from the first page when more than a page of changes came in', async () => {
+    let first = true
+    const api = fakeApi(() => {
+      const r = first ? page([7], 'c1') : page([14, 13], 'n1')
+      first = false
+      return r
+    })
+    const h = useHistory('w', 'i1', api.fetchFn)
+    await h.load()
+    await h.refresh()
+    expect(seqsOf(h)).toEqual([14, 13])
+    expect(h.list.value.state === 'ready' && h.list.value.data.nextCursor).toBe('n1')
+  })
+
+  it('drops a "Show older" on its way when a refresh starts the list again', async () => {
+    const older = deferred()
+    let reads = 0
+    const api = fakeApi((call) => {
+      if (call.path.includes('cursor=c1')) return older.promise
+      reads++
+      return reads === 1 ? page([9, 8], 'c1') : page([12, 11], 'n1')
+    })
+    const h = useHistory('w', 'i1', api.fetchFn)
+    await h.load()
+    const more = h.loadMore()
+    await h.refresh()
+    // The old second page arrives after the list was replaced: it would leave a gap.
+    older.answer(page([7, 6], null))
+    await more
+    expect(seqsOf(h)).toEqual([12, 11])
+    expect(h.list.value).toMatchObject({ state: 'ready', data: { nextCursor: 'n1', more: false } })
+  })
+
+  it('catches up after the first read when the item moved on while it loaded', async () => {
+    let reads = 0
+    const api = fakeApi(() => (++reads === 1 ? page([4]) : page([5, 4])))
+    const h = useHistory('w', 'i1', api.fetchFn, () => 5)
+    await h.load()
+    expect(seqsOf(h)).toEqual([5, 4])
+    expect(reads).toBe(2)
+  })
+
+  it('does not read again when the history already holds the item version', async () => {
+    const api = fakeApi(() => page([4]))
+    const h = useHistory('w', 'i1', api.fetchFn, () => 4)
+    await h.load()
+    await h.catchUp()
+    expect(api.calls).toHaveLength(1)
+  })
+
+  it('joins refreshes asked for while one runs into one more read, without duplicates', async () => {
+    const answers: ReturnType<typeof deferred>[] = []
+    let reads = 0
+    const api = fakeApi(() => {
+      if (++reads === 1) return page([4])
+      const d = deferred()
+      answers.push(d)
+      return d.promise
+    })
+    const h = useHistory('w', 'i1', api.fetchFn)
+    await h.load()
+    const first = h.refresh()
+    const second = h.refresh()
+    const third = h.refresh()
+    await Promise.resolve()
+    answers[0]?.answer(page([5, 4]))
+    await vi.waitFor(() => {
+      expect(answers).toHaveLength(2)
+    })
+    answers[1]?.answer(page([6, 5, 4]))
+    await Promise.all([first, second, third])
+    expect(seqsOf(h)).toEqual([6, 5, 4])
+    expect(reads).toBe(3)
   })
 })

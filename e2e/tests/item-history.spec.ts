@@ -7,6 +7,8 @@ const title = demo.hub.titleAttributeId
 test('a cause written through the API shows in the item history', async ({ api, page }) => {
   const before = uniqueTitle('history before')
   const after = uniqueTitle('history after')
+  // No spaces: it must wrap inside the column, not push the page wider at phone width.
+  const unbroken = 'unbroken'.repeat(30)
   const created = await api.createItem({ values: { [title]: before } })
   const [createRevision] = await api.revisions(created.id)
   if (!createRevision) throw new Error('The create has no revision')
@@ -16,7 +18,7 @@ test('a cause written through the API shows in the item history', async ({ api, 
       version: created.version,
       values: { [title]: after },
       cause: {
-        note: 'Renamed after the design review',
+        note: `Renamed after the design review ${unbroken}`,
         evidence: [
           'https://example.com/reviews/42',
           `https://example.org/${'a-long-path-segment/'.repeat(12)}`,
@@ -26,9 +28,22 @@ test('a cause written through the API shows in the item history', async ({ api, 
     }),
   )
 
+  // The write kept its cause, so a UI failure below is not a dropped cause.
+  const [stored] = await api.revisions(created.id)
+  expect(stored?.cause).toEqual({
+    note: `Renamed after the design review ${unbroken}`,
+    evidence: [
+      'https://example.com/reviews/42',
+      `https://example.org/${'a-long-path-segment/'.repeat(12)}`,
+    ],
+    causedBy: createRevision.seq,
+  })
+
   await page.goto(`/w/${demo.workspaceId}/items/${encodeURIComponent(created.id)}`)
   const history = page.getByRole('region', { name: 'History' })
-  const update = history.locator('[data-history-entry]').first()
+  if (!stored) throw new Error('The update has no revision')
+  // Found by its seq, since an edit below puts a newer entry on top.
+  const update = history.locator(`[data-history-entry="${String(stored.seq)}"]`)
 
   await expect(update).toContainText('changed')
   await expect(update).toContainText(before)
@@ -47,9 +62,24 @@ test('a cause written through the API shows in the item history', async ({ api, 
   await expect(createEntry).toBeFocused()
   await expect(createEntry).toContainText('created the item')
 
-  // A long evidence URL is cut inside its link; the page never scrolls sideways at phone width.
+  // An edit on the page adds exactly one entry on top, the same one the API lists first.
+  const entries = history.locator('[data-history-entry]')
+  await expect(entries).toHaveCount(2)
+  const edited = uniqueTitle('history edited')
+  const field = page.getByLabel('Title (required)')
+  await field.fill(edited)
+  await field.press('Enter')
+  await expect(page.locator('[data-item-version]')).toHaveText('3')
+  await expect(entries).toHaveCount(3)
+  const listed = await api.revisions(created.id)
+  expect(listed).toHaveLength(3)
+  await expect(entries.first()).toHaveAttribute('data-history-entry', String(listed[0]?.seq))
+  await expect(entries.first()).toContainText(edited)
+
+  // A long evidence URL is cut and a long unbroken note wraps: no sideways scroll at phone width.
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(update.getByRole('link', { name: /example\.org/ })).toBeVisible()
+  await expect(update.locator('[data-history-note]')).toBeVisible()
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
   )

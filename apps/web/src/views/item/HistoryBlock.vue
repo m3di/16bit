@@ -73,7 +73,7 @@ const showValue = (v: ItemValues[string] | undefined) => !isEmpty(v)
       v-else-if="list.state === 'error' && list.error.isNotFound"
       state="not-found"
       :title="errorTitle"
-      message="The item may have been deleted, or it may no longer be shared with you."
+      message="It may not exist, or it may not be shared with you."
     />
     <StateBlock
       v-else-if="list.state === 'error' && list.error.isNoPermission"
