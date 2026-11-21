@@ -362,6 +362,7 @@ describe('cause on item writes (D63)', () => {
       await create('ed', 'h1', 'A', { clientMutationId: createId, cause: { note: 'retry' } })
       await patch('ed', a, 'A2', { clientMutationId: patchId, cause: { note: 'retry' } })
       // A retry is answered before its cause is checked, as the first attempt was.
+      await create('ed', 'h1', 'A', { clientMutationId: createId, cause: { causedBy: 999 } })
       await patch('ed', a, 'A2', { clientMutationId: patchId, cause: { causedBy: 999 } })
       expect(await revisionCount()).toBe(before)
 
@@ -377,6 +378,7 @@ describe('cause on item writes (D63)', () => {
         204,
       )
       expect((await as('ed', 'DELETE', url, { cause: { note: 'retry' } })).statusCode).toBe(204)
+      expect((await as('ed', 'DELETE', url, { cause: { causedBy: 999 } })).statusCode).toBe(204)
       const deletes = await db
         .selectFrom('revision')
         .select('cause')

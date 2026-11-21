@@ -1102,42 +1102,65 @@ describe('0014_revision_cause', () => {
       VALUES ('w1', 'i1', 'h1', 'f1', 1, '{}', 'p1')
   `.execute(db)
 
-  it('applies to a database migrated to 0013 with data, keeps text as a note, and migrates back down', async () => {
+  it('applies to a database migrated to 0013 with data, keeps text as a trimmed note, and migrates down and up again', async () => {
+    const long = 'n'.repeat(500)
     expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
     await seedHub()
     await withItem()
     await revision(1, 'from the old column')
     await revision(2, '')
     await revision(3, null)
-    await revision(4, 'n'.repeat(500))
+    await revision(4, long)
+    await revision(5, ' \n\t ')
+    await revision(6, `  ${long}\n`)
+    await revision(7, '\u00a0 padded\t')
 
     expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
-    expect(await causes()).toEqual([
+    const migrated = [
       [1, { note: 'from the old column' }],
       [2, null],
       [3, null],
-      [4, { note: 'n'.repeat(500) }],
-    ])
+      [4, { note: long }],
+      // Trimmed as core trims a note; blank is none.
+      [5, null],
+      [6, { note: long }],
+      [7, { note: 'padded' }],
+    ]
+    expect(await causes()).toEqual(migrated)
     const { rows } = await sql<{ type: string }>`
       SELECT data_type AS type FROM information_schema.columns
       WHERE table_name = 'revision' AND column_name = 'cause'
     `.execute(db)
     expect(rows[0]?.type).toBe('jsonb')
 
-    await sql`UPDATE revision SET cause = '{"evidence":["https://e.example/1"],"causedBy":1}'
-              WHERE seq = 3`.execute(db)
+    // Down: a note-only cause goes back to its text; any other to its JSON text.
     expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
-    // Back to text, each cause as its JSON text: nothing dropped.
     expect(await causes()).toEqual([
-      [1, '{"note": "from the old column"}'],
+      [1, 'from the old column'],
       [2, null],
-      [3, '{"causedBy": 1, "evidence": ["https://e.example/1"]}'],
-      [4, `{"note": "${'n'.repeat(500)}"}`],
+      [3, null],
+      [4, long],
+      [5, null],
+      [6, long],
+      [7, 'padded'],
     ])
     const { rows: functions } = await sql<{ n: number }>`
       SELECT count(*)::int AS n FROM pg_proc WHERE proname LIKE 'revision_cause_%'
     `.execute(db)
     expect(functions[0]?.n).toBe(0)
+
+    // Up again gives the same causes.
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect(await causes()).toEqual(migrated)
+
+    // A structured cause survives down as JSON text, which up then reads as a note.
+    await sql`UPDATE revision SET cause = '{"evidence":["https://e.example/1"],"causedBy":1}'
+              WHERE seq = 3`.execute(db)
+    expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
+    const json = '{"causedBy": 1, "evidence": ["https://e.example/1"]}'
+    expect((await causes())[2]).toEqual([3, json])
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect((await causes())[2]).toEqual([3, { note: json }])
   })
 
   it('stops on a text cause longer than a note, and applies once it is shortened', async () => {

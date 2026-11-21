@@ -4,8 +4,8 @@ import { sql, type Kysely } from 'kysely'
 // shape of `itemCauseSchema` in packages/core, with at least one field set.
 //
 // - `revision.cause` changes from `text` (0001, never written by the API) to `jsonb`. An
-//   existing text value becomes `{ "note": <text> }` and an empty one becomes null. A text over
-//   500 characters can't be a note, so the migration stops and names how many there are rather
+//   existing text value becomes `{ "note": <text> }`, trimmed as core trims a note, and an empty
+//   or blank one becomes null. A trimmed text over 500 characters can't be a note, so the migration stops and names how many there are rather
 //   than cut them; nothing in this repository ever wrote one.
 // - `revision_cause_valid(jsonb)` checks the shape, and the `revision_cause_check` constraint
 //   applies it through `revision_cause_ok(jsonb, bigint)`, which adds `causedBy < seq`: a cause
@@ -22,11 +22,16 @@ import { sql, type Kysely } from 'kysely'
 
 export async function up(db: Kysely<unknown>): Promise<void> {
   await sql`
+    -- Trims as JavaScript's String.prototype.trim does for the characters that matter here:
+    -- whitespace, no-break space and the byte order mark. Dropped again at the end.
+    CREATE FUNCTION pg_temp.revision_cause_trim(t text) RETURNS text LANGUAGE sql IMMUTABLE
+      RETURN regexp_replace(t, '^[[:space:]\u00a0\ufeff]+|[[:space:]\u00a0\ufeff]+$', '', 'g');
+
     DO $$
     DECLARE
       long_causes bigint;
     BEGIN
-      SELECT count(*) INTO long_causes FROM revision WHERE char_length(cause) > 500;
+      SELECT count(*) INTO long_causes FROM revision WHERE char_length(pg_temp.revision_cause_trim(cause)) > 500;
       IF long_causes > 0 THEN
         RAISE EXCEPTION 'revision.cause becomes a note of at most 500 characters (D63); % revisions have a longer one',
           long_causes
@@ -73,18 +78,24 @@ export async function up(db: Kysely<unknown>): Promise<void> {
 
     ALTER TABLE revision
       ALTER COLUMN cause TYPE jsonb
-        USING CASE WHEN cause IS NULL OR cause = '' THEN NULL
-                   ELSE jsonb_build_object('note', cause) END,
+        USING CASE WHEN cause IS NULL OR pg_temp.revision_cause_trim(cause) = '' THEN NULL
+                   ELSE jsonb_build_object('note', pg_temp.revision_cause_trim(cause)) END,
       ADD CONSTRAINT revision_cause_check CHECK (revision_cause_ok(cause, seq));
+    DROP FUNCTION pg_temp.revision_cause_trim(text);
   `.execute(db)
 }
 
-/** Back to text: each cause as its JSON text, so evidence and `causedBy` are kept, not dropped. */
+/**
+ * Back to text. A note-only cause becomes its note again, so up after down gives the same cause.
+ * Any other cause becomes its JSON text, so evidence and `causedBy` are kept, not dropped; up
+ * would then read that text as a note.
+ */
 export async function down(db: Kysely<unknown>): Promise<void> {
   await sql`
     ALTER TABLE revision
       DROP CONSTRAINT revision_cause_check,
-      ALTER COLUMN cause TYPE text USING cause::text;
+      ALTER COLUMN cause TYPE text
+        USING CASE WHEN cause - 'note' = '{}'::jsonb THEN cause ->> 'note' ELSE cause::text END;
     DROP FUNCTION revision_cause_ok(jsonb, bigint);
     DROP FUNCTION revision_cause_valid(jsonb);
   `.execute(db)

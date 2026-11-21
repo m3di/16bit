@@ -7,6 +7,7 @@ import {
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   type FeedServerMessage,
   type HubRole,
+  MAX_MISSED_CHANGES,
 } from '@16bit/core'
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
@@ -21,7 +22,12 @@ import { sessionCookie } from '../db/test-session.ts'
 import { DEV_OWNER } from '../dev-accounts.ts'
 import { applyLargeSeed, LARGE_HUB, LARGE_WORKSPACE } from '../large-seed.ts'
 import { resetPassword } from '../reset-password.ts'
-import { MAX_SOCKETS_PER_SESSION } from './feed.ts'
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_CHANGES_MESSAGE_BYTES,
+  MAX_SOCKETS_PER_SESSION,
+  splitChanges,
+} from './feed.ts'
 import { LISTENER_APPLICATION_NAME } from './listener.ts'
 
 // The WebSocket feed (D57, D58) over a real socket, against a real Postgres under row-level
@@ -47,19 +53,30 @@ beforeEach(async () => {
   await migrateToLatest(db)
   await seed()
   for (const p of ['own', 'ed', 'vw', 'out']) cookies.set(p, (await sessionCookie(db, p)).cookie)
+  appUrl = test.appUrl
+  await start()
+})
+
+let appUrl: string
+
+/** Starts the app with the test feed options and `options` over them. */
+async function start(
+  options: { maxMissedChanges?: number; maxBufferedBytes?: number } = {},
+): Promise<void> {
   app = buildApp({
     db: appDb,
     secureCookies: false,
     feed: {
-      listenUrl: test.appUrl,
+      listenUrl: appUrl,
       recheckMs: RECHECK_MS,
       maxMissedChanges: MAX_MISSED,
       listenRetryMs: 50,
+      ...options,
     },
   })
   await app.listen({ port: 0, host: '127.0.0.1' })
   port = (app.server.address() as { port: number }).port
-})
+}
 
 afterEach(async () => {
   await app.close()
@@ -466,6 +483,54 @@ describe('subscriptions (D57, D58)', () => {
     vw.socket.close()
   })
 
+  it('splits a batch of 200 maximal causes into messages well under the send limit (#197)', async () => {
+    const cause = {
+      note: 'n'.repeat(500),
+      evidence: Array.from({ length: 10 }, (_, i) =>
+        `https://ci.example.com/${String(i)}/`.padEnd(2048, 'a'),
+      ),
+    }
+    expect(cause.evidence.every((u) => u.length === 2048)).toBe(true)
+    // The production cap, so 200 changes are one read; and a send limit far below the batch, so
+    // a healthy client stays open only if each part waits for room.
+    await app.close()
+    const sendLimit = 600 * 1024
+    await start({ maxMissedChanges: MAX_MISSED_CHANGES, maxBufferedBytes: sendLimit })
+    const ids = new Set<string>()
+    for (let i = 0; i < 200; i++)
+      ids.add((await create('ed', 'h1', `item ${String(i)}`, { cause })).id)
+    const total = await counter()
+
+    const ed = await person('ed')
+    ed.subscribe('h1', 0)
+    const messages = []
+    let seq = 0
+    while (seq < total) {
+      const message = await changes(ed, 5000)
+      expect(message.hubIds).toEqual(['h1'])
+      expect(message.seq).toBeGreaterThan(seq)
+      expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThanOrEqual(
+        MAX_CHANGES_MESSAGE_BYTES,
+      )
+      // Each part's high-water mark is its last change.
+      if (message.seq < total) expect(message.changes.at(-1)?.seq).toBe(message.seq)
+      seq = message.seq
+      messages.push(message)
+    }
+    const sent = messages.flatMap((m) => m.changes)
+    // About 4.3 MB in all, more than the send limit at once.
+    expect(Buffer.byteLength(JSON.stringify(sent))).toBeGreaterThan(MAX_BUFFERED_BYTES)
+    expect(Buffer.byteLength(JSON.stringify(sent))).toBeGreaterThan(5 * sendLimit)
+    expect(messages.length).toBeGreaterThan(16)
+    expect(new Set(sent.map((c) => c.itemId))).toEqual(ids)
+    expect(sent.every((c) => c.cause?.note === cause.note)).toBe(true)
+
+    // Still open and live.
+    const after = await create('ed', 'h1', 'after')
+    expect((await changes(ed)).changes.map((c) => c.itemId)).toEqual([after.id])
+    ed.socket.close()
+  })
+
   it('answers a hidden hub, a missing one and another agent hub alike', async () => {
     const vw = await person('vw')
     vw.subscribe('h2', 0)
@@ -789,5 +854,43 @@ describe('a socket that misbehaves', () => {
     expect(live.socket.readyState).toBe(WebSocket.OPEN)
     // It no longer counts towards the session's sockets.
     live.socket.close()
+  })
+})
+
+describe('splitChanges (#197)', () => {
+  const change = (seq: number, note = 'n') => ({
+    seq,
+    hubId: 'h1',
+    itemId: `i${String(seq)}`,
+    item: null,
+    cause: { note },
+  })
+
+  it('keeps a small batch in one message with the read’s high-water mark', () => {
+    expect(splitChanges(9, ['h1'], [change(3), change(5)])).toEqual([
+      { type: 'changes', seq: 9, hubIds: ['h1'], changes: [change(3), change(5)] },
+    ])
+    expect(splitChanges(9, ['h1'], [])).toEqual([
+      { type: 'changes', seq: 9, hubIds: ['h1'], changes: [] },
+    ])
+  })
+
+  it('splits by size, each part but the last ending at its last change, and sends a large change alone', () => {
+    const big = 'b'.repeat(400)
+    const parts = splitChanges(
+      20,
+      ['h1', 'h2'],
+      [change(1), change(2), change(4, big), change(7)],
+      300,
+    )
+    expect(parts.map((p) => [p.seq, p.changes.map((c) => c.seq)])).toEqual([
+      [2, [1, 2]],
+      [4, [4]],
+      [20, [7]],
+    ])
+    for (const p of parts) expect(p.hubIds).toEqual(['h1', 'h2'])
+    for (const p of parts.filter((p) => p.changes.length > 1)) {
+      expect(Buffer.byteLength(JSON.stringify(p))).toBeLessThanOrEqual(300)
+    }
   })
 })

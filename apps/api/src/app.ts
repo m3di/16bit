@@ -519,7 +519,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.get('/items/:itemId/revisions', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const page = parse(pageQuerySchema, request.query)
-            return scoped(request, (trx) =>
+            // One snapshot, as for GET /items/:itemId: the 404 check and the page agree.
+            return snapshot(request, (trx) =>
               itemRevisions(trx, workspaceId, request.principal, itemId, page),
             )
           })
