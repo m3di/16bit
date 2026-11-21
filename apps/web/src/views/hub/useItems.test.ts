@@ -33,7 +33,10 @@ const page = (items: Item[], total = items.length) =>
 /** The table shows rows `start` to `end`, held by the windows at `offsets`. */
 const inView = (start: number, end: number, offsets: number[]) => ({ start, end, offsets })
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+/** Lets a window read finish: it checks and takes in its rows over several tasks (issue 218). */
+const tick = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 /** A promise that resolves when `release` is called, to hold a request open. */
 function gate<T>() {
@@ -138,6 +141,18 @@ describe('useItems: reading', () => {
     slow.release(page([item('old', 2)]))
     await first
     expect(rowsOf(s).map((r) => r.id)).toEqual(['new'])
+  })
+
+  it('checks every item of a window, in slices, and refuses a window with a bad one', async () => {
+    const good = Array.from({ length: 120 }, (_, i) => item(`i${String(i)}`, 200 - i))
+    const bad = [...good.slice(0, 70), { ...good[70], version: 'two' }, ...good.slice(71)]
+    const ok = useItems('w', () => 'BLD', fakeApi(() => page(good)).fetchFn)
+    await ok.openFolder('bld')
+    expect(rowsOf(ok)).toHaveLength(120)
+    // The bad item is in the second slice of 50: the window is still refused as a whole.
+    const refused = useItems('w2', () => 'BLD', fakeApi(() => page(bad as Item[])).fetchFn)
+    await refused.openFolder('bld')
+    expect(refused.list.value).toMatchObject({ state: 'error', error: { code: 'bad_response' } })
   })
 
   it('shows the empty state for a folder with no items', async () => {

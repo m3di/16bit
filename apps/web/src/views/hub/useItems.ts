@@ -23,6 +23,7 @@ import {
   type Fetch,
 } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
+import { yieldToMain } from '../../api/yield.ts'
 import { backoff } from '../../sync/feed.ts'
 import { workspaceStore, type WorkspaceStore } from '../../sync/store.ts'
 import type { RowWindows } from '../../ui/data-table.ts'
@@ -353,7 +354,35 @@ export function useItems(
     return JSON.stringify(attributes.map((a) => item.values[a] ?? null))
   }
 
-  /** Reads one window of the open folder (D61), with the folder's total. */
+  /** Items checked per task when a window arrives, so no one task checks all 200 (issue 218). */
+  const ITEMS_PER_SLICE = 50
+  const itemsSchema = itemQueryResultSchema.shape.items
+  /** A window response with its items not checked yet: they are checked in slices below. */
+  const windowEnvelope = {
+    parse(data: unknown): Omit<ItemQueryResult, 'items'> & { items: unknown[] } {
+      const raw = data as { items?: unknown } | null
+      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) throw new Error('No items')
+      const envelope = itemQueryResultSchema.parse({ ...raw, items: [] })
+      return { ...envelope, items: raw.items as unknown[] }
+    },
+  }
+  /** Checks a window's items against the contract, one slice per task. */
+  async function checkItems(items: unknown[]): Promise<Item[]> {
+    const checked: Item[] = []
+    for (let i = 0; i < items.length; i += ITEMS_PER_SLICE) {
+      if (i > 0) await yieldToMain()
+      const slice = itemsSchema.safeParse(items.slice(i, i + ITEMS_PER_SLICE))
+      if (!slice.success)
+        throw new ApiRequestError('bad_response', 'The server sent an unexpected response.', 200)
+      checked.push(...slice.data)
+    }
+    return checked
+  }
+
+  /**
+   * Reads one window of the open folder (D61), with the folder's total. The response is checked
+   * and taken in over several tasks, so a 200-row window never holds the main thread for long.
+   */
   async function fetchWindow(
     folder: string,
     offset: number,
@@ -361,7 +390,7 @@ export function useItems(
     filter: Filter | null,
   ) {
     const attributes = expand
-    const page = await sendJson(
+    const envelope = await sendJson(
       'POST',
       `${base}/query`,
       {
@@ -375,12 +404,17 @@ export function useItems(
         ...(order ? {} : { order: 'number' }),
         ...(filter ? { where: filter } : {}),
       },
-      itemQueryResultSchema,
+      windowEnvelope,
       fetchFn,
     )
+    const page: ItemQueryResult = { ...envelope, items: await checkItems(envelope.items) }
+    // The rows are taken into the store in a task of their own.
+    await yieldToMain()
     for (const item of page.items) absorb(item)
     noteRead(options.hubId?.() ?? page.items[0]?.hubId, page.seq)
     absorbLinked(page, attributes)
+    // The caller puts the rows in place and the table renders them, in another task.
+    await yieldToMain()
     return page
   }
 

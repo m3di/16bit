@@ -25,7 +25,10 @@ const changed = (it: Item, clientMutationId?: string): Change => ({
   ...(clientMutationId ? { clientMutationId } : {}),
 })
 const removed = (id: string): Change => ({ seq: 21, hubId: 'bld', itemId: id, item: null })
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+/** Lets a window read finish: it checks and takes in its rows over several tasks (issue 218). */
+const tick = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
 /** Long enough for the debounce of 5 ms below. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 
