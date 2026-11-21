@@ -1,5 +1,6 @@
 import type { Change, FeedErrorCode, Item, ItemValues } from '@16bit/core'
 import { computed, shallowReactive, type ComputedRef } from 'vue'
+import { notifyUnauthorized } from '../api/client.ts'
 import { createFeed, feedUrl, type FeedClient, type FeedStatus } from './feed.ts'
 
 // One normalised store per workspace and tab (D60): server items by ID, frozen and replaced,
@@ -77,6 +78,8 @@ export interface WorkspaceStore {
 export function createWorkspaceStore(
   workspaceId: string,
   makeFeed: ((handlers: Parameters<typeof createFeed>[1]) => FeedClient) | null = null,
+  /** The feed closed because the session ended (4401): sign in again. */
+  onCredentialsEnded: () => void = () => undefined,
 ): WorkspaceStore {
   const server = shallowReactive(new Map<string, Readonly<Item>>())
   const deleted = shallowReactive(new Set<string>())
@@ -164,6 +167,7 @@ export function createWorkspaceStore(
         refused: (hubId, code) => {
           for (const fn of listeners.refused) fn(hubId, code)
         },
+        credentialsEnded: onCredentialsEnded,
       })
     : null
 
@@ -237,6 +241,7 @@ export function workspaceStore(workspaceId: string): WorkspaceStore {
     store = createWorkspaceStore(
       workspaceId,
       browser ? (handlers) => createFeed(feedUrl(workspaceId, location), handlers) : null,
+      notifyUnauthorized,
     )
     stores.set(workspaceId, store)
   }

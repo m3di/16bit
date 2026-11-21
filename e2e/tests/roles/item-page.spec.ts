@@ -296,6 +296,9 @@ test('an editor deletes an item after confirming; a stale version is refused', a
   const item = await owner.createItem(h.hubId, { [h.title]: uniqueTitle('to delete') })
 
   const page = await pageAs('owner')
+  // The feed would bring the other edit in before the delete (live-sync.spec.ts). Hold it off,
+  // as when that event is still on its way, so the page still holds version 1.
+  await page.routeWebSocket(/\/feed$/, () => undefined)
   await page.goto(itemPath(item.id))
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
 

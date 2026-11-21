@@ -134,7 +134,7 @@ export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> =
 
 /**
  * A response without the workspace `seq` it carries (D58, issue 168), so the store holds
- * items only. The store subscribing with it comes with the feed (M3-08).
+ * items only. The `seq` itself goes to `noteRead`, which subscribes the hub with it.
  */
 export function withoutSeq<T extends Item & { seq?: number | undefined }>(
   response: T,
