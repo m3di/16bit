@@ -119,6 +119,7 @@ describe('migrations', () => {
       '0011_deleted_attribute',
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
+      '0014_revision_cause',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -201,7 +202,7 @@ describe('schema constraints', () => {
         version: 1,
         patch: JSON.stringify({ a1: 'hello' }),
         actor: 'p1',
-        cause: 'm-1',
+        cause: JSON.stringify({ note: 'm-1' }),
       })
       .execute()
 
@@ -791,6 +792,7 @@ describe('0009_schema_writes', () => {
       '0011_deleted_attribute',
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
+      '0014_revision_cause',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -843,6 +845,7 @@ describe('0010_invite_update_owner', () => {
       '0011_deleted_attribute',
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
+      '0014_revision_cause',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -875,6 +878,7 @@ describe('0011_deleted_attribute', () => {
       '0011_deleted_attribute',
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
+      '0014_revision_cause',
     ])
     const backfilled = await db
       .selectFrom('deleted_attribute')
@@ -932,7 +936,11 @@ describe('0012_mutation_ids', () => {
         VALUES ('w1', 1, 'i1', 'h1', 1, '{"op":"create","folderId":"f1","values":{}}', 'p1');
     `.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0012_mutation_ids', '0013_hub_prefix_unique'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0012_mutation_ids',
+      '0013_hub_prefix_unique',
+      '0014_revision_cause',
+    ])
     // Existing revisions carry no ID.
     expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
       [{ seq: 1, client_mutation_id: null }],
@@ -1028,7 +1036,7 @@ describe('0013_hub_prefix_unique', () => {
 
     await sql`UPDATE folder SET id_prefix = 'NEW' WHERE workspace_id = 'w1' AND hub_id = 'h3';
               DELETE FROM folder WHERE workspace_id = 'w1' AND id IN ('h4', 'h5')`.execute(db)
-    expect(await migrateToLatest(db)).toEqual(['0013_hub_prefix_unique'])
+    expect(await migrateToLatest(db)).toEqual(['0013_hub_prefix_unique', '0014_revision_cause'])
 
     expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
     await hub('w1', 'h6', 'BLD')
@@ -1071,6 +1079,122 @@ describe('0013_hub_prefix_unique', () => {
                        ('w1', 'f3', 'h2', 'h2', 'Also', 'red', 'BLD')`.execute(db)
       await sql`DELETE FROM folder WHERE workspace_id = 'w1' AND id IN ('f3', 'h2')`.execute(db)
       await hub('w1', 'h3', 'OTH')
+    })
+  })
+})
+
+describe('0014_revision_cause', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+  const revision = (seq: number, cause: string | null) =>
+    sql`INSERT INTO revision (workspace_id, seq, item_id, hub_id, version, patch, actor, cause)
+        VALUES ('w1', ${seq}, 'i1', 'h1', ${seq}, '{"op":"update","values":{}}', 'p1',
+                ${cause})`.execute(db)
+  const causes = async () => {
+    const { rows } = await sql<{ seq: number; cause: unknown }>`
+      SELECT seq, cause FROM revision ORDER BY seq
+    `.execute(db)
+    return rows.map((r) => [r.seq, r.cause])
+  }
+  const withItem = () =>
+    sql`
+    INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+      VALUES ('w1', 'i1', 'h1', 'f1', 1, '{}', 'p1')
+  `.execute(db)
+
+  it('applies to a database migrated to 0013 with data, keeps text as a note, and migrates back down', async () => {
+    expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
+    await seedHub()
+    await withItem()
+    await revision(1, 'from the old column')
+    await revision(2, '')
+    await revision(3, null)
+    await revision(4, 'n'.repeat(500))
+
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect(await causes()).toEqual([
+      [1, { note: 'from the old column' }],
+      [2, null],
+      [3, null],
+      [4, { note: 'n'.repeat(500) }],
+    ])
+    const { rows } = await sql<{ type: string }>`
+      SELECT data_type AS type FROM information_schema.columns
+      WHERE table_name = 'revision' AND column_name = 'cause'
+    `.execute(db)
+    expect(rows[0]?.type).toBe('jsonb')
+
+    await sql`UPDATE revision SET cause = '{"evidence":["https://e.example/1"],"causedBy":1}'
+              WHERE seq = 3`.execute(db)
+    expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
+    // Back to text, each cause as its JSON text: nothing dropped.
+    expect(await causes()).toEqual([
+      [1, '{"note": "from the old column"}'],
+      [2, null],
+      [3, '{"causedBy": 1, "evidence": ["https://e.example/1"]}'],
+      [4, `{"note": "${'n'.repeat(500)}"}`],
+    ])
+    const { rows: functions } = await sql<{ n: number }>`
+      SELECT count(*)::int AS n FROM pg_proc WHERE proname LIKE 'revision_cause_%'
+    `.execute(db)
+    expect(functions[0]?.n).toBe(0)
+  })
+
+  it('stops on a text cause longer than a note, and applies once it is shortened', async () => {
+    expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
+    await seedHub()
+    await withItem()
+    await revision(1, 'n'.repeat(501))
+    const { error } = await migrator().migrateToLatest()
+    expect((error as Error).message).toBe(
+      'revision.cause becomes a note of at most 500 characters (D63); 1 revisions have a longer one',
+    )
+    await sql`UPDATE revision SET cause = 'short'`.execute(db)
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+  })
+
+  describe('on the latest schema', () => {
+    beforeEach(async () => {
+      await migrateToLatest(db)
+      await seedHub()
+      await withItem()
+      await revision(1, null)
+    })
+
+    it.each([
+      ['a note', { note: 'n' }],
+      ['500 characters of note', { note: 'é'.repeat(500) }],
+      ['10 URLs of 2,048 characters', { evidence: Array(10).fill(`HTTPS://${'a'.repeat(2040)}`) }],
+      ['an earlier revision', { causedBy: 1 }],
+      ['every field', { note: 'n', evidence: ['http://e.example'], causedBy: 1 }],
+    ])('accepts %s', async (_, cause) => {
+      await revision(2, JSON.stringify(cause))
+    })
+
+    it.each([
+      ['an empty object', {}],
+      ['an array', ['n']],
+      ['text', 'n'],
+      ['an unknown key', { note: 'n', why: 'x' }],
+      ['an empty note', { note: '' }],
+      ['a note of 501 characters', { note: 'n'.repeat(501) }],
+      ['a note that is not text', { note: 1 }],
+      ['no evidence', { evidence: [] }],
+      ['11 URLs', { evidence: Array(11).fill('https://e.example') }],
+      ['a URL of 2,049 characters', { evidence: [`https://${'a'.repeat(2041)}`] }],
+      ['another scheme', { evidence: ['ftp://e.example'] }],
+      ['evidence that is not text', { evidence: [1] }],
+      ['evidence that is not a list', { evidence: 'https://e.example' }],
+      ['causedBy 0', { causedBy: 0 }],
+      ['a fractional causedBy', { causedBy: 0.5 }],
+      ['causedBy as text', { causedBy: '1' }],
+      ['causedBy its own seq', { causedBy: 2 }],
+      ['causedBy a later seq', { causedBy: 3 }],
+    ])('refuses %s', async (_, cause) => {
+      await expect(revision(2, JSON.stringify(cause))).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'revision_cause_check',
+      })
     })
   })
 })

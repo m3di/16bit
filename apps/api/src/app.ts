@@ -9,6 +9,7 @@ import {
   deleteAttributeQuerySchema,
   deleteFolderQuerySchema,
   createItemSchema,
+  deleteItemBodySchema,
   deleteItemQuerySchema,
   getItemQuerySchema,
   idSchema,
@@ -37,6 +38,7 @@ import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
 import { checkHub, folderHub, itemHub } from './access.ts'
 import { readChanges } from './changes.ts'
+import { itemRevisions } from './revisions.ts'
 import { Feed, type FeedOptions } from './feed/feed.ts'
 import { registerFeedRoute } from './feed/route.ts'
 import {
@@ -514,6 +516,14 @@ export function buildApp(options: AppOptions): FastifyInstance {
             )
           })
 
+          ws.get('/items/:itemId/revisions', async (request) => {
+            const { workspaceId, itemId } = parse(itemParams, request.params)
+            const page = parse(pageQuerySchema, request.query)
+            return scoped(request, (trx) =>
+              itemRevisions(trx, workspaceId, request.principal, itemId, page),
+            )
+          })
+
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
@@ -535,6 +545,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.delete('/items/:itemId', async (request, reply) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const { version, clientMutationId } = parse(deleteItemQuerySchema, request.query)
+            const { cause } = parse(deleteItemBodySchema, request.body)
             const actor = request.principal.id
             await idempotentWrite(
               run(request),
@@ -543,7 +554,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
               async (trx) => {
                 const hubId = await itemHub(trx, workspaceId, itemId)
                 await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
-                await deleteItem(trx, workspaceId, actor, itemId, version, clientMutationId)
+                await deleteItem(trx, workspaceId, actor, itemId, version, clientMutationId, cause)
               },
               // The first delete answered 204; so does its retry.
               () => Promise.resolve(),

@@ -438,6 +438,34 @@ describe('subscriptions (D57, D58)', () => {
     vw.socket.close()
   })
 
+  it('carries each change’s cause to every subscriber who sees it (D63)', async () => {
+    const ed = await person('ed')
+    const vw = await person('vw')
+    ed.subscribe('h1', await counter())
+    await changes(ed)
+    vw.subscribe('h1', await counter())
+    await changes(vw)
+
+    const one = await create('ed', 'h1', 'one', {
+      cause: { note: 'from a test run', evidence: ['https://ci.example.com/1'] },
+    })
+    for (const client of [ed, vw]) {
+      expect((await changes(client)).changes).toEqual([
+        expect.objectContaining({
+          itemId: one.id,
+          cause: { note: 'from a test run', evidence: ['https://ci.example.com/1'] },
+        }),
+      ])
+    }
+    // A change without a cause has no field.
+    const two = await create('ed', 'h1', 'two')
+    const message = await changes(vw)
+    expect(message.changes.map((c) => c.itemId)).toEqual([two.id])
+    expect(message.changes[0]).not.toHaveProperty('cause')
+    ed.socket.close()
+    vw.socket.close()
+  })
+
   it('answers a hidden hub, a missing one and another agent hub alike', async () => {
     const vw = await person('vw')
     vw.subscribe('h2', 0)
