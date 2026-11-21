@@ -15,6 +15,7 @@ import {
   type Filter,
   type FolderAttributeDefinition,
   type Item,
+  type ItemCause,
   type ItemCursorOrder,
   type ItemQueryOrder,
   type ItemQueryResult,
@@ -22,6 +23,7 @@ import {
   type ItemValues,
   type LinkedItem,
   type PatchItem,
+  type RevisionPatch,
   type Subject,
   type ValueError,
 } from '@16bit/core'
@@ -37,14 +39,8 @@ import { lockHubSchema } from './schema-lock.ts'
 type Db = Kysely<Database>
 type Trx = Transaction<Database>
 
-/**
- * What a revision's `patch` holds. `update` carries only the changed keys, with `null` for a
- * cleared value. Replaying a workspace's revisions in `seq` order rebuilds every item.
- */
-export type RevisionPatch =
-  | { op: 'create'; folderId: string; values: ItemValues }
-  | { op: 'update'; values: ItemValues }
-  | { op: 'delete' }
+// A revision's `patch` is `RevisionPatch` from core. Replaying a workspace's revisions in `seq`
+// order rebuilds every item.
 
 /** Postgres NOTIFY channel. The payload is `<workspaceId>:<seq>`, read by the M3 change feed. */
 export const REVISION_CHANNEL = 'revision'
@@ -80,6 +76,29 @@ export class MutationReplayed extends Error {
   }
 }
 
+/**
+ * Refuses a cause whose `causedBy` names no revision the writer can read (D63): 422
+ * `invalid_cause`, alike for a missing revision and a hidden one, so hubs can't be probed. Run in
+ * the writer's scope, where row-level security on `revision` decides. Any revision found is
+ * earlier than the write's own, which takes its `seq` later in the same transaction.
+ */
+export async function checkCause(
+  trx: Trx,
+  workspaceId: string,
+  cause: ItemCause | undefined,
+): Promise<void> {
+  if (cause?.causedBy === undefined) return
+  const found = await trx
+    .selectFrom('revision')
+    .select('seq')
+    .where('workspace_id', '=', workspaceId)
+    .where('seq', '=', cause.causedBy)
+    .executeTakeFirst()
+  if (!found) {
+    throw new HttpError('invalid_cause', 'causedBy names no revision you can read')
+  }
+}
+
 export async function appendRevision(
   trx: Trx,
   workspaceId: string,
@@ -89,6 +108,7 @@ export async function appendRevision(
   patch: RevisionPatch,
   actor: string,
   clientMutationId?: string,
+  cause?: ItemCause,
 ): Promise<number> {
   const { seq } = await trx
     .updateTable('workspace')
@@ -107,6 +127,7 @@ export async function appendRevision(
       patch: JSON.stringify(patch),
       actor,
       client_mutation_id: clientMutationId ?? null,
+      cause: cause ? JSON.stringify(cause) : null,
     })
     // The partial unique index (0012) is the arbiter only if its WHERE is repeated here. A
     // racing retry waits for the first attempt, then inserts nothing.
@@ -447,6 +468,7 @@ export async function createItem(
     folderId: string
     values: Record<string, unknown>
     clientMutationId?: string | undefined
+    cause?: ItemCause | undefined
   },
 ): Promise<Item> {
   return inTransaction(db, async (trx) => {
@@ -457,6 +479,7 @@ export async function createItem(
       .where('id', '=', input.folderId)
       .executeTakeFirst()
     if (!folder) throw notFound('Folder')
+    await checkCause(trx, workspaceId, input.cause)
     // Before reading the attributes, so a schema write that strips values can't commit
     // between this validation and the insert (schema-lock.ts).
     await lockHubSchema(trx, workspaceId, folder.hub_id, 'shared')
@@ -527,6 +550,7 @@ export async function createItem(
         { op: 'create', folderId: folder.id, values: stored },
         actor,
         input.clientMutationId,
+        input.cause,
       )
     } catch (error) {
       // The ID belonged to an item since deleted in a hub the writer can't read, so the check
@@ -549,6 +573,7 @@ export async function patchItem(
 ): Promise<Item> {
   return inTransaction(db, async (trx) => {
     const before = await getItem(trx, workspaceId, id)
+    await checkCause(trx, workspaceId, input.cause)
     // Before reading the attributes: see createItem and schema-lock.ts.
     await lockHubSchema(trx, workspaceId, before.hubId, 'shared')
     const definitions = await folderDefinitions(trx, workspaceId, before.folderId)
@@ -599,6 +624,7 @@ export async function patchItem(
       { op: 'update', values: patch },
       actor,
       input.clientMutationId,
+      input.cause,
     )
     return toItem(row)
   })
@@ -611,8 +637,10 @@ export async function deleteItem(
   id: string,
   version: number,
   clientMutationId?: string,
+  cause?: ItemCause,
 ): Promise<void> {
   await inTransaction(db, async (trx) => {
+    await checkCause(trx, workspaceId, cause)
     const row = await trx
       .deleteFrom('item')
       .where('workspace_id', '=', workspaceId)
@@ -638,6 +666,7 @@ export async function deleteItem(
       { op: 'delete' },
       actor,
       clientMutationId,
+      cause,
     )
   })
 }
