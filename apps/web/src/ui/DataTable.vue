@@ -1,6 +1,14 @@
 <script setup lang="ts" generic="Row extends { id: string }">
 import { defaultRangeExtractor, useVirtualizer, type Range } from '@tanstack/vue-virtual'
-import { computed, nextTick, onUpdated, ref, watch, type ComponentPublicInstance } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUpdate,
+  onUpdated,
+  ref,
+  watch,
+  type ComponentPublicInstance,
+} from 'vue'
 import {
   DEFAULT_WINDOW_SIZE,
   VIRTUAL_HEADER_HEIGHT,
@@ -152,13 +160,12 @@ const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>(
 const items = computed(() => (virtual.value ? virtualizer.value.getVirtualItems() : []))
 const rowOf = (index: number): Row | undefined => rowAt?.(index)
 
-/** In `virtual` mode, the rows in view, loaded or not. Keyed by index, so a placeholder keeps
- * its element (and focus) when its row arrives. */
+/** In `virtual` mode, the rows in view, loaded or not. */
 const bodyRows = computed(() =>
   items.value.map((item) => ({ index: item.index, row: rowOf(item.index) })),
 )
 type Segment =
-  | { kind: 'row'; key: number; index: number; row: Row | undefined }
+  | { kind: 'row'; key: string; index: number; row: Row | undefined }
   | { kind: 'gap'; key: string; at: 'above' | 'between' | 'below'; height: number }
 // The rendered rows, with spacers above, below, and around a kept active row, so the scroll
 // height stays at `rowCount` rows and each row sits where it belongs.
@@ -171,7 +178,12 @@ const segments = computed(() => {
       const at = out.length === 0 ? 'above' : 'between'
       out.push({ kind: 'gap', key: `gap-${at}`, at, height: start - cursor })
     }
-    out.push({ kind: 'row', key: item.index, index: item.index, row: bodyRows.value[i]?.row })
+    // A loaded row is keyed by its ID, so when a row is added or removed above it (D61) its
+    // element moves with it, focus and pointer included, instead of showing another item. A
+    // placeholder is keyed by its index.
+    const row = bodyRows.value[i]?.row
+    const key = row ? `row:${row.id}` : `index:${String(item.index)}`
+    out.push({ kind: 'row', key, index: item.index, row })
     cursor = item.end - VIRTUAL_HEADER_HEIGHT
   }
   const rest = virtualizer.value.getTotalSize() - cursor
@@ -214,10 +226,19 @@ const tabStop = computed(() => {
   return bodyRows.value[0]?.index ?? -1
 })
 
-const rowEls = new Map<number, HTMLTableRowElement>()
-function setRowEl(index: number, el: Element | ComponentPublicInstance | null) {
-  if (el) rowEls.set(index, el as HTMLTableRowElement)
-  else rowEls.delete(index)
+// Row elements by key: a row's element can leave and another arrive at the same index in one
+// update, in either order.
+const rowElsByKey = new Map<string, HTMLTableRowElement>()
+function setRowEl(key: string, el: Element | ComponentPublicInstance | null) {
+  if (el) rowElsByKey.set(key, el as HTMLTableRowElement)
+  else rowElsByKey.delete(key)
+}
+/** The element of the row rendered at an index. */
+const rowEls = {
+  get(index: number): HTMLTableRowElement | undefined {
+    const segment = segments.value.find((s) => s.kind === 'row' && s.index === index)
+    return segment ? rowElsByKey.get(segment.key) : undefined
+  },
 }
 
 // A row moved to may not be rendered or loaded yet: focus it once it renders, and select it
@@ -230,7 +251,22 @@ function focusIfRendered() {
   focusPending.value = -1
   el.focus({ preventScroll: true })
 }
-onUpdated(focusIfRendered)
+// A focused placeholder is replaced by a new element when its row arrives: focus goes to the
+// row that took its place, so a keyboard move to a row not loaded yet keeps focus.
+/** The row that holds focus, from its focusin and focusout: its index and its key. */
+let focused: { index: number; key: string } | null = null
+let replaced: { index: number; el: HTMLTableRowElement } | null = null
+onBeforeUpdate(() => {
+  // Read by key: the segments already describe the coming render.
+  const el = focused ? rowElsByKey.get(focused.key) : undefined
+  replaced = focused && el && focused.key.startsWith('index:') ? { index: focused.index, el } : null
+})
+onUpdated(() => {
+  const el = replaced ? rowEls.get(replaced.index) : undefined
+  if (replaced && el && el !== replaced.el) el.focus({ preventScroll: true })
+  replaced = null
+  focusIfRendered()
+})
 watch(
   () => (selectPending.value >= 0 ? rowOf(selectPending.value) : undefined),
   (row) => {
@@ -269,8 +305,12 @@ function onRowKeydown(event: KeyboardEvent, index: number) {
 }
 
 /** Focus reached a row (Tab, or its ID link): it becomes the active row, and stays rendered. */
-function onRowFocus(index: number) {
+function onRowFocus(index: number, key: string) {
   active.value = index
+  focused = { index, key }
+}
+function onRowBlur(key: string) {
+  if (focused?.key === key) focused = null
 }
 
 function onVirtualRowClick(event: MouseEvent, index: number, row: Row | undefined) {
@@ -368,7 +408,7 @@ defineExpose({
           </tr>
           <tr
             v-else
-            :ref="(el) => setRowEl(segment.index, el)"
+            :ref="(el) => setRowEl(segment.key, el)"
             v-bind="segment.row ? rowAttrs(segment.row) : {}"
             class="-outline-offset-2"
             :class="
@@ -388,7 +428,8 @@ defineExpose({
             :data-index="segment.index"
             @click="onVirtualRowClick($event, segment.index, segment.row)"
             @keydown="onRowKeydown($event, segment.index)"
-            @focusin="onRowFocus(segment.index)"
+            @focusin="onRowFocus(segment.index, segment.key)"
+            @focusout="onRowBlur(segment.key)"
           >
             <component
               :is="column.rowHeader ? 'th' : 'td'"

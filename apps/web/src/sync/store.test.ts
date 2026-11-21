@@ -2,8 +2,11 @@ import type { Item } from '@16bit/core'
 import { describe, expect, it, vi } from 'vitest'
 import { isReactive, watchEffect } from 'vue'
 import { item } from '../views/hub/fixtures.test-utils.ts'
-import { liveStore } from './fake-feed.test-utils.ts'
-import { createWorkspaceStore } from './store.ts'
+import { fakeFeed, liveStore } from './fake-feed.test-utils.ts'
+import { FEED_CLOSE_CODES } from '@16bit/core'
+import { setUnauthorizedHandler } from '../api/client.ts'
+import type { FeedHandlers } from './feed.ts'
+import { createWorkspaceStore, resetWorkspaceStores, workspaceStore } from './store.ts'
 
 const MINE = '6f1c1f9e-8f53-4a4e-9a57-1d2b8c3e4f50'
 
@@ -115,7 +118,7 @@ describe('workspace store: the feed', () => {
     expect(store.isLive('bld')).toBe(false)
   })
 
-  it('applies changes, tombstones deletions, and marks the echo of a pending write', () => {
+  it('applies changes and tombstones deletions, the echo of a pending write included', () => {
     const { store, socket } = liveStore()
     store.hold('bld')
     store.noteRead('bld', 1)
@@ -128,6 +131,7 @@ describe('workspace store: the feed', () => {
     socket()?.push({
       type: 'changes',
       seq: 5,
+      hubIds: ['bld'],
       changes: [
         { seq: 4, hubId: 'bld', itemId: 'i1', item: at('i1', 2, 'Mine'), clientMutationId: MINE },
         { seq: 5, hubId: 'bld', itemId: 'i2', item: null },
@@ -135,7 +139,9 @@ describe('workspace store: the feed', () => {
     })
     expect(store.get('i1')?.version).toBe(2)
     expect(store.isDeleted('i2')).toBe(true)
-    expect(events.mock.calls.map(([e]) => (e as { own: boolean }).own)).toEqual([true, false])
+    expect(events).toHaveBeenCalledTimes(2)
+    // The pending edit still shows over the echoed copy until its response confirms it.
+    expect(store.view('i1')?.values['title']).toBe('Mine')
   })
 
   it('records a lost hub until a view holds it afresh', () => {
@@ -164,5 +170,78 @@ describe('workspace store: the feed', () => {
     expect(store.status.value).toBe('online')
     socket()?.drop()
     expect(store.status.value).toBe('offline')
+  })
+})
+
+describe('workspace store: hubs that are not live', () => {
+  it('reports offline while a held hub was refused, until a message names it again', () => {
+    const { store, socket } = liveStore()
+    store.hold('a')
+    store.hold('b')
+    store.noteRead('a', 1)
+    store.noteRead('b', 1)
+    socket()?.open()
+    socket()?.push({ type: 'changes', seq: 1, hubIds: ['a'], changes: [] })
+    socket()?.push({
+      type: 'error',
+      code: 'too_many_subscriptions',
+      message: 'Too many',
+      hubId: 'b',
+    })
+    expect(store.isLive('b')).toBe(false)
+    expect(store.status.value).toBe('offline')
+    // The next read subscribes it again; its answer makes it live.
+    store.noteRead('b', 2)
+    socket()?.push({ type: 'changes', seq: 2, hubIds: ['b'], changes: [] })
+    expect(store.isLive('b')).toBe(true)
+    expect(store.status.value).toBe('online')
+  })
+
+  it('stops reporting a hub nobody holds', () => {
+    const { store, socket } = liveStore()
+    const release = store.hold('a')
+    store.hold('b')
+    store.noteRead('b', 1)
+    socket()?.open()
+    store.markBehind('a')
+    expect(store.status.value).toBe('offline')
+    release()
+    expect(store.status.value).toBe('online')
+  })
+})
+
+describe('workspace store: the session ends (4401)', () => {
+  it('drops every store, sends the reader to sign in, and a new store is live again', () => {
+    const unauthorized = vi.fn()
+    const stop = setUnauthorizedHandler(unauthorized)
+    try {
+      const feeds: ReturnType<typeof fakeFeed>[] = []
+      const make = (_w: string, handlers: FeedHandlers) => {
+        const made = fakeFeed(handlers)
+        feeds.push(made)
+        return made.feed
+      }
+      const first = workspaceStore('w', make)
+      first.hold('bld')
+      first.noteRead('bld', 5)
+      first.apply(at('i1', 1))
+      feeds[0]?.socket()?.open()
+      feeds[0]?.socket()?.drop(FEED_CLOSE_CODES.credentialsEnded)
+      expect(unauthorized).toHaveBeenCalledTimes(1)
+      expect(first.isLive('bld')).toBe(false)
+
+      // After signing in again: a fresh store, with nothing from before, and a live feed.
+      const second = workspaceStore('w', make)
+      expect(second).not.toBe(first)
+      expect(second.get('i1')).toBeUndefined()
+      second.hold('bld')
+      second.noteRead('bld', 9)
+      feeds[1]?.socket()?.open()
+      expect(feeds[1]?.socket()?.sent).toEqual([{ type: 'subscribe', hubId: 'bld', after: 9 }])
+      expect(second.status.value).toBe('online')
+    } finally {
+      stop()
+      resetWorkspaceStores()
+    }
   })
 })

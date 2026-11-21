@@ -145,6 +145,34 @@ describe('DataTable virtual mode, in use', () => {
     expect(t.selected.map((r) => r.id)).toEqual(['r999'])
   })
 
+  it('keeps focus when the placeholder that has it is replaced by its row', async () => {
+    const t = setup(1000, 5)
+    await nextTick()
+    fire(t.row(7), 'focusin')
+    t.row(7).focus()
+    t.state.store.set(7, { id: 'r7', title: 'Row 7' })
+    await nextTick()
+    expect(t.row(7).props['data-row']).toBe('')
+    expect(activeElement(t.root)).toBe(t.row(7))
+  })
+
+  it('moves an element with its row when a row is added above, so focus stays on its item', async () => {
+    const t = setup(1000, 10)
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    key(t.row(1), 'ArrowDown')
+    await nextTick()
+    const focused = activeElement(t.root)
+    expect(focused).toBe(t.row(2))
+    // A new item goes first: every loaded row moves down one.
+    const shifted = new Map<number, Row>([[0, { id: 'new', title: 'New' }]])
+    for (const [i, row] of t.state.store) shifted.set(i + 1, row)
+    t.state.store = shifted
+    await nextTick()
+    expect(t.row(3)).toBe(focused)
+    expect(t.text(t.row(3))).toContain('Row 2')
+  })
+
   it('lets a click cancel a keyboard move still waiting for its row', async () => {
     const t = setup(1000, 50)
     await nextTick()

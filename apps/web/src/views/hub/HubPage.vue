@@ -8,7 +8,7 @@ import { canManageSchema } from '../hub-settings/schema.ts'
 import { viewerOf } from '../hub-settings/access.ts'
 import ShellUser from '../../session/ShellUser.vue'
 import ConnectionStatus from '../../sync/ConnectionStatus.vue'
-import { hubEventIsNew, useLiveHub } from '../../sync/live.ts'
+import { useLiveHub } from '../../sync/live.ts'
 import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
@@ -42,10 +42,7 @@ const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '',
 const live = useLiveHub(
   items.store,
   () => hubId,
-  (_id, version) => {
-    const shown = hubRead.value.state === 'ready' ? hubRead.value.data.hub.version : -1
-    if (hubEventIsNew(shown, version)) void refreshHub()
-  },
+  () => void refreshHub(),
 )
 const hub = computed<Load<HubDescription>>(() =>
   live.lost.value
@@ -384,7 +381,9 @@ async function submitCreate(values: ItemValues) {
               :saving="items.isSaving(item.id)"
               :disabled="items.isCreating(item.id)"
               :read-only="readOnly"
-              @save="items.save(item.id, $event)"
+              :refused-value="(attributeId: string) => items.refusedValue(item.id, attributeId)"
+              @save="(values, basedOn) => items.save(item.id, values, basedOn)"
+              @dismiss-refused="items.forgetRefused(item.id, [$event])"
             />
           </template>
         </ItemPanelBody>

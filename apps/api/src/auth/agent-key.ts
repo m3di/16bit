@@ -35,6 +35,14 @@ export async function resolveAgentKey(
   token: string,
 ): Promise<AgentIdentity | null> {
   if (!token.startsWith(AGENT_SECRET_PREFIX)) return null
+  return resolveAgentKeyHash(db, hashAgentSecret(token))
+}
+
+/** `resolveAgentKey` by the secret's hash, for the feed's periodic check of an open socket. */
+export async function resolveAgentKeyHash(
+  db: Kysely<Database>,
+  secretHash: string,
+): Promise<AgentIdentity | null> {
   const { rows } = await sql<{
     workspace_id: string
     workspace_name: string
@@ -43,7 +51,7 @@ export async function resolveAgentKey(
     hub_id: string
     hub_name: string
     hub_role: string
-  }>`SELECT * FROM auth_agent_key(${hashAgentSecret(token)})`.execute(db)
+  }>`SELECT * FROM auth_agent_key(${secretHash})`.execute(db)
   const row = rows[0]
   if (!row) return null
   return {

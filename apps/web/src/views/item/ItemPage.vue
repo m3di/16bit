@@ -4,7 +4,7 @@ import { computed, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ShellUser from '../../session/ShellUser.vue'
 import ConnectionStatus from '../../sync/ConnectionStatus.vue'
-import { hubEventIsNew, useLiveHub } from '../../sync/live.ts'
+import { useLiveHub } from '../../sync/live.ts'
 import { useSession } from '../../session/session.ts'
 import { AppShell, ConfirmDialog } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -51,9 +51,8 @@ const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '',
 const live = useLiveHub(
   items.store,
   () => hubId.value,
-  (id, version) => {
-    const shown = description.value?.hub.version ?? -1
-    if (hubEventIsNew(shown, version)) directory.refresh(id)
+  (id) => {
+    directory.refresh(id)
   },
 )
 const principals = usePrincipals(
@@ -222,7 +221,9 @@ const deleteLabel = computed(() =>
             :read-only="readOnly"
             :saving="items.isSaving(item.id)"
             :notice="items.notice.value"
-            @save="items.save(item.id, $event)"
+            :refused-value="(attributeId: string) => items.refusedValue(item.id, attributeId)"
+            @save="(values, basedOn) => items.save(item.id, values, basedOn)"
+            @dismiss-refused="items.forgetRefused(item.id, [$event])"
             @delete="askDelete"
             @dismiss="items.dismissNotice()"
             @retry-backlinks="backlinks.load()"

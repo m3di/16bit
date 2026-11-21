@@ -73,6 +73,25 @@ export async function resolveSession(
 }
 
 /**
+ * True while the session `idHash` is live: not ended, not past its expiry, not idle. For the
+ * feed's periodic check (D58); unlike `resolveSession` it does not count as activity.
+ */
+export async function sessionLive(
+  db: Kysely<Database>,
+  idHash: string,
+  policy: SessionPolicy,
+): Promise<boolean> {
+  const row = await db
+    .selectFrom('session')
+    .select('id_hash')
+    .where('id_hash', '=', idHash)
+    .where('expires_at', '>', sql<Date>`now()`)
+    .where('last_seen_at', '>', sql<Date>`now() - make_interval(secs => ${policy.idleSeconds})`)
+    .executeTakeFirst()
+  return row !== undefined
+}
+
+/**
  * Ends a session, and in the same statement sends a `session` NOTIFY so the feed closes its
  * sockets at once (D58). Nothing is sent when there was no such session.
  */
