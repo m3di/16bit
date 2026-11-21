@@ -121,7 +121,7 @@ test('an editor opens an item on its own page, edits it and follows its links', 
   await expect(trail).toContainText(`${h.prefix}-${String(item.seqId)}`)
 
   // Every attribute of the folder, with its editor. The linked Design item shows its title.
-  const refs = page.getByRole('list', { name: 'Refs' })
+  const refs = page.getByRole('list', { name: 'Refs', exact: true })
   await expect(
     refs.getByRole('link', { name: design.values[DESIGN_TITLE] as string }),
   ).toBeVisible()
@@ -169,7 +169,7 @@ test('a viewer sees the item read-only, a linked item they cannot see as "No acc
   await expect(page.getByRole('button', { name: 'Delete item' })).toHaveCount(0)
   await expect(page.getByLabel('Title (required)')).toBeDisabled()
 
-  const refs = page.getByRole('list', { name: 'Refs' })
+  const refs = page.getByRole('list', { name: 'Refs', exact: true })
   await expect(refs.locator('[data-access="none"]')).toBeVisible()
   await expect(page.getByText(hidden)).toHaveCount(0)
   await expect(linkedFrom(page)).toContainText('No items link here.')
@@ -246,7 +246,7 @@ test('a deleted linked item drops out of the relation (#145)', async ({ as, page
 
   const page = await pageAs('owner')
   await page.goto(itemPath(item.id))
-  const refs = page.getByRole('list', { name: 'Refs' })
+  const refs = page.getByRole('list', { name: 'Refs', exact: true })
   await expect(refs.getByRole('link', { name: kept.values[DESIGN_TITLE] as string })).toBeVisible()
   await expect(refs.locator(`[data-linked="${gone.id}"]`)).toHaveCount(0)
   await expect(page.getByText(goneTitle)).toHaveCount(0)

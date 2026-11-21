@@ -9,6 +9,7 @@ import {
   type Item,
   type ItemQueryResult,
   type ItemWriteResult,
+  type Change,
   type ItemValues,
   type ValueError,
 } from '@16bit/core'
@@ -22,7 +23,9 @@ import {
   type Fetch,
 } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
-import { workspaceStore, type AppliedChange, type WorkspaceStore } from '../../sync/store.ts'
+import { yieldToMain } from '../../api/yield.ts'
+import { backoff } from '../../sync/feed.ts'
+import { workspaceStore, type WorkspaceStore } from '../../sync/store.ts'
 import type { RowWindows } from '../../ui/data-table.ts'
 import { FolderRows, WINDOW_SIZE } from './folder-rows.ts'
 import { listValue, type LinkedState } from './relations.ts'
@@ -281,10 +284,29 @@ export function useItems(
   const orderKeys = new Map<string, string>()
   /** Items this view deleted, so the echo of a delete does not read the rows again. */
   const removedHere = new Set<string>()
+  /**
+   * The highest item number this view has seen in the open folder. Items never change folder,
+   * so an item it has not listed with a higher number is new, and first in the default order,
+   * whatever its version: a create and an edit made together reach the feed as one change (D58).
+   */
+  let highestSeen = 0
+  const see = (seqId: number) => {
+    if (seqId > highestSeen) highestSeen = seqId
+  }
 
   function rowsChanged() {
     rowsVersion.value++
     if (list.value.state === 'ready') list.value.data.total = positions.total
+  }
+
+  /**
+   * Rows were added or removed: later rows moved by one, and holes moved into loaded windows.
+   * The windows in view that are no longer whole are read again; the table only asks when the
+   * windows in view change.
+   */
+  function rowsShifted() {
+    rowsChanged()
+    if (inView) showWindows(inView)
   }
 
   /** The item at a row, or undefined while its window is not loaded. */
@@ -332,15 +354,53 @@ export function useItems(
     return JSON.stringify(attributes.map((a) => item.values[a] ?? null))
   }
 
-  /** Reads one window of the open folder (D61), with the folder's total. */
+  /** Items checked per task when a window arrives, so no one task checks all 200 (issue 218). */
+  const ITEMS_PER_SLICE = 50
+  const itemsSchema = itemQueryResultSchema.shape.items
+  /** A window response with its items not checked yet: they are checked in slices below. */
+  const windowEnvelope = {
+    parse(data: unknown): Omit<ItemQueryResult, 'items'> & { items: unknown[] } {
+      const raw = data as { items?: unknown } | null
+      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) throw new Error('No items')
+      const envelope = itemQueryResultSchema.parse({ ...raw, items: [] })
+      return { ...envelope, items: raw.items as unknown[] }
+    },
+  }
+  /**
+   * A window read whose caller has moved on (another folder, order, or read). It stops at the
+   * next slice instead of checking and taking in rows nobody will show; the caller's own
+   * generation check then drops it, as it drops any stale read.
+   */
+  class StaleRead extends Error {}
+  /** Checks a window's items against the contract, one slice per task. */
+  async function checkItems(items: unknown[], stale: () => boolean): Promise<Item[]> {
+    const checked: Item[] = []
+    for (let i = 0; i < items.length; i += ITEMS_PER_SLICE) {
+      if (i > 0) {
+        await yieldToMain()
+        if (stale()) throw new StaleRead()
+      }
+      const slice = itemsSchema.safeParse(items.slice(i, i + ITEMS_PER_SLICE))
+      if (!slice.success)
+        throw new ApiRequestError('bad_response', 'The server sent an unexpected response.', 200)
+      checked.push(...slice.data)
+    }
+    return checked
+  }
+
+  /**
+   * Reads one window of the open folder (D61), with the folder's total. The response is checked
+   * and taken in over several tasks, so a 200-row window never holds the main thread for long.
+   */
   async function fetchWindow(
     folder: string,
     offset: number,
     order: SortKey | null,
     filter: Filter | null,
+    stale: () => boolean,
   ) {
     const attributes = expand
-    const page = await sendJson(
+    const envelope = await sendJson(
       'POST',
       `${base}/query`,
       {
@@ -354,12 +414,18 @@ export function useItems(
         ...(order ? {} : { order: 'number' }),
         ...(filter ? { where: filter } : {}),
       },
-      itemQueryResultSchema,
+      windowEnvelope,
       fetchFn,
     )
+    const page: ItemQueryResult = { ...envelope, items: await checkItems(envelope.items, stale) }
+    // The rows are taken into the store in a task of their own.
+    await yieldToMain()
+    if (stale()) throw new StaleRead()
     for (const item of page.items) absorb(item)
     noteRead(options.hubId?.() ?? page.items[0]?.hubId, page.seq)
     absorbLinked(page, attributes)
+    // The caller puts the rows in place and the table renders them, in another task.
+    await yieldToMain()
     return page
   }
 
@@ -375,6 +441,7 @@ export function useItems(
       page.items.map((i) => i.id),
       page.total ?? into.total,
     )
+    for (const item of page.items) see(item.seqId)
     if (reorders(data)) for (const item of page.items) orderKeys.set(item.id, orderKey(item, data))
   }
 
@@ -454,9 +521,14 @@ export function useItems(
   })
 
   /** Reads windows at `offsets` together; the rows are only replaced once all have arrived. */
-  async function readWindows(folder: string, offsets: readonly number[], order: Order) {
+  async function readWindows(
+    folder: string,
+    offsets: readonly number[],
+    order: Order,
+    stale: () => boolean,
+  ) {
     const pages = await Promise.all(
-      offsets.map((offset) => fetchWindow(folder, offset, order.sort, order.where)),
+      offsets.map((offset) => fetchWindow(folder, offset, order.sort, order.where, stale)),
     )
     return offsets.map((offset, i) => ({ offset, page: pages[i] as ItemQueryResult }))
   }
@@ -482,7 +554,7 @@ export function useItems(
     // The table is mounted afresh at the top once the rows arrive.
     inView = null
     try {
-      const reads = await readWindows(folder, [0], order)
+      const reads = await readWindows(folder, [0], order, () => gen !== generation)
       if (gen !== generation) return
       freshRows(order, reads)
       list.value = readyList(order, positions.total)
@@ -515,6 +587,8 @@ export function useItems(
     if (id !== folderId.value) {
       sort.value = null
       where.value = null
+      // Item numbers only grow, so the mark stays valid while the same folder is open.
+      highestSeen = 0
     } else if (sort.value && sortableIds && !sortableIds.includes(sort.value.attribute)) {
       sort.value = null
       dropped = true
@@ -542,13 +616,17 @@ export function useItems(
     const gen = ++generation
     const data = current.data
     data.sorting = true
+    const rows = positions
+    const shifts = rows.shifts
     try {
-      const reads = await readWindows(folder, offsetsInView(), next)
+      const reads = await readWindows(folder, offsetsInView(), next, () => gen !== generation)
       if (gen !== generation) return
       freshRows(next, reads)
       list.value = readyList(next, positions.total)
       rowsChanged()
       if (inView) showWindows(inView)
+      // A create or delete while this was read may be missing from it: read the view again.
+      if (rows.shifts !== shifts) scheduleRefetch()
       // The rows are in the order asked for, so a notice about the previous order no longer applies.
       if (sortNotice) say(null)
     } catch (thrown) {
@@ -575,11 +653,26 @@ export function useItems(
     if (current.state !== 'ready' || !folder) return
     const data = current.data
     const gen = generation
+    const rows = positions
+    const shifts = rows.shifts
     loading.add(offset)
     data.failed = data.failed.filter((o) => o !== offset)
     try {
-      const page = await fetchWindow(folder, offset, data.sort, data.where)
+      const page = await fetchWindow(
+        folder,
+        offset,
+        data.sort,
+        data.where,
+        () => gen !== generation,
+      )
       if (gen !== generation) return
+      if (rows.shifts !== shifts) {
+        // Rows were added or removed while this was read, so it belongs at other rows: drop it,
+        // and read the windows in view again.
+        loading.delete(offset)
+        if (inView) showWindows(inView)
+        return
+      }
       putWindow(positions, offset, page, data)
       rowsChanged()
     } catch (thrown) {
@@ -636,16 +729,24 @@ export function useItems(
     }, options.refetchDelay ?? REFETCH_DELAY)
   }
 
-  async function refetchInView() {
+  /**
+   * Reads the windows in view again and replaces the rows. Resolves `false` when the read failed
+   * and the rows may have missed changes; a folder now out of reach (404, 403) shows that state
+   * instead and counts as read.
+   */
+  async function refetchInView(): Promise<boolean> {
     const current = list.value
     const folder = folderId.value
-    if (current.state !== 'ready' || current.data.sorting || !folder) return
+    // Nothing shown yet, or a new order on its way that replaces the rows anyway.
+    if (current.state !== 'ready' || current.data.sorting || !folder) return true
     const data = current.data
     const order: Order = { sort: data.sort, where: data.where }
     const gen = ++generation
     loading.clear()
     const offsets = offsetsInView()
     for (const offset of offsets) loading.add(offset)
+    const rows = positions
+    const shifts = rows.shifts
     const before = new Map<string, number>()
     if (inView) {
       for (let i = inView.start; i < inView.end; i++) {
@@ -654,8 +755,9 @@ export function useItems(
       }
     }
     try {
-      const reads = await readWindows(folder, offsets, order)
-      if (gen !== generation) return
+      const reads = await readWindows(folder, offsets, order, () => gen !== generation)
+      // A later read replaces this one and answers for it.
+      if (gen !== generation) return true
       freshRows(order, reads)
       data.failed = []
       data.failure = null
@@ -663,9 +765,19 @@ export function useItems(
       reordered.value = { before }
       // A window scrolled to while these were read was dropped with the old rows.
       if (inView) showWindows(inView)
-    } catch {
-      // The rows shown stay; the next change or a scroll reads them again.
-      if (gen === generation) loading.clear()
+      // A create or delete while this was read may be missing from it: read the view again.
+      if (rows.shifts !== shifts) scheduleRefetch()
+      return true
+    } catch (thrown) {
+      if (gen !== generation) return true
+      loading.clear()
+      const error = asRequestError(thrown)
+      if (error.isNotFound || error.isNoPermission) {
+        list.value = { state: 'error', error }
+        return true
+      }
+      // The rows shown stay; the next change, a scroll or a resync retry reads them again.
+      return false
     }
   }
 
@@ -738,6 +850,44 @@ export function useItems(
     return run
   }
 
+  /** Edits a 409 refused, by item, until the reader keeps them or takes the other value. */
+  const refusedEdits = ref<Record<string, { values: ItemValues; by: string }>>({})
+  /** The reader's refused value for one field, and the principal whose change won. */
+  function refusedValue(id: string, attributeId: string) {
+    const entry = refusedEdits.value[id]
+    if (!entry || !(attributeId in entry.values)) return null
+    return { value: entry.values[attributeId] ?? null, by: entry.by }
+  }
+  function forgetRefused(id: string, attributeIds: readonly string[]) {
+    const entry = refusedEdits.value[id]
+    if (!entry) return
+    const values = Object.fromEntries(
+      Object.entries(entry.values).filter(([k]) => !attributeIds.includes(k)),
+    )
+    if (Object.keys(values).length === 0) Reflect.deleteProperty(refusedEdits.value, id)
+    else refusedEdits.value[id] = { ...entry, values }
+  }
+
+  /**
+   * The versions this view's own confirmed writes moved each item through, `from` to `to`. A
+   * queued write sends the version the reader's edit was based on, moved on only by these: a
+   * change by someone else that the feed delivered meanwhile still makes it a 409, never a
+   * silent overwrite (D8, D58).
+   */
+  const ownSteps = new Map<string, Map<number, number>>()
+  function versionFor(id: string, base: number): number {
+    const steps = ownSteps.get(id)
+    let version = base
+    for (let next = steps?.get(version); next !== undefined; next = steps?.get(version))
+      version = next
+    return version
+  }
+  function stepped(id: string, from: number, to: number) {
+    const steps = ownSteps.get(id) ?? new Map<number, number>()
+    steps.set(from, to)
+    ownSteps.set(id, steps)
+  }
+
   /** Takes in a write's response: the item as written, and the `seq` it was written at. */
   function confirmed(response: ItemWriteResult) {
     const { seq } = response
@@ -751,13 +901,16 @@ export function useItems(
    * On a 409 the item shows the server's current values, and every edit still queued for it
    * is dropped, since it was made against the old version. Any other failure undoes this edit.
    */
-  function save(id: string, values: ItemValues): Promise<boolean> {
+  function save(id: string, values: ItemValues, basedOn: number | null = null): Promise<boolean> {
     // The server does not have the item yet, so there is nothing to PATCH.
     if (store.isCreating(id)) {
       say('The new item is still being saved. Edit it once it has been created.')
       return Promise.resolve(false)
     }
     const mutationId = newItemId()
+    // The version the reader's edit is based on: from the field when it knows (a draft kept while
+    // someone else saved, D60), else the server copy they see under their own edits.
+    const base = basedOn ?? store.get(id)?.version
     store.addPending(id, { kind: 'patch', mutationId, values })
     const drop = () => {
       store.dropPending(id, mutationId)
@@ -766,20 +919,23 @@ export function useItems(
     return enqueue(id, async () => {
       if (!store.pending(id).some((w) => w.mutationId === mutationId)) return false
       const before = store.get(id)
-      if (!before) {
+      if (!before || base === undefined) {
         drop()
         return false
       }
+      const version = versionFor(id, base)
       try {
         const response = await sendJson(
           'PATCH',
           itemPath(id),
-          { version: before.version, values, clientMutationId: mutationId },
+          { version, values, clientMutationId: mutationId },
           itemWriteResultSchema,
           fetchFn,
         )
+        stepped(id, version, response.version)
         const saved = confirmed(response)
         drop()
+        forgetRefused(id, Object.keys(values))
         // Without the feed nothing else says that the row may have moved.
         if (saved) checkOrder(saved)
         return true
@@ -793,6 +949,18 @@ export function useItems(
             `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`,
           )
         } else if (error.code === 'conflict' && conflict.success) {
+          // Every edit still pending was made against the old version: all of them are offered
+          // back field by field ("Keep mine"), beside the other person's values.
+          const mine = store
+            .pending(id)
+            .reduce<ItemValues>(
+              (acc, w) => (w.kind === 'patch' ? { ...acc, ...w.values } : acc),
+              {},
+            )
+          refusedEdits.value[id] = {
+            values: { ...refusedEdits.value[id]?.values, ...mine },
+            by: conflict.data.current.updatedBy,
+          }
           store.apply(conflict.data.current)
           store.dropPendingKind(id, 'patch')
           say(
@@ -835,7 +1003,7 @@ export function useItems(
     const gen = generation
     if (list.value.state === 'ready') {
       positions.insertAt(0, id)
-      rowsChanged()
+      rowsShifted()
     }
 
     try {
@@ -847,13 +1015,14 @@ export function useItems(
         fetchFn,
       )
       const item = confirmed(response) ?? withoutSeq(response)
+      if (item.folderId === folderId.value) see(item.seqId)
       if (list.value.state === 'ready' && reorders(list.value.data)) scheduleRefetch()
       return { ok: true, item }
     } catch (thrown) {
       const error = asRequestError(thrown)
       if (gen === generation && list.value.state === 'ready') {
         positions.removeAt(positions.indexOf(id))
-        rowsChanged()
+        rowsShifted()
       }
       if (error.status === 403) {
         readOnly.value = true
@@ -873,7 +1042,7 @@ export function useItems(
     if (at >= 0) {
       positions.removeAt(at)
       orderKeys.delete(id)
-      rowsChanged()
+      rowsShifted()
     }
     return at
   }
@@ -902,12 +1071,14 @@ export function useItems(
       removedHere.delete(id)
       if (at < 0 || gen !== generation || list.value.state !== 'ready') return
       if (positions.indexOf(id) < 0) positions.insertAt(at, id)
-      rowsChanged()
+      rowsShifted()
     }
     return enqueue(id, async (): Promise<RemoveResult> => {
       const before = store.get(id) ?? shown
+      // The version shown when the reader asked, moved on only by their own edits before it.
+      const version = versionFor(id, shown.version)
       try {
-        const query = `?version=${String(before.version)}&clientMutationId=${mutationId}`
+        const query = `?version=${String(version)}&clientMutationId=${mutationId}`
         await sendJson('DELETE', `${itemPath(id)}${query}`, undefined, noContent, fetchFn)
       } catch (thrown) {
         const error = asRequestError(thrown)
@@ -967,15 +1138,19 @@ export function useItems(
    * list, or that the rows loaded cannot place, reads the rows in view again, debounced. The
    * echo of the reader's own create is already listed, so it is not added twice (D59).
    */
-  function onChange({ change }: AppliedChange) {
+  function onChange(change: Change) {
     const current = list.value
     if (current.state !== 'ready') return
     const data = current.data
     const listed = positions.indexOf(change.itemId) >= 0
     const item = store.get(change.itemId)
     if (!change.item || !item) {
-      // Gone. One that is not loaded may still have been in this folder, and counted.
-      if (unlist(change.itemId) < 0 && !removedHere.has(change.itemId)) scheduleRefetch()
+      // Gone. One that is not loaded may still have been in this folder, and counted, unless
+      // it was in another hub or this view deleted it (the echo of its own delete).
+      const own = removedHere.delete(change.itemId)
+      const hub = options.hubId?.()
+      const elsewhere = hub !== undefined && hub !== null && change.hubId !== hub
+      if (unlist(change.itemId) < 0 && !own && !elsewhere) scheduleRefetch()
       return
     }
     if (item.folderId !== folderId.value) {
@@ -987,15 +1162,18 @@ export function useItems(
       checkOrder(item)
       return
     }
+    // Numbered above every item this view has seen: new, whatever its version.
+    const isNew = item.seqId > highestSeen
+    see(item.seqId)
     if (reorders(data)) {
       scheduleRefetch()
       return
     }
-    // A new item has the highest number, so it is first; one moved in from another folder
-    // has its place among the others, which only a read can say.
-    if (item.version === 1) {
+    // A new item has the highest number, so it is first. Any other unlisted item among the rows
+    // in view has a place only a read can say.
+    if (isNew) {
       positions.insertAt(0, item.id)
-      rowsChanged()
+      rowsShifted()
     } else if (withinView(item.seqId)) scheduleRefetch()
   }
 
@@ -1011,22 +1189,40 @@ export function useItems(
   }
 
   /**
-   * Too much was missed while away (D58): read the rows in view and the items opened by ID
+   * Too much was missed while away (D58): read the windows in view and the items opened by ID
    * again, so their reads subscribe the hub afresh from their `seq`. The rows stay until the
-   * windows arrive.
+   * windows arrive. Until a read succeeds the hub is not live: the shell says so, and the reads
+   * are tried again with the feed's backoff. A folder now out of reach shows that instead.
    */
-  async function onResync(hubId: string) {
-    if (!held.has(hubId)) return
+  let resyncTimer: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
+  /** A function, so the check after an `await` is not narrowed away by the one before it. */
+  const isDisposed = () => disposed
+  async function onResync(hubId: string, attempt = 0) {
+    if (isDisposed() || !held.has(hubId)) return
+    if (resyncTimer !== null) clearTimeout(resyncTimer)
+    resyncTimer = null
     seen.clear()
-    const ids = [...opened]
-    for (const id of ids) void fetchItem(itemPath(id)).catch(() => undefined)
-    if (!hasList) return
-    await refetchInView()
+    const reads: Promise<boolean>[] = [...opened].map((id) =>
+      fetchItem(itemPath(id)).then(
+        () => true,
+        () => false,
+      ),
+    )
+    if (hasList) reads.push(refetchInView())
+    if (reads.length === 0) return
+    const results = await Promise.all(reads)
+    // Every read must land: a copy that failed to reload missed changes no feed will resend.
+    if (isDisposed() || results.every(Boolean)) return
+    store.markBehind(hubId)
+    resyncTimer = setTimeout(() => void onResync(hubId, attempt + 1), backoff(attempt))
   }
 
   const stops = [store.on('change', onChange), store.on('resync', (hubId) => void onResync(hubId))]
   /** Lets go of the store: listeners and live hubs. Runs on its own when the scope ends. */
   function dispose() {
+    disposed = true
+    if (resyncTimer !== null) clearTimeout(resyncTimer)
     if (refetchTimer !== null) clearTimeout(refetchTimer)
     for (const stop of stops) stop()
     for (const release of held.values()) release()
@@ -1069,5 +1265,7 @@ export function useItems(
     readOnly,
     store,
     dispose,
+    refusedValue,
+    forgetRefused,
   }
 }

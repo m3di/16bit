@@ -55,13 +55,13 @@ test('opens a 50,000-item folder by item number, newest first, rendering only th
 })
 
 test('jumps to the middle and the end, loading the windows there', async ({ page }) => {
-  const reads: number[] = []
+  // Collected here and checked after the scroll: an `expect` that throws in an event listener
+  // does not fail the test.
+  const bodies: { offset?: number; order?: string; count?: boolean }[] = []
   page.on('request', (request) => {
-    if (!request.url().endsWith('/query')) return
-    const body = request.postDataJSON() as { offset?: number; order?: string; count?: boolean }
-    expect(body).toMatchObject({ order: 'number', count: true })
-    reads.push(body.offset ?? -1)
+    if (request.url().endsWith('/query')) bodies.push(request.postDataJSON() as (typeof bodies)[0])
   })
+  const reads = () => bodies.map((body) => body.offset ?? -1)
   await page.goto(FOLDER)
   await loadedNumbers(page)
 
@@ -71,14 +71,16 @@ test('jumps to the middle and the end, loading the windows there', async ({ page
   await expect(table(page).locator('tbody tr[data-index="25000"]')).toBeVisible()
   expect(await rendered(page).count()).toBeLessThan(100)
   // Windows of 200 rows by offset, each read once.
-  expect(reads.every((offset) => offset % 200 === 0)).toBe(true)
-  expect(reads).toContain(24_800)
+  for (const body of bodies) expect(body).toMatchObject({ order: 'number', count: true })
+  expect(reads().every((offset) => offset % 200 === 0)).toBe(true)
+  expect(reads()).toContain(24_800)
 
   await scrollTo(page, 50_000)
   await expect(table(page).locator('tbody tr[data-index="49999"]')).toHaveAttribute('data-row', '')
   const end = await loadedNumbers(page)
   expect(descending(end)).toBe(true)
-  expect(new Set(reads).size).toBe(reads.length)
+  for (const body of bodies) expect(body).toMatchObject({ order: 'number', count: true })
+  expect(new Set(reads()).size).toBe(reads().length)
 })
 
 test('keeps the selected row focused through a wheel scroll, so the arrow keys go on from it', async ({

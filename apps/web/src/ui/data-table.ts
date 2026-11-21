@@ -9,8 +9,12 @@ export const VIRTUAL_HEADER_HEIGHT = 36
 /** Rows loaded per request, as in D61. */
 export const DEFAULT_WINDOW_SIZE = 200
 
-/** Rows rendered above and below the visible ones, so a quick scroll does not show gaps. */
-export const VIRTUAL_OVERSCAN = 8
+/**
+ * Rows rendered above and below the visible ones, so a quick scroll does not show gaps. Kept
+ * small: a wheel notch or a scrollbar drag replaces every rendered row, and with 8 the rows
+ * outside the view were most of the work in each scroll frame (issue 218, D61's 50 ms).
+ */
+export const VIRTUAL_OVERSCAN = 2
 
 /**
  * The rows a virtual table has rendered, from `start` up to but not including `end`, and the

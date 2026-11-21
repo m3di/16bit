@@ -33,7 +33,7 @@ export interface ChangesRead {
 /**
  * The changes after `after` that the caller may see, one per item, each as the item is now
  * (`null` when it is gone) with the `seq` of its latest revision in the page, in `seq` order,
- * and that revision's `clientMutationId` when the caller wrote it.
+ * that revision's cause if it has one, and its `clientMutationId` when the caller wrote it.
  *
  * `seq` is the high-water mark: the workspace counter when the page is complete, the last
  * returned revision's `seq` when `limit` cut it short, and the end of the examined range when
@@ -71,7 +71,7 @@ export async function readChangesBatch(
   const end = Math.min(counter, after + (read.maxScan ?? MAX_CHANGES_SCAN))
   let q = trx
     .selectFrom('revision')
-    .select(['seq', 'item_id', 'hub_id', 'actor', 'client_mutation_id'])
+    .select(['seq', 'item_id', 'hub_id', 'actor', 'client_mutation_id', 'cause'])
     .where('workspace_id', '=', workspaceId)
     .where('seq', '>', after)
     .where('seq', '<=', end)
@@ -115,6 +115,8 @@ export async function readChangesBatch(
     if (row.client_mutation_id !== null && row.actor === read.principalId) {
       change.clientMutationId = row.client_mutation_id
     }
+    // The cause is part of the revision, so everyone who sees the change sees it (D63).
+    if (row.cause !== null) change.cause = row.cause
     return change
   })
   return { page: { changes, seq, more: cut || end < counter }, cut }

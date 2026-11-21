@@ -122,11 +122,16 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
   page,
 }) => {
   await open(page)
+  // A browser that does not report long tasks would pass this test with none seen.
+  expect(
+    await page.evaluate(() => PerformanceObserver.supportedEntryTypes.includes('longtask')),
+  ).toBe(true)
   // Observed from here on, so loading the app is not counted, only the scrolling.
   await page.evaluate((longTask) => {
     const seen: Seen = { longTasks: [], scripts: [] }
     new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) seen.longTasks.push(Math.round(entry.duration))
+      // Raw durations: rounding first would let a 50.4 ms task pass as 50.
+      for (const entry of list.getEntries()) seen.longTasks.push(entry.duration)
     }).observe({ type: 'longtask' })
     new PerformanceObserver((list) => {
       for (const frame of list.getEntries() as unknown as LongFrame[]) {
@@ -178,15 +183,11 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
   )
   test.info().annotations.push({
     type: 'scrolling',
-    description: `long tasks: ${longTasks.length ? longTasks.join(', ') + ' ms' : 'none'}; most rows in the DOM: ${String(mostRows)}`,
+    description: `long tasks: ${longTasks.length ? longTasks.map((ms) => ms.toFixed(0)).join(', ') + ' ms' : 'none'}; most rows in the DOM: ${String(mostRows)}`,
   })
   if (scripts.length) {
     test.info().annotations.push({ type: 'in long frames', description: scripts.join('; ') })
   }
   expect(mostRows).toBeLessThan(MAX_ROWS_IN_DOM)
-  // Issue 218: GitHub's runners see long tasks here (one to 26 per run so far), so in CI they
-  // are reported above, not asserted. Not a `test.fail()` pin: a run with none would turn red.
-  // The fix for issue 218 removes this condition.
-  if (process.env['CI']) return
   expect(longTasks.filter((ms) => ms > LONG_TASK_MS)).toEqual([])
 })

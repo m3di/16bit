@@ -1,6 +1,9 @@
 import type { Change, Item } from '@16bit/core'
-import { describe, expect, it } from 'vitest'
-import { liveStore } from '../../sync/fake-feed.test-utils.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { FEED_CLOSE_CODES } from '@16bit/core'
+import type { FeedHandlers } from '../../sync/feed.ts'
+import { fakeFeed, liveStore } from '../../sync/fake-feed.test-utils.ts'
+import { resetWorkspaceStores, workspaceStore } from '../../sync/store.ts'
 import { fakeApi, item, json, rowsOf, withSeq, type Call } from './fixtures.test-utils.ts'
 import { useItems } from './useItems.ts'
 
@@ -46,7 +49,10 @@ const changed = (it: Item, seq: number, clientMutationId?: string): Change => ({
 })
 const removed = (id: string, seq: number): Change => ({ seq, hubId: 'bld', itemId: id, item: null })
 const ids = (s: ReturnType<typeof useItems>) => rowsOf(s).map((r) => r.id)
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+/** Lets reads finish: a window is checked and taken in over several tasks (issue 218). */
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 describe('live reads (D58)', () => {
   it('subscribes the hub with the seq the folder query came with', async () => {
@@ -271,5 +277,176 @@ describe('reconnect and resync', () => {
     await flush()
     expect(s.view('i9')?.version).toBe(3)
     expect(feed.socket()?.sent.at(-1)).toEqual({ type: 'subscribe', hubId: 'bld', after: 1500 })
+  })
+})
+
+describe('a queued edit and a change by someone else (no silent overwrite)', () => {
+  it('sends the version the edit was based on, so a change the feed brought meanwhile is a 409', async () => {
+    const first = gate<Response>()
+    const patches: number[] = []
+    const { s, socket } = await live(
+      () => page([item('i1', 1, { title: 'Old', points: 1 })], 10),
+      (call) => {
+        patches.push((call.body as { version: number }).version)
+        if (patches.length === 1) return first.promise
+        return json(
+          {
+            error: 'conflict',
+            message: 'Version mismatch',
+            current: item('i1', 1, { title: 'Mine', points: 7 }, 3),
+          },
+          409,
+        )
+      },
+    )
+    const a = s.save('i1', { title: 'Mine' })
+    // Queued behind the first; based on version 1 as the reader sees it.
+    const b = s.save('i1', { points: 2 })
+    await flush()
+    // Another writer's change lands (version 3) before the first save's response (version 2).
+    socket()?.push(changes(12, [changed(item('i1', 1, { title: 'Mine', points: 7 }, 3), 12)]))
+    first.release(json(withSeq(item('i1', 1, { title: 'Mine', points: 1 }, 2), 11)))
+    expect(await a).toBe(true)
+    expect(await b).toBe(false)
+    // Version 2 is where the reader's own first save left it, not the 3 the feed delivered.
+    expect(patches).toEqual([1, 2])
+    expect(s.notice.value).toContain('was changed by someone else')
+    expect(s.view('i1')).toMatchObject({ version: 3, values: { points: 7 } })
+  })
+
+  it('deletes at the version shown when asked, not one the feed brought meanwhile', async () => {
+    const deletes: string[] = []
+    const { s, socket } = await live(
+      () => page([item('i1', 1)], 10),
+      (call) => {
+        deletes.push(call.path)
+        return json(
+          { error: 'conflict', message: 'Version mismatch', current: item('i1', 1, {}, 2) },
+          409,
+        )
+      },
+    )
+    const done = s.remove('i1')
+    socket()?.push(changes(11, [changed(item('i1', 1, { title: 'Theirs' }, 2), 11)]))
+    const result = await done
+    expect(deletes[0]).toMatch(/\?version=1&/)
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('resync whose reads fail', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows offline and reads again with backoff until the hub is live', async () => {
+    vi.useFakeTimers()
+    let listReads = 0
+    const { s, socket, store } = await live(() => {
+      listReads++
+      if (listReads === 1) return page([item('i1', 1)], 10)
+      if (listReads === 2) return json({ error: 'internal', message: 'Down' }, 500)
+      return page([item('i1', 1, { title: 'Back' }, 4)], 900)
+    })
+    socket()?.push({ type: 'resync', hubId: 'bld' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.isLive('bld')).toBe(false)
+    expect(store.status.value).toBe('offline')
+    expect(ids(s)).toEqual(['i1'])
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(listReads).toBe(3)
+    expect(socket()?.sent.at(-1)).toEqual({ type: 'subscribe', hubId: 'bld', after: 900 })
+    socket()?.push(changes(900, []))
+    expect(store.status.value).toBe('online')
+    expect(s.view('i1')).toMatchObject({ version: 4 })
+    // Nothing more is scheduled once the reads landed.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(listReads).toBe(3)
+  })
+
+  it('shows the list as out of reach instead of retrying when access is gone', async () => {
+    vi.useFakeTimers()
+    let listReads = 0
+    const { s, socket } = await live(() => {
+      listReads++
+      return listReads === 1
+        ? page([item('i1', 1)], 10)
+        : json({ error: 'not_found', message: 'Not found' }, 404)
+    })
+    socket()?.push({ type: 'resync', hubId: 'bld' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(listReads).toBe(2)
+    expect(s.list.value).toMatchObject({ state: 'error', error: { status: 404 } })
+  })
+})
+
+describe('after the session ended (4401)', () => {
+  afterEach(resetWorkspaceStores)
+
+  it('a new store for the workspace reads items again and is live', async () => {
+    const feeds: ReturnType<typeof fakeFeed>[] = []
+    const make = (_w: string, handlers: FeedHandlers) => {
+      const made = fakeFeed(handlers)
+      feeds.push(made)
+      return made.feed
+    }
+    const api = fakeApi(() => json(withSeq(item('i9', 9), 5)))
+    const before = useItems('w', () => 'BLD', api.fetchFn, {
+      store: workspaceStore('w', make),
+      list: false,
+    })
+    await before.openItem('i9')
+    feeds[0]?.socket()?.open()
+    feeds[0]?.socket()?.drop(FEED_CLOSE_CODES.credentialsEnded)
+
+    const after = useItems('w', () => 'BLD', api.fetchFn, {
+      store: workspaceStore('w', make),
+      list: false,
+    })
+    await after.openItem('i9')
+    expect(api.calls.filter((c) => c.path === '/v1/workspaces/w/items/i9')).toHaveLength(2)
+    feeds[1]?.socket()?.open()
+    expect(feeds[1]?.socket()?.sent).toEqual([{ type: 'subscribe', hubId: 'bld', after: 5 }])
+  })
+})
+
+describe('a draft kept while someone else saved (D60)', () => {
+  it('saves against the version the draft was based on and offers the refused value back', async () => {
+    const theirs = item('i1', 1, { title: 'Theirs' }, 2)
+    let versions: number[] = []
+    const { s, socket } = await live(
+      () => page([item('i1', 1, { title: 'Old' }, 1)], 10),
+      (call) => {
+        const body = call.body as { version: number; values: Record<string, unknown> }
+        versions = [...versions, body.version]
+        return body.version === 1
+          ? json({ error: 'conflict', message: 'Version mismatch', current: theirs }, 409)
+          : json(withSeq(item('i1', 1, { title: 'Mine' }, 3), 12))
+      },
+    )
+    // Their change arrives while the reader is typing; the field saves against version 1.
+    socket()?.push(changes(11, [changed(theirs, 11)]))
+    expect(await s.save('i1', { title: 'Mine' }, 1)).toBe(false)
+    expect(versions).toEqual([1])
+    expect(s.view('i1')).toMatchObject({ version: 2, values: { title: 'Theirs' } })
+    expect(s.refusedValue('i1', 'title')).toEqual({ value: 'Mine', by: theirs.updatedBy })
+    expect(s.refusedValue('i1', 'points')).toBeNull()
+
+    // Keep mine: saved again over the version now shown, and the offer goes.
+    expect(await s.save('i1', { title: 'Mine' }, 2)).toBe(true)
+    expect(versions).toEqual([1, 2])
+    expect(s.refusedValue('i1', 'title')).toBeNull()
+  })
+
+  it('drops the offer when the reader takes the other value', async () => {
+    const theirs = item('i1', 1, { title: 'Theirs' }, 2)
+    const { s } = await live(
+      () => page([item('i1', 1, { title: 'Old' }, 1)], 10),
+      () => json({ error: 'conflict', message: 'Version mismatch', current: theirs }, 409),
+    )
+    await s.save('i1', { title: 'Mine' }, 1)
+    s.forgetRefused('i1', ['title'])
+    expect(s.refusedValue('i1', 'title')).toBeNull()
   })
 })

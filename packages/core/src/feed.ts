@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { clientMutationIdSchema, seqSchema } from './api.ts'
+import { clientMutationIdSchema, itemCauseSchema, seqSchema } from './api.ts'
 import { utf8ByteLength } from './cursor.ts'
 import { idSchema, itemSchema } from './entities.ts'
 
@@ -34,6 +34,9 @@ export const DEFAULT_CHANGES_LIMIT = 200
  * revisions of one item in a batch collapse to the latest, so `seq` is that revision's.
  * `clientMutationId` is the ID the writer sent with that revision, if any (D59): a client
  * that sees its own ID has already applied the change and only needs the HTTP response.
+ * `cause` is that revision's cause (D63), absent when it has none; every reader of the change
+ * sees it. An item's full history, with every revision's cause, is
+ * `GET /items/:itemId/revisions`.
  */
 export const changeSchema = z.strictObject({
   seq: seqSchema,
@@ -41,6 +44,7 @@ export const changeSchema = z.strictObject({
   itemId: idSchema,
   item: itemSchema.nullable(),
   clientMutationId: clientMutationIdSchema.optional(),
+  cause: itemCauseSchema.optional(),
 })
 export type Change = z.infer<typeof changeSchema>
 

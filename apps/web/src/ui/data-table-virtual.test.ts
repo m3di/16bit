@@ -37,6 +37,10 @@ function setup(rowCount = 1000, loaded = 50) {
           height: 400,
           selectedId: state.selectedId,
           rowAt: (i: number) => state.store.get(i),
+          indexOf: (id: string) => {
+            for (const [i, row] of state.store) if (row.id === id) return i
+            return -1
+          },
           onSelect: (row: Row, how: string) => {
             selected.push(row)
             via.push(how)
@@ -73,9 +77,9 @@ describe('DataTable virtual mode, in use', () => {
   it('renders only the rows in view and asks for the window that holds them', async () => {
     const t = setup(50_000)
     await nextTick()
-    // 400px box, 36px header, 38px rows: 10 rows in view and 8 rendered below for a quick scroll.
-    expect(t.rows()).toHaveLength(18)
-    expect(t.windows).toEqual([{ start: 0, end: 18, offsets: [0] }])
+    // 400px box, 36px header, 38px rows: 10 rows in view and 2 rendered below for a quick scroll.
+    expect(t.rows()).toHaveLength(12)
+    expect(t.windows).toEqual([{ start: 0, end: 12, offsets: [0] }])
   })
 
   it('selects a row on click, but not a placeholder or a click on a link', async () => {
@@ -143,6 +147,34 @@ describe('DataTable virtual mode, in use', () => {
     t.state.store.set(999, { id: 'r999', title: 'Last' })
     await nextTick()
     expect(t.selected.map((r) => r.id)).toEqual(['r999'])
+  })
+
+  it('keeps focus when the placeholder that has it is replaced by its row', async () => {
+    const t = setup(1000, 5)
+    await nextTick()
+    fire(t.row(7), 'focusin')
+    t.row(7).focus()
+    t.state.store.set(7, { id: 'r7', title: 'Row 7' })
+    await nextTick()
+    expect(t.row(7).props['data-row']).toBe('')
+    expect(activeElement(t.root)).toBe(t.row(7))
+  })
+
+  it('moves an element with its row when a row is added above, so focus stays on its item', async () => {
+    const t = setup(1000, 10)
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    key(t.row(1), 'ArrowDown')
+    await nextTick()
+    const focused = activeElement(t.root)
+    expect(focused).toBe(t.row(2))
+    // A new item goes first: every loaded row moves down one.
+    const shifted = new Map<number, Row>([[0, { id: 'new', title: 'New' }]])
+    for (const [i, row] of t.state.store) shifted.set(i + 1, row)
+    t.state.store = shifted
+    await nextTick()
+    expect(t.row(3)).toBe(focused)
+    expect(t.text(t.row(3))).toContain('Row 2')
   })
 
   it('lets a click cancel a keyboard move still waiting for its row', async () => {
@@ -223,11 +255,11 @@ describe('DataTable virtual mode, scrolling', () => {
     const t = scrollable()
     await nextTick()
     expect(t.windows.map((w) => w.offsets)).toEqual([[0]])
-    // Scrolled 300 rows down, row 299 is at the top under the header: rows 291 to 317 render
-    // (8 above for a quick scroll), all in the window at 200.
+    // Scrolled 300 rows down, row 299 is at the top under the header: rows 297 to 311 render
+    // (2 above for a quick scroll), all in the window at 200.
     await t.scrollTo(300 * 38)
     expect(t.windows.map((w) => w.offsets)).toEqual([[0], [200]])
-    expect(t.rows()[0]?.props['data-index']).toBe(291)
+    expect(t.rows()[0]?.props['data-index']).toBe(297)
     // Across a window edge, both windows are asked for.
     await t.scrollTo(395 * 38)
     expect(t.windows.at(-1)).toMatchObject({ offsets: [200, 400] })
@@ -241,11 +273,11 @@ describe('DataTable virtual mode, scrolling', () => {
     const focused = t.row(1)
     expect(activeElement(t.root)).toBe(focused)
     await t.scrollTo(300 * 38)
-    // Row 1 stays where it belongs, between a spacer for row 0 and one up to row 291, and
+    // Row 1 stays where it belongs, between a spacer for row 0 and one up to row 297, and
     // keeps focus, so the next arrow key moves on from it.
     expect(t.rows().map((r) => r.props['data-index'])).toEqual([
       1,
-      ...Array.from({ length: 27 }, (_, i) => 291 + i),
+      ...Array.from({ length: 15 }, (_, i) => 297 + i),
     ])
     expect(t.row(1)).toBe(focused)
     expect(activeElement(t.root)).toBe(focused)
@@ -255,6 +287,26 @@ describe('DataTable virtual mode, scrolling', () => {
     expect(t.windows.at(-1)?.offsets).toEqual([200])
     expect(t.table.value?.isInView(1)).toBe(false)
     expect(t.table.value?.isInView(300)).toBe(true)
+  })
+
+  it('keeps focus on its item when a row is added above it while scrolled away', async () => {
+    const t = scrollable()
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    await nextTick()
+    const focused = t.row(1)
+    await t.scrollTo(300 * 38)
+    // A live create: every loaded row moves down one.
+    const shifted = new Map<number, Row>([[0, { id: 'new', title: 'New' }]])
+    for (const [i, row] of t.state.store) shifted.set(i + 1, row)
+    t.state.store = shifted
+    await nextTick()
+    await nextTick()
+    // Row 1's item is now at row 2: its element is kept there, still focused.
+    expect(t.row(2)).toBe(focused)
+    expect(t.text(t.row(2))).toContain('Row 1')
+    expect(activeElement(t.root)).toBe(focused)
+    expect(t.rows().map((r) => r.props['data-index'])).not.toContain(1)
   })
 
   it('keeps a row reached with Tab rendered too', async () => {
@@ -272,7 +324,7 @@ describe('DataTable virtual mode, scrolling', () => {
     const asked = t.windows.length
     await t.scrollTo(320 * 38)
     await t.scrollTo(250 * 38)
-    expect(t.rows()[0]?.props['data-index']).toBe(241)
+    expect(t.rows()[0]?.props['data-index']).toBe(247)
     expect(t.windows).toHaveLength(asked)
   })
 })
