@@ -1,5 +1,5 @@
 import type { Change, Filter, Item } from '@16bit/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createWorkspaceStore } from '../../sync/store.ts'
 import { fakeApi, item, json, rowsOf, withSeq, type Call } from './fixtures.test-utils.ts'
 import { filterAttributes, followSelected, useItems } from './useItems.ts'
@@ -7,6 +7,38 @@ import { filterAttributes, followSelected, useItems } from './useItems.ts'
 // The folder's rows in windows by offset while changes arrive (D61): in the default order a
 // change updates or shifts rows without a read; with an attribute sort or a filter, a change
 // that may reorder them reads the windows in view again, debounced.
+
+/**
+ * Holds the next `yieldToMain`, so a window read stops part-way through its slices (issue 218).
+ * Every other yield is the real one.
+ */
+const yields = vi.hoisted(() => ({ next: null as null | (() => Promise<void>) }))
+vi.mock('../../api/yield.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/yield.ts')>()
+  return {
+    yieldToMain: () => {
+      const next = yields.next
+      yields.next = null
+      return next ? next() : actual.yieldToMain()
+    },
+  }
+})
+/** `at` resolves when a read reaches the next yield; it waits there until `release`. */
+function holdNextYield() {
+  let reached: () => void = () => undefined
+  const at = new Promise<void>((resolve) => {
+    reached = resolve
+  })
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  yields.next = () => {
+    reached()
+    return held
+  }
+  return { at, release }
+}
 
 type QueryBody = {
   offset: number
@@ -397,6 +429,21 @@ describe('several windows while rows shift (D61)', () => {
     expectLoaded(s, 190, 215)
     expectInStep(s, folder.items)
     // The row the stale read would have overwritten is still there.
+    expect(s.indexOf('i801')).toBe(200)
+  })
+
+  it('drops a window that a create raced part-way through its slices, and reads it again', async () => {
+    const { s, store, folder, reads } = await deep()
+    const pause = holdNextYield()
+    s.showWindows({ start: 190, end: 215, offsets: [0, 200] })
+    // Window 200 has arrived and waits between slices when a create shifts every row.
+    await pause.at
+    store.receive([changed(folder.create(1001))])
+    pause.release()
+    await settle()
+    expect(reads().filter((o) => o === 200)).toHaveLength(2)
+    expectLoaded(s, 190, 215)
+    expectInStep(s, folder.items)
     expect(s.indexOf('i801')).toBe(200)
   })
 
