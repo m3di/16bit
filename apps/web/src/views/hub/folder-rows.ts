@@ -10,6 +10,11 @@ export class FolderRows {
   ids: (string | undefined)[]
   /** Positions by ID, rebuilt after a shift. */
   #index: Map<string, number> | null = new Map()
+  /**
+   * How many times rows were added or removed. A window read that started before a shift
+   * belongs at other rows: compare this before and after the read, and read again if it moved.
+   */
+  shifts = 0
 
   constructor(total = 0) {
     this.ids = new Array<string | undefined>(total)
@@ -70,6 +75,7 @@ export class FolderRows {
   insertAt(index: number, id: string) {
     this.ids.splice(Math.min(index, this.total), 0, id)
     this.#index = null
+    this.shifts++
   }
 
   /** Removes the row at `index`; later rows move up by one. */
@@ -77,5 +83,6 @@ export class FolderRows {
     if (index < 0 || index >= this.total) return
     this.ids.splice(index, 1)
     this.#index = null
+    this.shifts++
   }
 }

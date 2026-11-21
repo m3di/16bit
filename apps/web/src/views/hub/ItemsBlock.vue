@@ -160,6 +160,7 @@ const failedRanges = computed(() => {
       :columns="tableColumns"
       :rows="[]"
       :row-at="rowAt"
+      :index-of="indexOf"
       :row-count="list.data.total"
       height="max(320px, calc(100vh - 260px))"
       :min-width="minWidth"
