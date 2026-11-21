@@ -1,4 +1,4 @@
-import type { Backlink, HubDescription, Item } from '@16bit/core'
+import type { Backlink, HubDescription, Item, RevisionEntry } from '@16bit/core'
 import { createSSRApp, defineComponent, h, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { renderToString } from 'vue/server-renderer'
@@ -9,10 +9,12 @@ import { provideValueContext, type ValueContext } from '../hub/context.ts'
 import { description, fakeApi, item, json } from '../hub/fixtures.test-utils.ts'
 import { folderColumns } from '../hub/useHub.ts'
 import BacklinksBlock from './BacklinksBlock.vue'
+import HistoryBlock from './HistoryBlock.vue'
 import ItemBody from './ItemBody.vue'
 import ItemState from './ItemState.vue'
 import { itemPageLink, type PageState } from './item-page.ts'
 import type { BacklinkList } from './useBacklinks.ts'
+import type { HistoryList } from './useHistory.ts'
 
 // The item page (#119), rendered on the server.
 
@@ -116,6 +118,7 @@ function body(overrides: Record<string, unknown> = {}) {
     hub,
     columns: folderColumns(hub, shown.folderId),
     backlinks: readyLinks(),
+    history: { state: 'loading' },
     readOnly: false,
     saving: false,
     ...overrides,
@@ -231,5 +234,173 @@ describe('BacklinksBlock', () => {
     })
     expect(failed).toContain('Links to this item could not be loaded')
     expect(failed).toContain('Try again')
+  })
+})
+
+const rev = (
+  seq: number,
+  version: number,
+  patch: RevisionEntry['patch'],
+  cause: RevisionEntry['cause'] = null,
+): RevisionEntry => ({
+  seq,
+  version,
+  op: patch.op,
+  patch,
+  actor: 'lead',
+  at: '2026-11-20T10:00:00.000Z',
+  cause,
+})
+
+const readyHistory = (entries: RevisionEntry[], nextCursor: string | null = null) =>
+  ({
+    state: 'ready',
+    data: { entries, nextCursor, more: false, moreError: null, refreshError: null },
+  }) as Load<HistoryList>
+
+describe('HistoryBlock', () => {
+  const history = (list: Load<HistoryList>) => render(HistoryBlock, { list, hub: titled })
+  const failed = (status: number) =>
+    history({ state: 'error', error: new ApiRequestError('x' as never, 'Down', status) })
+
+  it('lists who changed what, newest first, with old and new values', async () => {
+    const html = await history(
+      readyHistory([
+        rev(9, 2, { op: 'update', values: { title: 'Ship it now', stage: 'done' } }),
+        rev(4, 1, { op: 'create', folderId: 'bld', values: { title: 'Ship it' } }),
+      ]),
+    )
+    const t = text(html)
+    expect(html.indexOf('data-history-entry="9"')).toBeLessThan(
+      html.indexOf('data-history-entry="4"'),
+    )
+    expect(t).toContain('Lea Lead changed')
+    expect(t).toContain('Lea Lead created the item')
+    expect(t).toContain('change 9')
+    expect(html).toContain('datetime="2026-11-20T10:00:00.000Z"')
+    expect(t).toMatch(/Title from Ship it → to Ship it now/)
+    // Stage was not set at create, which is loaded, so it was empty.
+    expect(t).toMatch(/Stage from empty → to Done/)
+  })
+
+  it('shows only the new value when the older one is not loaded', async () => {
+    const t = text(
+      await history(readyHistory([rev(9, 5, { op: 'update', values: { title: 'New' } })], 'c1')),
+    )
+    expect(t).toContain('Title New')
+    expect(t).not.toContain('from')
+    expect(t).toContain('Show older')
+  })
+
+  it('says cleared for a removed value and names removed fields without their values', async () => {
+    const t = text(
+      await history(
+        readyHistory([rev(9, 5, { op: 'update', values: { points: null, gone: 'x' } })]),
+      ),
+    )
+    expect(t).toContain('Points cleared')
+    expect(t).toContain('A removed field')
+    expect(t).not.toContain(' x ')
+  })
+
+  it('shows the cause: note, evidence links with their host, and the change it follows', async () => {
+    const html = await history(
+      readyHistory([
+        rev(
+          9,
+          2,
+          { op: 'update', values: { title: 'B' } },
+          {
+            note: 'Customer asked for it',
+            evidence: ['https://github.com/m3di/16bit/pull/220', 'http://example.com/'],
+            causedBy: 4,
+          },
+        ),
+        rev(4, 1, { op: 'create', folderId: 'bld', values: { title: 'A' } }, { causedBy: 2 }),
+      ]),
+    )
+    expect(text(html)).toContain('Customer asked for it')
+    expect(html).toMatch(
+      /<a href="https:\/\/github.com\/m3di\/16bit\/pull\/220" target="_blank" rel="noopener noreferrer"[^>]*><span>github.com<\/span><span class="text-ink3">\/m3di\/16bit\/pull\/220<\/span>/,
+    )
+    expect(html).toMatch(/<span>example.com<\/span><span class="text-ink3"><\/span>/)
+    expect(text(html)).toContain('(opens in a new tab)')
+    // On this item and loaded: a link to its entry. Elsewhere: the number only.
+    expect(html).toMatch(/<a href="#change-4"[^>]*>change 4<\/a>/)
+    expect(html).toContain('id="change-4"')
+    expect(text(html)).toContain('Follows change 2')
+    expect(html).not.toContain('href="#change-2"')
+  })
+
+  it('never links evidence that is not http or https', async () => {
+    const html = await history(
+      readyHistory([
+        rev(
+          9,
+          2,
+          { op: 'update', values: {} },
+          { evidence: ['javascript:alert(1)', 'mailto:a@b.c'] },
+        ),
+      ]),
+    )
+    expect(html).not.toContain('href="javascript')
+    expect(html).not.toContain('href="mailto')
+    expect(text(html)).toContain('javascript:alert(1)')
+  })
+
+  it('names list values after their change, apart from the field on the page', async () => {
+    const owner = {
+      ...titled.attributes[0],
+      id: 'owner',
+      name: 'Owner',
+      type: 'actor',
+      config: { multiple: true },
+    } as HubDescription['attributes'][number]
+    const html = await render(HistoryBlock, {
+      list: readyHistory([rev(9, 2, { op: 'update', values: { owner: ['lead'] } })]),
+      hub: { ...titled, attributes: [...titled.attributes, owner] },
+    })
+    expect(html).toContain('aria-label="Owner in change 9"')
+    expect(html).toContain('aria-label="Fields changed in change 9"')
+    expect(text(html)).toContain('Lea Lead')
+  })
+
+  it('has loading, empty, error, no-permission and not-found states', async () => {
+    expect(await history({ state: 'loading' })).toContain('Loading history')
+    expect(text(await history(readyHistory([])))).toContain('No changes recorded yet.')
+    const error = await failed(500)
+    expect(error).toContain('role="alert"')
+    expect(text(error)).toContain('The history could not be loaded')
+    expect(error).toContain('Try again')
+    expect(await failed(403)).toContain('data-state="no-permission"')
+    const missing = await failed(404)
+    expect(missing).toContain('data-state="not-found"')
+    expect(text(missing)).toContain('This history is not available')
+    expect(text(missing)).toContain('It may not exist, or it may not be shared with you.')
+    expect(missing).not.toContain('Try again')
+  })
+
+  it('keeps what it has when older or newer changes fail to load', async () => {
+    const list = readyHistory([rev(9, 2, { op: 'update', values: { title: 'B' } })], 'c1')
+    if (list.state === 'ready') {
+      list.data.moreError = new ApiRequestError('internal', 'Down', 500)
+      list.data.refreshError = new ApiRequestError('internal', 'Down', 500)
+    }
+    const t = text(await history(list))
+    expect(t).toContain('Older changes could not be loaded.')
+    expect(t).toContain('Newer changes could not be loaded.')
+    expect(t).toContain('change 9')
+  })
+})
+
+describe('ItemBody history', () => {
+  it('shows the History section beside the details', async () => {
+    const html = await body({
+      history: readyHistory([
+        rev(4, 1, { op: 'create', folderId: 'bld', values: { title: 'Ship it' } }),
+      ]),
+    })
+    expect(html).toContain('data-history')
+    expect(text(html)).toContain('created the item')
   })
 })
