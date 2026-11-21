@@ -1,7 +1,7 @@
-import type { Change, FeedErrorCode, Item, ItemValues } from '@16bit/core'
+import type { Change, Item, ItemValues } from '@16bit/core'
 import { computed, shallowReactive, type ComputedRef } from 'vue'
 import { notifyUnauthorized } from '../api/client.ts'
-import { createFeed, feedUrl, type FeedClient, type FeedStatus } from './feed.ts'
+import { createFeed, feedUrl, type FeedClient, type FeedHandlers, type FeedStatus } from './feed.ts'
 
 // One normalised store per workspace and tab (D60): server items by ID, frozen and replaced,
 // never mutated, under a pending layer of the reader's own writes that have not been confirmed.
@@ -15,19 +15,12 @@ export type PendingWrite =
   | { kind: 'patch'; mutationId: string; values: ItemValues }
   | { kind: 'delete'; mutationId: string }
 
-/** One change from the feed, after the store took it in. */
-export interface AppliedChange {
-  change: Change
-  /** The change carries the ID of a write of the reader's own that is still pending (D59). */
-  own: boolean
-}
-
 export interface StoreEvents {
-  change: (event: AppliedChange) => void
+  /** One change from the feed, after the store took it in. */
+  change: (change: Change) => void
   hub: (hubId: string, version: number) => void
   accessLost: (hubId: string) => void
   resync: (hubId: string) => void
-  refused: (hubId: string, code: FeedErrorCode) => void
 }
 
 type Listeners = { [K in keyof StoreEvents]: Set<StoreEvents[K]> }
@@ -39,8 +32,16 @@ const freeze = (item: Item): Readonly<Item> =>
 
 export interface WorkspaceStore {
   workspaceId: string
-  /** The feed's connection state, `idle` when there is no feed. */
+  /**
+   * The feed's connection state, `idle` when there is no feed. `offline` too while the socket is
+   * open but a hub on screen is not live (a refused subscription, a resync whose reads failed).
+   */
   status: ComputedRef<FeedStatus>
+  /**
+   * A held hub is not live although the socket may be: its subscription was refused, or its
+   * reads after a resync failed. Cleared once a `changes` message names it again.
+   */
+  markBehind(hubId: string): void
   /** The server's copy, or `undefined` when unknown or deleted. */
   get(id: string): Readonly<Item> | undefined
   /** The item as shown: the server copy with pending writes applied. Hidden while being deleted. */
@@ -77,7 +78,7 @@ export interface WorkspaceStore {
 
 export function createWorkspaceStore(
   workspaceId: string,
-  makeFeed: ((handlers: Parameters<typeof createFeed>[1]) => FeedClient) | null = null,
+  makeFeed: ((handlers: FeedHandlers) => FeedClient) | null = null,
   /** The feed closed because the session ended (4401): sign in again. */
   onCredentialsEnded: () => void = () => undefined,
 ): WorkspaceStore {
@@ -91,7 +92,6 @@ export function createWorkspaceStore(
     hub: new Set(),
     accessLost: new Set(),
     resync: new Set(),
-    refused: new Set(),
   }
 
   function apply(item: Item): boolean {
@@ -128,30 +128,22 @@ export function createWorkspaceStore(
     else pendingWrites.set(id, Object.freeze([...writes]))
   }
 
-  const ownIds = () => {
-    const ids = new Set<string>()
-    for (const writes of pendingWrites.values()) for (const w of writes) ids.add(w.mutationId)
-    return ids
-  }
-
   function receive(changes: readonly Change[]) {
-    const own = changes.some((c) => c.clientMutationId) ? ownIds() : new Set<string>()
     for (const change of changes) {
       // The item as it is now, or gone (D58). Applied like any read: versions and tombstones
       // decide, so the echo of the reader's own write changes nothing it has not already shown.
       if (change.item) apply(change.item)
       else tombstone(change.itemId)
-      const event: AppliedChange = {
-        change,
-        own: change.clientMutationId !== undefined && own.has(change.clientMutationId),
-      }
-      for (const fn of listeners.change) fn(event)
+      for (const fn of listeners.change) fn(change)
     }
   }
+
+  const behind = shallowReactive(new Set<string>())
 
   const feed = makeFeed
     ? makeFeed({
         changes: (message) => {
+          for (const hubId of message.hubIds) behind.delete(hubId)
           receive(message.changes)
         },
         hub: (hubId, version) => {
@@ -164,8 +156,9 @@ export function createWorkspaceStore(
         resync: (hubId) => {
           for (const fn of listeners.resync) fn(hubId)
         },
-        refused: (hubId, code) => {
-          for (const fn of listeners.refused) fn(hubId, code)
+        // `too_many_subscriptions`: the hub is not live; the next read subscribes it again.
+        refused: (hubId) => {
+          if (holds.has(hubId)) behind.add(hubId)
         },
         credentialsEnded: onCredentialsEnded,
       })
@@ -173,7 +166,13 @@ export function createWorkspaceStore(
 
   return {
     workspaceId,
-    status: computed(() => feed?.status.value ?? 'idle'),
+    status: computed(() => {
+      const status = feed?.status.value ?? 'idle'
+      return status === 'online' && behind.size > 0 ? 'offline' : status
+    }),
+    markBehind: (hubId) => {
+      if (holds.has(hubId)) behind.add(hubId)
+    },
     get: (id) => server.get(id),
     view,
     apply,
@@ -211,6 +210,7 @@ export function createWorkspaceStore(
           return
         }
         holds.delete(hubId)
+        behind.delete(hubId)
         feed?.untrack(hubId)
       }
     },
@@ -233,22 +233,42 @@ export function createWorkspaceStore(
 
 const stores = new Map<string, WorkspaceStore>()
 
-/** The tab's store for a workspace, with a feed on the page's origin when there is a browser. */
-export function workspaceStore(workspaceId: string): WorkspaceStore {
+type MakeFeed = (workspaceId: string, handlers: FeedHandlers) => FeedClient
+
+const browserFeed: MakeFeed | null =
+  typeof WebSocket !== 'undefined' && typeof location !== 'undefined'
+    ? (workspaceId, handlers) => createFeed(feedUrl(workspaceId, location), handlers)
+    : null
+
+/**
+ * The tab's store for a workspace, with a feed on the page's origin when there is a browser.
+ * `makeFeed` is for tests.
+ */
+export function workspaceStore(
+  workspaceId: string,
+  makeFeed: MakeFeed | null = browserFeed,
+): WorkspaceStore {
   let store = stores.get(workspaceId)
   if (!store) {
-    const browser = typeof WebSocket !== 'undefined' && typeof location !== 'undefined'
     store = createWorkspaceStore(
       workspaceId,
-      browser ? (handlers) => createFeed(feedUrl(workspaceId, location), handlers) : null,
-      notifyUnauthorized,
+      makeFeed ? (handlers) => makeFeed(workspaceId, handlers) : null,
+      // The socket closed with 4401: the session ended. Nothing held may outlive it (the next
+      // person to sign in on this tab may be someone else), so every store goes before sign-in.
+      () => {
+        resetWorkspaceStores()
+        notifyUnauthorized()
+      },
     )
     stores.set(workspaceId, store)
   }
   return store
 }
 
-/** Drops every store, for tests. */
+/**
+ * Drops every store and closes their feeds. Called when the session ends (sign-out, a 401, a
+ * feed closed with 4401), so the next sign-in starts with fresh stores and a live feed.
+ */
 export function resetWorkspaceStores() {
   for (const store of stores.values()) store.dispose()
   stores.clear()

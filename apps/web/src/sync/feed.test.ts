@@ -47,6 +47,35 @@ describe('feed client: connecting and subscribing', () => {
     expect(socket()?.sent).toEqual([subscribe('a', 1), subscribe('b', 2)])
   })
 
+  it('does not advance a restarted hub until its catch-up has come', () => {
+    const { feed, socket, clock } = fakeFeed(handlers())
+    feed.track('bld', 20)
+    socket()?.open()
+    socket()?.push({ type: 'changes', seq: 20, hubIds: ['bld'], changes: [] })
+    socket()?.push({ type: 'changes', seq: 30, hubIds: ['bld'], changes: [] })
+    expect(feed.position('bld')).toBe(30)
+    feed.track('bld', 12)
+    // Sent before the server saw the restart: it must not move the hub past 12.
+    socket()?.push({ type: 'changes', seq: 40, hubIds: ['bld'], changes: [] })
+    expect(feed.position('bld')).toBe(12)
+    socket()?.drop()
+    clock.advance(1000)
+    socket()?.open()
+    expect(socket()?.sent).toEqual([subscribe('bld', 12)])
+  })
+
+  it('advances a restarted hub again once its catch-up has been answered', () => {
+    const { feed, socket } = fakeFeed(handlers())
+    feed.track('bld', 20)
+    socket()?.open()
+    socket()?.push({ type: 'changes', seq: 20, hubIds: ['bld'], changes: [] })
+    feed.track('bld', 12)
+    socket()?.push({ type: 'changes', seq: 25, hubIds: ['bld'], changes: [] })
+    expect(feed.position('bld')).toBe(12)
+    socket()?.push({ type: 'changes', seq: 26, hubIds: ['bld', 'x'], changes: [] })
+    expect(feed.position('bld')).toBe(26)
+  })
+
   it('restarts a subscription from an older read, and ignores a newer one', () => {
     const { feed, socket } = fakeFeed(handlers())
     feed.track('bld', 20)
@@ -126,9 +155,23 @@ describe('feed client: reconnecting', () => {
     expect(feed.status.value).toBe('online')
     expect(socket()?.sent).toEqual([subscribe('a', 9)])
 
-    // A successful connection resets the backoff.
+    // A socket that works (a message arrived) resets the backoff.
+    socket()?.push({ type: 'changes', seq: 9, hubIds: ['a'], changes: [] })
     socket()?.drop()
     expect(clock.pending()).toEqual([1000])
+  })
+
+  it('keeps backing off when the server accepts the socket and closes it at once (1008)', () => {
+    const { feed, socket, clock } = fakeFeed(handlers())
+    feed.track('a', 1)
+    const delays: number[] = []
+    for (let n = 0; n < 6; n++) {
+      socket()?.open()
+      socket()?.drop(FEED_CLOSE_CODES.policy)
+      delays.push(...clock.pending())
+      clock.advance(clock.pending()[0] ?? 0)
+    }
+    expect(delays).toEqual([1000, 2000, 4000, 8000, 16000, 30000])
   })
 
   it('subscribes a hub tracked while offline once it reconnects', () => {
@@ -254,7 +297,7 @@ describe('feed client: letting go', () => {
 })
 
 describe('feed client: close codes (FEED_CLOSE_CODES)', () => {
-  it('sends the reader to sign in on 4401 and does not reconnect', () => {
+  it('on 4401 sends the reader to sign in, lets every hub go, and does not reconnect', () => {
     const h = handlers()
     const { feed, sockets, socket, clock } = fakeFeed(h)
     feed.track('a', 1)
@@ -262,8 +305,9 @@ describe('feed client: close codes (FEED_CLOSE_CODES)', () => {
     socket()?.drop(FEED_CLOSE_CODES.credentialsEnded)
     expect(h.credentialsEnded).toHaveBeenCalledTimes(1)
     expect(feed.status.value).toBe('stopped')
+    // Nothing counts as live any more, so no held copy is served as current.
+    expect(feed.isTracked('a')).toBe(false)
     clock.advance(MAX_BACKOFF_MS * 2)
-    feed.track('b', 2)
     expect(sockets).toHaveLength(1)
   })
 
@@ -274,6 +318,7 @@ describe('feed client: close codes (FEED_CLOSE_CODES)', () => {
     socket()?.open()
     socket()?.drop(FEED_CLOSE_CODES.frameTooLarge)
     expect(feed.status.value).toBe('stopped')
+    expect(feed.isTracked('a')).toBe(false)
     expect(h.credentialsEnded).not.toHaveBeenCalled()
     clock.advance(MAX_BACKOFF_MS * 2)
     expect(sockets).toHaveLength(1)

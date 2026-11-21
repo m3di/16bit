@@ -77,6 +77,36 @@ interface Subscription {
   startedAt: number
   /** The subscribe went out on the current socket (not still waiting in the outbox). */
   sent: boolean
+  /** The `after` of the subscribe waiting in the outbox; a stale one is dropped there. */
+  queuedAfter: number
+  /** Subscribes sent on this socket that the server has not answered yet. */
+  awaiting: number
+  /** Subscribes sent on this socket; a second one is a restart. */
+  sentOnSocket: number
+  /**
+   * A restart is waiting for its answer. Until then a message naming the hub may still come from
+   * the subscription it replaced, so the hub does not advance, not even on the presumed answer:
+   * resuming from the restart's `after` only replays, while advancing early could skip changes
+   * between the older read and the old start.
+   */
+  restarting: boolean
+}
+
+const fresh = (after: number): Subscription => ({
+  after,
+  startedAt: after,
+  sent: false,
+  queuedAfter: after,
+  awaiting: 0,
+  sentOnSocket: 0,
+  restarting: false,
+})
+
+const forgetSocket = (sub: Subscription) => {
+  sub.sent = false
+  sub.awaiting = 0
+  sub.sentOnSocket = 0
+  sub.restarting = false
 }
 
 export interface FeedClient {
@@ -133,8 +163,11 @@ export function createFeed(
       if (message.type === 'subscribe') {
         const sub = subs.get(message.hubId)
         // Let go, or restarted from another `after` since it was queued: the newer one goes.
-        if (!sub || sub.after !== message.after) continue
+        if (!sub || sub.queuedAfter !== message.after) continue
         sub.sent = true
+        if (sub.sentOnSocket > 0) sub.restarting = true
+        sub.sentOnSocket++
+        sub.awaiting++
       }
       unanswered++
       socket.send(JSON.stringify(message))
@@ -147,7 +180,9 @@ export function createFeed(
   }
   const subscribe = (hubId: string, sub: Subscription) => {
     if (!isOpen) return
+    // Until it goes out, no message advances the hub: it may be about the old subscription.
     sub.sent = false
+    sub.queuedAfter = sub.after
     send({ type: 'subscribe', hubId, after: sub.after })
   }
 
@@ -167,7 +202,8 @@ export function createFeed(
       isOpen = true
       unanswered = 0
       outbox = []
-      attempt = 0
+      // `attempt` is reset by the first message, not here: a socket the server accepts and then
+      // closes at once (1008, too many sockets) must still back off.
       status.value = 'online'
       for (const [hubId, sub] of subs) subscribe(hubId, sub)
     }
@@ -192,18 +228,16 @@ export function createFeed(
     isOpen = false
     outbox = []
     unanswered = 0
-    for (const sub of subs.values()) sub.sent = false
+    for (const sub of subs.values()) forgetSocket(sub)
     if (closed || subs.size === 0) {
       status.value = 'idle'
       return
     }
-    if (code === FEED_CLOSE_CODES.credentialsEnded) {
+    if (code === FEED_CLOSE_CODES.credentialsEnded || code === FEED_CLOSE_CODES.frameTooLarge) {
+      // Nothing is live any more, so no held copy may be trusted as live (`isTracked`).
+      subs.clear()
       status.value = 'stopped'
-      handlers.credentialsEnded()
-      return
-    }
-    if (code === FEED_CLOSE_CODES.frameTooLarge) {
-      status.value = 'stopped'
+      if (code === FEED_CLOSE_CODES.credentialsEnded) handlers.credentialsEnded()
       return
     }
     status.value = 'offline'
@@ -228,15 +262,28 @@ export function createFeed(
     const parsed = feedServerMessageSchema.safeParse(raw)
     if (!parsed.success) return
     const message = parsed.data
-    // Any message received makes room for the next ones waiting (MAX_PENDING_CLIENT_MESSAGES).
+    // Any message received makes room for the next ones waiting (MAX_PENDING_CLIENT_MESSAGES),
+    // and shows the socket works, so the backoff starts again from the first step.
     unanswered = 0
+    attempt = 0
     flush()
     switch (message.type) {
       case 'changes':
-        // The high-water mark covers only the hubs the message names (D58).
+        // The high-water mark covers only the hubs the message names (D58). The server answers a
+        // subscribe with a message for that hub alone before naming it in any other.
         for (const hubId of message.hubIds) {
           const sub = subs.get(hubId)
-          if (sub?.sent) sub.after = Math.max(sub.after, message.seq)
+          if (!sub) continue
+          if (sub.awaiting > 0) {
+            if (message.hubIds.length !== 1) continue
+            sub.awaiting--
+            if (sub.restarting || !sub.sent) {
+              if (sub.awaiting === 0) sub.restarting = false
+              continue
+            }
+          }
+          if (!sub.sent) continue
+          sub.after = Math.max(sub.after, message.seq)
         }
         handlers.changes(message)
         return
@@ -275,7 +322,7 @@ export function createFeed(
     }
     const sub = subs.get(hubId)
     if (!sub) {
-      const created: Subscription = { after: seq, startedAt: seq, sent: false }
+      const created = fresh(seq)
       subs.set(hubId, created)
       subscribe(hubId, created)
       // While offline, the scheduled reconnect picks it up; the backoff is not cut short.

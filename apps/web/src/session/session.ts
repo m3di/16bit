@@ -8,6 +8,7 @@ import {
 } from '@16bit/core'
 import { inject, ref, type InjectionKey } from 'vue'
 import { asRequestError, getJson, noContent, sendJson, type Fetch } from '../api/client.ts'
+import { resetWorkspaceStores } from '../sync/store.ts'
 import type { Load } from '../views/home/useDashboard.ts'
 
 const quiet = { quiet401: true }
@@ -43,6 +44,8 @@ export function createSession(fetchFn: Fetch = (...args) => fetch(...args)) {
   /** Throws an `ApiRequestError` on failure: 401 for a wrong email or password. */
   async function signIn(credentials: LoginRequest): Promise<Me> {
     const data = await sendJson('POST', '/v1/auth/login', credentials, meSchema, fetchFn, quiet)
+    // Whoever was signed in before, their items and feeds go (issue 175).
+    resetWorkspaceStores()
     me.value = { state: 'ready', data }
     return data
   }
@@ -50,6 +53,7 @@ export function createSession(fetchFn: Fetch = (...args) => fetch(...args)) {
   /** Ends the session on the server first: the cookie is httpOnly, so only the API can clear it. */
   async function signOut(): Promise<void> {
     await sendJson('POST', '/v1/auth/logout', {}, noContent, fetchFn, quiet)
+    resetWorkspaceStores()
     me.value = { state: 'ready', data: null }
   }
 
@@ -62,8 +66,12 @@ export function createSession(fetchFn: Fetch = (...args) => fetch(...args)) {
     return accepted
   }
 
-  /** The session ended (a 401 elsewhere). */
+  /**
+   * The session ended (a 401 elsewhere, or the feed closed with 4401). The workspace stores and
+   * their feeds go with it, so the next sign-in reads afresh and its feed is live (issue 175).
+   */
   function expire() {
+    resetWorkspaceStores()
     me.value = { state: 'ready', data: null }
   }
 

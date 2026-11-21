@@ -13,7 +13,11 @@ describe('connection indicator', () => {
   it('says when live updates have stopped for good', async () => {
     const html = await render('stopped')
     expect(html).toContain('Offline')
-    expect(html).toContain('Reload the page')
+    // Shown, not only read out: it does not fix itself like a drop does.
+    expect(html).toMatch(
+      /<span[^>]*data-connection-stopped[^>]*>Live updates stopped\. Reload the page/,
+    )
+    expect(html).not.toContain('sr-only')
   })
 
   it('says Offline, in words, only while the connection is down', async () => {

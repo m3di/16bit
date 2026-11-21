@@ -9,6 +9,7 @@ import {
   type Item,
   type ItemQueryResult,
   type ItemWriteResult,
+  type Change,
   type ItemValues,
   type ValueError,
 } from '@16bit/core'
@@ -22,7 +23,8 @@ import {
   type Fetch,
 } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
-import { workspaceStore, type AppliedChange, type WorkspaceStore } from '../../sync/store.ts'
+import { backoff } from '../../sync/feed.ts'
+import { workspaceStore, type WorkspaceStore } from '../../sync/store.ts'
 import { listValue, type LinkedState } from './relations.ts'
 
 /** Direct reads of linked items running at once, until #73 lets one request cover them. */
@@ -545,6 +547,26 @@ export function useItems(
     return run
   }
 
+  /**
+   * The versions this view's own confirmed writes moved each item through, `from` to `to`. A
+   * queued write sends the version the reader's edit was based on, moved on only by these: a
+   * change by someone else that the feed delivered meanwhile still makes it a 409, never a
+   * silent overwrite (D8, D58).
+   */
+  const ownSteps = new Map<string, Map<number, number>>()
+  function versionFor(id: string, base: number): number {
+    const steps = ownSteps.get(id)
+    let version = base
+    for (let next = steps?.get(version); next !== undefined; next = steps?.get(version))
+      version = next
+    return version
+  }
+  function stepped(id: string, from: number, to: number) {
+    const steps = ownSteps.get(id) ?? new Map<number, number>()
+    steps.set(from, to)
+    ownSteps.set(id, steps)
+  }
+
   /** Takes in a write's response: the item as written, and the `seq` it was written at. */
   function confirmed(response: ItemWriteResult) {
     const { seq } = response
@@ -565,6 +587,8 @@ export function useItems(
       return Promise.resolve(false)
     }
     const mutationId = newItemId()
+    // The version the reader's edit is based on: the server copy they see under their own edits.
+    const base = store.get(id)?.version
     store.addPending(id, { kind: 'patch', mutationId, values })
     const drop = () => {
       store.dropPending(id, mutationId)
@@ -573,18 +597,20 @@ export function useItems(
     return enqueue(id, async () => {
       if (!store.pending(id).some((w) => w.mutationId === mutationId)) return false
       const before = store.get(id)
-      if (!before) {
+      if (!before || base === undefined) {
         drop()
         return false
       }
+      const version = versionFor(id, base)
       try {
         const response = await sendJson(
           'PATCH',
           itemPath(id),
-          { version: before.version, values, clientMutationId: mutationId },
+          { version, values, clientMutationId: mutationId },
           itemWriteResultSchema,
           fetchFn,
         )
+        stepped(id, version, response.version)
         confirmed(response)
         drop()
         return true
@@ -684,8 +710,10 @@ export function useItems(
     store.addPending(id, { kind: 'delete', mutationId })
     return enqueue(id, async (): Promise<RemoveResult> => {
       const before = store.get(id) ?? shown
+      // The version shown when the reader asked, moved on only by their own edits before it.
+      const version = versionFor(id, shown.version)
       try {
-        const query = `?version=${String(before.version)}&clientMutationId=${mutationId}`
+        const query = `?version=${String(version)}&clientMutationId=${mutationId}`
         await sendJson('DELETE', `${itemPath(id)}${query}`, undefined, noContent, fetchFn)
       } catch (thrown) {
         const error = asRequestError(thrown)
@@ -728,7 +756,7 @@ export function useItems(
    * puts it; a listed item updates in place. The echo of the reader's own create is already
    * listed, so it is not added twice (D59).
    */
-  function onChange({ change }: AppliedChange) {
+  function onChange(change: Change) {
     const current = list.value
     if (current.state !== 'ready') return
     const data = current.data
@@ -749,28 +777,58 @@ export function useItems(
   /**
    * Too much was missed while away (D58): read the list and the items opened by ID again, so
    * their reads subscribe the hub afresh from their `seq`. The rows stay until the list arrives.
+   * Until a read succeeds the hub is not live: the shell says so, and the reads are tried again
+   * with the feed's backoff. A list now out of reach shows that instead.
    */
-  async function onResync(hubId: string) {
-    if (!held.has(hubId)) return
+  let resyncTimer: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
+  /** A function, so the check after an `await` is not narrowed away by the one before it. */
+  const isDisposed = () => disposed
+  async function onResync(hubId: string, attempt = 0) {
+    if (isDisposed() || !held.has(hubId)) return
+    if (resyncTimer !== null) clearTimeout(resyncTimer)
+    resyncTimer = null
     seen.clear()
-    const ids = [...opened]
-    for (const id of ids) void fetchItem(itemPath(id)).catch(() => undefined)
+    const reads: Promise<boolean>[] = [...opened].map((id) =>
+      fetchItem(itemPath(id)).then(
+        () => true,
+        () => false,
+      ),
+    )
     const current = list.value
     const folder = folderId.value
-    if (!hasList || !folder || current.state !== 'ready') return
-    const gen = ++generation
-    try {
-      const page = await fetchPage(folder, null, current.data.sort)
-      if (gen !== generation) return
-      list.value = firstPage(page, current.data.sort)
-    } catch {
-      // The rows shown stay; the next change or reload brings the list back in step.
+    if (hasList && folder && current.state === 'ready') {
+      const gen = ++generation
+      reads.push(
+        fetchPage(folder, null, current.data.sort).then(
+          (page) => {
+            if (gen === generation) list.value = firstPage(page, current.data.sort)
+            return true
+          },
+          (thrown: unknown) => {
+            const error = asRequestError(thrown)
+            if (gen === generation && (error.isNotFound || error.isNoPermission)) {
+              list.value = { state: 'error', error }
+              return true
+            }
+            return false
+          },
+        ),
+      )
     }
+    if (reads.length === 0) return
+    const results = await Promise.all(reads)
+    // Every read must land: a copy that failed to reload missed changes no feed will resend.
+    if (isDisposed() || results.every(Boolean)) return
+    store.markBehind(hubId)
+    resyncTimer = setTimeout(() => void onResync(hubId, attempt + 1), backoff(attempt))
   }
 
   const stops = [store.on('change', onChange), store.on('resync', (hubId) => void onResync(hubId))]
   /** Lets go of the store: listeners and live hubs. Runs on its own when the scope ends. */
   function dispose() {
+    disposed = true
+    if (resyncTimer !== null) clearTimeout(resyncTimer)
     for (const stop of stops) stop()
     for (const release of held.values()) release()
     held.clear()
