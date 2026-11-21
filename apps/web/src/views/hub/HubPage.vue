@@ -53,7 +53,7 @@ const hub = computed<Load<HubDescription>>(() =>
     : hubRead.value,
 )
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
-const { list, rows, notice } = items
+const { list, notice } = items
 const session = useSession()
 
 // `item.write` from `can()`, once both the reader and their hub role are known.
@@ -219,7 +219,13 @@ const selectedItem = computed(() =>
 )
 
 const itemLink = (item: Item) => ({ query: { item: item.id } })
-const openItem = (item: Item) => void router.push(itemLink(item))
+// A click opens the panel with focus on it; the arrow keys in the table keep focus there, so
+// the reader can go on through the rows (DESIGN.md, virtual rows).
+const panelKeepsFocus = ref(false)
+const openItem = (item: Item, via: 'pointer' | 'keyboard' = 'pointer') => {
+  panelKeepsFocus.value = via === 'keyboard'
+  void router.push(itemLink(item))
+}
 const closePanel = () => {
   creating.value = false
   void router.push({ query: {} })
@@ -316,7 +322,9 @@ async function submitCreate(values: ItemValues) {
             <ItemsBlock
               :folder-name="folder.name"
               :list="list"
-              :rows="rows"
+              :row-at="items.rowAt"
+              :index-of="items.indexOf"
+              :reordered="items.reordered.value"
               :columns="columns"
               :id-prefix="hub.data.hub.idPrefix"
               :selected-id="itemId"
@@ -326,7 +334,8 @@ async function submitCreate(values: ItemValues) {
               :sort="items.sort.value"
               @open="openItem"
               @retry="openFolder(openFolderId)"
-              @more="items.loadMore()"
+              @windows="items.showWindows($event)"
+              @retry-windows="items.retryWindows()"
               @create="startCreate"
               @sort="items.setSort($event)"
             />
@@ -352,6 +361,7 @@ async function submitCreate(values: ItemValues) {
       <ItemPanel
         v-else-if="itemId && panelItem && !live.lost.value"
         :title="selectedItem && description ? items.label(selectedItem) : 'Item'"
+        :keep-focus="panelKeepsFocus"
         class="flex-[1_1_320px]"
         @close="closePanel"
       >

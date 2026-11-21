@@ -1,6 +1,14 @@
 import type { Attribute, Item } from '@16bit/core'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { attributes, fakeApi, item, json, withSeq, type Call } from './fixtures.test-utils.ts'
+import {
+  attributes,
+  fakeApi,
+  item,
+  json,
+  rowsOf,
+  withSeq,
+  type Call,
+} from './fixtures.test-utils.ts'
 import { ApiRequestError } from '../../api/client.ts'
 import { resetWorkspaceStores } from '../../sync/store.ts'
 import {
@@ -18,8 +26,14 @@ import {
 // The store is one per workspace and tab; every test starts with an empty one.
 beforeEach(resetWorkspaceStores)
 
-const page = (items: Item[], nextCursor: string | null = null) =>
-  json(withSeq({ items, nextCursor }))
+/** A window of the folder query (D61), with the folder's total. */
+const page = (items: Item[], total = items.length) =>
+  json(withSeq({ items, nextCursor: null, total }))
+
+/** The table shows rows `start` to `end`, held by the windows at `offsets`. */
+const inView = (start: number, end: number, offsets: number[]) => ({ start, end, offsets })
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 /** A promise that resolves when `release` is called, to hold a request open. */
 function gate<T>() {
@@ -38,28 +52,72 @@ async function opened(handler: (call: Call) => Response | Promise<Response>, ite
 }
 
 describe('useItems: reading', () => {
-  it('queries the folder and keeps the server order', async () => {
+  it('queries the first window by item number, newest first, and keeps the server order', async () => {
     const { s, calls } = await opened(() => json({}), [item('i2', 2), item('i1', 1)])
     expect(calls[0]).toEqual({
       method: 'POST',
       path: '/v1/workspaces/w/query',
-      body: { from: 'bld', limit: 50, cursor: null, expand: [], sort: [] },
+      body: {
+        from: 'bld',
+        limit: 200,
+        offset: 0,
+        count: true,
+        expand: [],
+        sort: [],
+        order: 'number',
+      },
     })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i2', 'i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i2', 'i1'])
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { total: 2 } })
   })
 
-  it('loads more with the cursor and skips duplicates', async () => {
+  it('sizes the rows by the total and reads each window the table asks for, once', async () => {
+    const first = Array.from({ length: 200 }, (_, i) => item(`a${String(i)}`, 500 - i))
     const api = fakeApi((call) => {
-      const body = call.body as { cursor: string | null }
-      return body.cursor === 'c1'
-        ? page([item('i2', 2), item('i3', 3)])
-        : page([item('i1', 1), item('i2', 2)], 'c1')
+      const { offset } = call.body as { offset: number }
+      return offset === 0 ? page(first, 450) : page([item('b0', 300), item('b1', 299)], 450)
     })
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
-    await s.loadMore()
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1', 'i2', 'i3'])
-    expect(s.list.value).toMatchObject({ state: 'ready', data: { nextCursor: null } })
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { total: 450 } })
+    expect(s.rowAt(199)?.id).toBe('a199')
+    expect(s.rowAt(200)).toBeUndefined()
+    // The window in view is loaded: nothing is read.
+    s.showWindows(inView(0, 18, [0]))
+    expect(api.calls).toHaveLength(1)
+    // Scrolled across a window edge: only the window not loaded is read, and only once.
+    s.showWindows(inView(190, 215, [0, 200]))
+    s.showWindows(inView(192, 217, [0, 200]))
+    await tick()
+    expect(api.calls.map((c) => (c.body as { offset: number }).offset)).toEqual([0, 200])
+    expect(s.rowAt(200)?.id).toBe('b0')
+    expect(s.indexOf('b1')).toBe(201)
+  })
+
+  it('keeps a failed window as placeholders, says which rows, and reads it again on retry', async () => {
+    let down = true
+    const api = fakeApi((call) => {
+      const { offset } = call.body as { offset: number }
+      if (offset === 0) return page([item('a0', 9)], 300)
+      return down ? json({ error: 'internal', message: 'Down' }, 500) : page([item('b0', 1)], 300)
+    })
+    const s = useItems('w', () => 'BLD', api.fetchFn)
+    await s.openFolder('bld')
+    s.showWindows(inView(200, 220, [200]))
+    await tick()
+    expect(s.list.value).toMatchObject({
+      state: 'ready',
+      data: { failed: [200], failure: { message: 'Down' } },
+    })
+    expect(s.rowAt(200)).toBeUndefined()
+    // Scrolling does not hammer a failed window; the retry reads it.
+    s.showWindows(inView(201, 221, [200]))
+    expect(api.calls).toHaveLength(2)
+    down = false
+    s.retryWindows()
+    await tick()
+    expect(s.rowAt(200)?.id).toBe('b0')
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { failed: [], failure: null } })
   })
 
   it('shows an error state, and no permission for a refused key', async () => {
@@ -79,7 +137,13 @@ describe('useItems: reading', () => {
     await s.openFolder('new')
     slow.release(page([item('old', 2)]))
     await first
-    expect(s.rows.value.map((r) => r.id)).toEqual(['new'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['new'])
+  })
+
+  it('shows the empty state for a folder with no items', async () => {
+    const { s } = await opened(() => json({}), [])
+    expect(s.list.value).toMatchObject({ state: 'ready', data: { total: 0 } })
+    expect(s.rowAt(0)).toBeUndefined()
   })
 
   it('fetches an item that is not in the list', async () => {
@@ -91,7 +155,7 @@ describe('useItems: reading', () => {
 })
 
 describe('useItems: sorting', () => {
-  type QueryBody = { from: string; cursor: string | null; sort: unknown[] }
+  type QueryBody = { from: string; offset: number; sort: unknown[] }
   const queries = (calls: Call[]) =>
     calls.filter((c) => c.path.endsWith('/query')).map((c) => c.body as QueryBody)
 
@@ -130,65 +194,87 @@ describe('useItems: sorting', () => {
     const done = s.setSort({ attribute: 'stage', direction: 'desc' })
     expect(s.sort.value).toEqual({ attribute: 'stage', direction: 'desc' })
     expect(s.list.value).toMatchObject({ state: 'ready', data: { sorting: true, sort: null } })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i2', 'i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i2', 'i1'])
     sorted.release(page([item('i1', 1), item('i2', 2)]))
     await done
     expect(queries(api.calls).at(-1)).toMatchObject({
-      cursor: null,
+      offset: 0,
+      count: true,
       sort: [{ attribute: 'stage', direction: 'desc' }],
     })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1', 'i2'])
+    expect(queries(api.calls).at(-1)).not.toHaveProperty('order')
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1', 'i2'])
     expect(s.list.value).toMatchObject({
       state: 'ready',
       data: { sorting: false, sort: { attribute: 'stage', direction: 'desc' } },
     })
   })
 
-  it('pages a sorted list with the same sort and its cursor', async () => {
+  it('reads the windows in view in the new order and drops the others', async () => {
+    const many = (prefix: string) =>
+      Array.from({ length: 200 }, (_, i) => item(`${prefix}${String(i)}`, 1000 - i))
     const api = fakeApi((call) => {
       const body = call.body as QueryBody
-      return body.cursor === 's1' ? page([item('i3', 3)]) : page([item('i1', 1)], 's1')
+      const prefix = body.sort.length ? 's' : 'd'
+      return page(body.offset === 0 ? many(prefix) : [item(`${prefix}-far`, 1)], 401)
     })
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
+    s.showWindows(inView(400, 401, [400]))
+    await tick()
+    expect(s.rowAt(400)?.id).toBe('d-far')
+    // The table is scrolled back to the top when the sort is asked for.
+    s.showWindows(inView(0, 18, [0]))
     await s.setSort({ attribute: 'stage', direction: 'asc' })
-    await s.loadMore()
     expect(queries(api.calls).at(-1)).toMatchObject({
-      cursor: 's1',
+      offset: 0,
       sort: [{ attribute: 'stage', direction: 'asc' }],
     })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1', 'i3'])
+    expect(s.rowAt(0)?.id).toBe('s0')
+    // The window out of view held the old order: it is dropped and read again when needed.
+    expect(s.rowAt(400)).toBeUndefined()
+    s.showWindows(inView(400, 401, [400]))
+    await tick()
+    expect(queries(api.calls).at(-1)).toMatchObject({ offset: 400, sort: [{ attribute: 'stage' }] })
+    expect(s.rowAt(400)?.id).toBe('s-far')
   })
 
-  it('does not load more while a new order is loading', async () => {
+  it('does not read windows while a new order is loading, and reads them in it after', async () => {
     const sorted = gate<Response>()
-    const api = fakeApi((call) =>
-      (call.body as QueryBody).sort.length ? sorted.promise : page([item('i1', 1)], 'c1'),
-    )
+    const api = fakeApi((call) => {
+      const body = call.body as QueryBody
+      if (body.sort.length && body.offset === 0) return sorted.promise
+      return page([item(body.sort.length ? 's1' : 'i1', 1)], 300)
+    })
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
     const done = s.setSort({ attribute: 'stage', direction: 'asc' })
-    await s.loadMore()
-    expect(queries(api.calls).filter((b) => b.cursor === 'c1')).toHaveLength(0)
-    sorted.release(page([item('i1', 1)]))
+    s.showWindows(inView(195, 215, [0, 200]))
+    expect(queries(api.calls).filter((b) => b.offset === 200)).toHaveLength(0)
+    sorted.release(page([item('s0', 1)], 300))
     await done
+    await tick()
+    expect(queries(api.calls).filter((b) => b.offset === 200)).toEqual([
+      expect.objectContaining({ sort: [{ attribute: 'stage', direction: 'asc' }] }),
+    ])
   })
 
-  it('drops a page loaded for the old order', async () => {
-    const more = gate<Response>()
+  it('drops a window read for the old order', async () => {
+    const window = gate<Response>()
     const api = fakeApi((call) => {
       const body = call.body as QueryBody
-      if (body.cursor === 'c1') return more.promise
-      return body.sort.length ? page([item('s1', 1)]) : page([item('i1', 1)], 'c1')
+      if (body.offset === 200 && !body.sort.length) return window.promise
+      return body.sort.length ? page([item('s1', 1)]) : page([item('i1', 1)], 300)
     })
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
-    const loading = s.loadMore()
+    s.showWindows(inView(195, 215, [0, 200]))
+    s.showWindows(inView(0, 18, [0]))
     await s.setSort({ attribute: 'stage', direction: 'asc' })
-    more.release(page([item('old', 2)]))
-    await loading
-    expect(s.rows.value.map((r) => r.id)).toEqual(['s1'])
-    expect(s.list.value).toMatchObject({ state: 'ready', data: { more: false } })
+    window.release(page([item('old', 2)], 300))
+    await tick()
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['s1'])
+    expect(s.indexOf('old')).toBe(-1)
   })
 
   it('keeps the latest of two quick sorts', async () => {
@@ -204,7 +290,7 @@ describe('useItems: sorting', () => {
     await s.setSort({ attribute: 'stage', direction: 'desc' })
     first.release(page([item('asc', 1)]))
     await a
-    expect(s.rows.value.map((r) => r.id)).toEqual(['desc'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['desc'])
     expect(s.sort.value).toEqual({ attribute: 'stage', direction: 'desc' })
   })
 
@@ -219,7 +305,7 @@ describe('useItems: sorting', () => {
             },
             400,
           )
-        : page([item('i1', 1)], 'c1'),
+        : page([item('i1', 1)]),
     )
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
@@ -227,9 +313,9 @@ describe('useItems: sorting', () => {
     expect(s.sort.value).toBeNull()
     expect(s.list.value).toMatchObject({
       state: 'ready',
-      data: { sorting: false, sort: null, nextCursor: 'c1' },
+      data: { sorting: false, sort: null, total: 1 },
     })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
     expect(s.notice.value).toBe(
       'This column can no longer be sorted; reload the page to see the current columns. The items are shown in the previous order.',
     )
@@ -262,7 +348,7 @@ describe('useItems: sorting', () => {
     expect(s.notice.value).toBe(
       'The items could not be shown in that order. Database unavailable. The items are shown in the previous order.',
     )
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
   })
 
   it('keeps the order on retry, and starts another folder in the default order', async () => {
@@ -293,7 +379,7 @@ describe('useItems: a sort that went stale (#81)', () => {
       400,
     )
   const notice =
-    'The table can no longer be sorted by that column, so the items are shown newest update first.'
+    'The table can no longer be sorted by that column, so the items are shown newest first.'
 
   /** A folder sorted by stage, whose next query is answered by `next`. */
   async function sortedThen(next: (body: QueryBody) => Response | Promise<Response>) {
@@ -335,7 +421,7 @@ describe('useItems: a sort that went stale (#81)', () => {
     expect(sorts(calls).slice(-2)).toEqual([[stage], []])
     expect(s.sort.value).toBeNull()
     expect(s.list.value).toMatchObject({ state: 'ready', data: { sort: null } })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i2'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i2'])
     expect(s.notice.value).toBe(notice)
     // Retrying again does not send the refused sort.
     await s.openFolder('bld')
@@ -360,7 +446,7 @@ describe('useItems: a sort that went stale (#81)', () => {
     await s.openFolder('bld')
     expect(s.sort.value).toBeNull()
     expect(s.list.value).toMatchObject({ state: 'error', error: { status: 500 } })
-    // Nothing is shown newest update first, so the notice does not say so (#85).
+    // Nothing is shown newest first, so the notice does not say so (#85).
     expect(s.notice.value).toBeNull()
   })
 
@@ -412,16 +498,13 @@ describe('useItems: a sort that went stale (#81)', () => {
     expect(s.notice.value).toBeNull()
   })
 
-  describe('"Load more" in a refused sort (#85)', () => {
-    const moreNotice =
-      'The table can no longer be sorted by that column, so no more items can be loaded in this order. Show them newest update first to see the rest.'
-
-    /** A folder sorted by stage with a next page, whose later queries are answered by `next`. */
-    async function sortedWithMore(next: (body: QueryBody & { cursor: string | null }) => Response) {
+  describe('a window refused in a sorted order (#85)', () => {
+    /** A folder sorted by stage with a second window, whose later queries `next` answers. */
+    async function sortedWithMore(next: (body: QueryBody) => Response) {
       let sorted = false
       const api = fakeApi((call) => {
-        if (!sorted) return page([item('i1', 1)], 's1')
-        return next(call.body as QueryBody & { cursor: string | null })
+        if (!sorted) return page([item('i1', 1)], 300)
+        return next(call.body as QueryBody)
       })
       const s = useItems('w', () => 'BLD', api.fetchFn)
       await s.openFolder('bld')
@@ -430,67 +513,18 @@ describe('useItems: a sort that went stale (#81)', () => {
       return { s, calls: api.calls }
     }
 
-    it('keeps the rows, stops retrying, and says why', async () => {
-      const { s, calls } = await sortedWithMore(() => refused())
-      await s.loadMore()
-      expect(sorts(calls)).toEqual([[], [stage], [stage]])
-      expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
-      expect(s.sort.value).toEqual(stage)
-      expect(s.list.value).toMatchObject({
-        state: 'ready',
-        data: { sort: stage, moreRefused: true, moreError: null, more: false, nextCursor: 's1' },
-      })
-      expect(s.notice.value).toBe(moreNotice)
-      // A second "Load more" sends nothing.
-      await s.loadMore()
-      expect(calls).toHaveLength(3)
-    })
-
-    it('reloads in the default order when asked, and clears the notice', async () => {
+    it('shows the default order from the top, and says why', async () => {
       const { s, calls } = await sortedWithMore((body) =>
-        body.sort.length ? refused() : page([item('i2', 2)], 'd1'),
+        body.sort.length ? refused() : page([item('i2', 2)], 300),
       )
-      await s.loadMore()
-      await s.setSort(null)
-      expect(sorts(calls).at(-1)).toEqual([])
-      expect(s.rows.value.map((r) => r.id)).toEqual(['i2'])
-      expect(s.list.value).toMatchObject({
-        state: 'ready',
-        data: { sort: null, moreRefused: false, nextCursor: 'd1' },
-      })
-      expect(s.notice.value).toBeNull()
-    })
-
-    it('keeps the offer if the default order cannot be read', async () => {
-      const { s } = await sortedWithMore((body) =>
-        body.sort.length ? refused() : json({ error: 'internal', message: 'Down' }, 500),
-      )
-      await s.loadMore()
-      await s.setSort(null)
-      expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
-      expect(s.list.value).toMatchObject({ state: 'ready', data: { moreRefused: true } })
-      expect(s.notice.value).toMatch(/could not be shown in that order\. Down\./)
-    })
-
-    it('clears the notice when the default order is read on a second try', async () => {
-      let down = true
-      const { s } = await sortedWithMore((body) => {
-        if (body.sort.length) return refused()
-        return down
-          ? json({ error: 'internal', message: 'Down' }, 500)
-          : page([item('i2', 2)], 'd1')
-      })
-      await s.loadMore()
-      await s.setSort(null)
-      expect(s.notice.value).toMatch(/shown in the previous order/)
-      down = false
-      await s.setSort(null)
-      expect(s.rows.value.map((r) => r.id)).toEqual(['i2'])
-      expect(s.list.value).toMatchObject({
-        state: 'ready',
-        data: { sort: null, moreRefused: false },
-      })
-      expect(s.notice.value).toBeNull()
+      s.showWindows(inView(200, 220, [200]))
+      await tick()
+      await tick()
+      expect(sorts(calls)).toEqual([[], [stage], [stage], []])
+      expect(s.sort.value).toBeNull()
+      expect(s.list.value).toMatchObject({ state: 'ready', data: { sort: null } })
+      expect(rowsOf(s).map((r) => r.id)).toEqual(['i2'])
+      expect(s.notice.value).toBe(notice)
     })
 
     it('keeps an edit failure notice when a sort succeeds', async () => {
@@ -504,14 +538,15 @@ describe('useItems: a sort that went stale (#81)', () => {
       expect(s.notice.value).toBe('Your change to BLD-1 was not saved. Some values are not valid')
     })
 
-    it('treats a 400 that does not name the sort as a failed page, which can be retried', async () => {
+    it('treats a 400 that does not name the sort as a failed window, which can be retried', async () => {
       const { s } = await sortedWithMore(() =>
-        json({ error: 'invalid_request', message: 'Invalid cursor' }, 400),
+        json({ error: 'invalid_request', message: 'offset: Too big' }, 400),
       )
-      await s.loadMore()
+      s.showWindows(inView(200, 220, [200]))
+      await tick()
       expect(s.list.value).toMatchObject({
         state: 'ready',
-        data: { moreRefused: false, moreError: { status: 400 } },
+        data: { sort: stage, failed: [200], failure: { status: 400 } },
       })
       expect(s.notice.value).toBeNull()
     })
@@ -600,8 +635,8 @@ describe('useItems: creating', () => {
     const answer = gate<Response>()
     const { s, calls } = await opened(() => answer.promise, [item('i1', 1)])
     const created = s.create({ title: 'Fresh' })
-    const id = s.rows.value[0]?.id ?? ''
-    expect(s.rows.value).toHaveLength(2)
+    const id = rowsOf(s)[0]?.id ?? ''
+    expect(rowsOf(s)).toHaveLength(2)
     expect(s.isCreating(id)).toBe(true)
     const body = calls.at(-1)?.body as { id: string; folderId: string; values: unknown }
     expect(body).toEqual({
@@ -613,7 +648,7 @@ describe('useItems: creating', () => {
     answer.release(json(withSeq(item(id, 2, { title: 'Fresh' })), 201))
     expect(await created).toMatchObject({ ok: true, item: { id, seqId: 2 } })
     expect(s.isCreating(id)).toBe(false)
-    expect(s.rows.value.map((r) => r.seqId)).toEqual([2, 1])
+    expect(rowsOf(s).map((r) => r.seqId)).toEqual([2, 1])
   })
 
   it('removes the row and reports field errors when the server refuses', async () => {
@@ -632,7 +667,7 @@ describe('useItems: creating', () => {
     const result = await s.create({})
     expect(result.ok).toBe(false)
     if (!result.ok) expect(valueErrors(result.error)).toEqual({ title: 'A value is required' })
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
     expect(s.notice.value).toContain('The item was not created')
   })
 
@@ -640,7 +675,7 @@ describe('useItems: creating', () => {
     const answer = gate<Response>()
     const { s, calls } = await opened(() => answer.promise, [item('i1', 1)])
     const created = s.create({ title: 'Fresh' })
-    const id = s.rows.value[0]?.id ?? ''
+    const id = rowsOf(s)[0]?.id ?? ''
     const sent = calls.length
     expect(await s.save(id, { title: 'Edited' })).toBe(false)
     expect(calls).toHaveLength(sent)
@@ -789,7 +824,7 @@ describe('useItems: no permission to edit (#50)', () => {
     )
     const result = await s.create({ title: 'Fresh' })
     expect(result.ok).toBe(false)
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
     expect(s.readOnly.value).toBe(true)
     expect(s.notice.value).toBe(
       'The item was not created. You can view the items in this hub but not add them.',
@@ -891,7 +926,7 @@ describe('useItems: deleting (#119)', () => {
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
     expect(await s.remove('i1')).toEqual({ ok: true })
-    expect(s.rows.value).toEqual([])
+    expect(rowsOf(s)).toEqual([])
   })
 
   it('shows the current item on 409 and does not delete', async () => {
@@ -958,7 +993,7 @@ describe('useItems: responses carrying seq', () => {
     const s = useItems('w', () => 'BLD', api.fetchFn)
     await s.openFolder('bld')
     expect(s.list.value.state).toBe('ready')
-    expect(s.rows.value.map((r) => r.id)).toEqual(['i1'])
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
     expect(await s.openItem('far')).toMatchObject({ state: 'ready', data: { seqId: 99 } })
     expect(await s.readItem('far', [])).toMatchObject({ state: 'ready' })
     expect(s.view('far')).not.toHaveProperty('seq')

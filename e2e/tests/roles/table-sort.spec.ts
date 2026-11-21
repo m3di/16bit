@@ -1,9 +1,8 @@
-import { DEFAULT_PAGE_LIMIT } from '@16bit/core'
 import type { Locator, Page } from '@playwright/test'
 import { expect, hubPath, itemsTable, test } from '../support/roles.ts'
 
-// Sorting the hub table by an indexed column (#52, #73), its sort cue, "Load more" in a sorted
-// order, and a refused sorted "Load more" (#85). Product has 1,200 seeded items and indexed
+// Sorting the hub table by an indexed column (#52, #73), its sort cue, windows read in a sorted
+// order, and a window refused in a sorted order (#85, D61). Product has 1,200 seeded items and indexed
 // Stage, Points and Due. Ivy is a viewer there: sorting is reading, so it works read-only.
 // Nothing here writes, so other specs adding items to Product can't break the order checks.
 
@@ -77,20 +76,28 @@ test('sortable headers show their cue, and sort ascending, descending, then back
   await settled(page)
 })
 
-test('"Load more" keeps the sorted order', async ({ pageAs }) => {
+/** Scrolls the table's own box so that row `index` is near the top. */
+async function scrollTo(page: Page, index: number) {
+  await page.locator('[data-virtual]').evaluate((el, top) => {
+    el.scrollTop = top
+  }, index * 38)
+}
+
+async function loaded(page: Page) {
+  await expect(itemsTable(page, 'Product').locator('tbody tr[data-placeholder]')).toHaveCount(0)
+}
+
+test('scrolling past the first window keeps the sorted order', async ({ pageAs }) => {
   const page = await pageAs('ivy')
   await page.goto(hubPath('product'))
   await header(page, 'Points').getByRole('button', { name: 'Points' }).click()
   await expect(header(page, 'Points')).toHaveAttribute('aria-sort', 'ascending')
   await settled(page)
 
-  const rows = itemsTable(page, 'Product')
-    .getByRole('row')
-    .filter({ has: page.getByRole('cell') })
-  await expect(rows).toHaveCount(DEFAULT_PAGE_LIMIT)
-  await page.getByRole('button', { name: 'Load more' }).click()
-  await expect(rows).toHaveCount(DEFAULT_PAGE_LIMIT * 2)
-
+  // Rows 190 to 220 come from two windows of 200, both read in the sorted order (D61).
+  await scrollTo(page, 190)
+  await expect(itemsTable(page, 'Product').locator('tbody tr[data-index="200"]')).toBeAttached()
+  await loaded(page)
   expectOrdered(await points(page), 'asc')
   const ids = await itemsTable(page, 'Product')
     .getByRole('link', { name: /^PRD-\d+$/ })
@@ -99,16 +106,16 @@ test('"Load more" keeps the sorted order', async ({ pageAs }) => {
   await expect(header(page, 'Points')).toHaveAttribute('aria-sort', 'ascending')
 })
 
-test('a refused sorted "Load more" offers the default order, which brings the rest back', async ({
+test('a window refused in a sorted order shows the default order, and says why', async ({
   pageAs,
 }) => {
   const page = await pageAs('ivy')
-  // Points stops being indexed between two pages. The seed can't un-index an attribute and
-  // there is no attribute API in M1, so the server's answer to that page is stood in for here,
-  // with the body the API sends for a sort on an attribute that isn't indexed.
+  // Points stops being indexed between two windows. The seed can't un-index an attribute, so
+  // the server's answer to that window is stood in for here, with the body the API sends for a
+  // sort on an attribute that isn't indexed.
   await page.route('**/v1/workspaces/demo/query', async (route) => {
-    const body = route.request().postDataJSON() as { cursor?: string | null; sort?: unknown[] }
-    if (!body.cursor || !body.sort?.length) return route.fallback()
+    const body = route.request().postDataJSON() as { offset?: number; sort?: unknown[] }
+    if (!body.offset || !body.sort?.length) return route.fallback()
     return route.fulfill({
       status: 400,
       json: {
@@ -129,28 +136,26 @@ test('a refused sorted "Load more" offers the default order, which brings the re
   await header(page, 'Points').getByRole('button', { name: 'Points' }).click()
   await expect(header(page, 'Points')).toHaveAttribute('aria-sort', 'ascending')
   await settled(page)
-  const before = await points(page)
-  await page.getByRole('button', { name: 'Load more' }).click()
+  await scrollTo(page, 250)
 
-  await expect(page.getByText('More items cannot be loaded in this order.')).toBeVisible()
-  await expect(page.locator('[data-more-refused]')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Load more' })).toHaveCount(0)
-  // The rows and the order stay as they were.
-  expect(await points(page)).toEqual(before)
-  await expect(header(page, 'Points')).toHaveAttribute('aria-sort', 'ascending')
-
-  await page.getByRole('button', { name: 'Show newest update first' }).click()
+  await expect(
+    page.getByText(
+      'The table can no longer be sorted by that column, so the items are shown newest first.',
+    ),
+  ).toBeVisible()
   await expect(header(page, 'Points')).not.toHaveAttribute('aria-sort')
   await expect(header(page, 'Points').locator('[data-sort-icon]')).toHaveAttribute(
     'data-sort-icon',
     'none',
   )
-  await settled(page)
-  await expect(page.getByText('More items cannot be loaded in this order.')).toHaveCount(0)
-  // In the default order "Load more" works again.
-  const rows = itemsTable(page, 'Product')
-    .getByRole('row')
-    .filter({ has: page.getByRole('cell') })
-  await page.getByRole('button', { name: 'Load more' }).click()
-  await expect(rows).toHaveCount(DEFAULT_PAGE_LIMIT * 2)
+  // The default order loads from the top, and further windows load in it.
+  await expect(itemsTable(page, 'Product').locator('tbody tr[data-index="0"]')).toHaveAttribute(
+    'data-row',
+    '',
+  )
+  await scrollTo(page, 250)
+  await expect(itemsTable(page, 'Product').locator('tbody tr[data-index="250"]')).toHaveAttribute(
+    'data-row',
+    '',
+  )
 })

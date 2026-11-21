@@ -1,5 +1,5 @@
 // @vitest-environment client-node
-import { defineComponent, h, nextTick, reactive } from 'vue'
+import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { afterEach, describe, expect, it } from 'vitest'
 import { activeElement, findAll, fire, mount, setLayout, type FakeNode } from '../test/fake-dom.ts'
 import type { RowWindows } from './data-table.ts'
@@ -19,13 +19,16 @@ function setup(rowCount = 1000, loaded = 50) {
   for (let i = 0; i < loaded; i++)
     state.store.set(i, { id: `r${String(i)}`, title: `Row ${String(i)}` })
   const selected: Row[] = []
+  const via: string[] = []
   const windows: RowWindows[] = []
   const sorted: string[] = []
+  const table = ref<{ isInView: (index: number) => boolean } | null>(null)
   const Host = defineComponent({
     render: () =>
       h(
         DataTable<Row>,
         {
+          ref: table,
           caption: 'Items',
           columns,
           rows: [],
@@ -34,8 +37,13 @@ function setup(rowCount = 1000, loaded = 50) {
           height: 400,
           selectedId: state.selectedId,
           rowAt: (i: number) => state.store.get(i),
-          onSelect: (row: Row) => {
+          indexOf: (id: string) => {
+            for (const [i, row] of state.store) if (row.id === id) return i
+            return -1
+          },
+          onSelect: (row: Row, how: string) => {
             selected.push(row)
+            via.push(how)
             state.selectedId = row.id
           },
           onWindows: (w: RowWindows) => windows.push(w),
@@ -52,7 +60,7 @@ function setup(rowCount = 1000, loaded = 50) {
     return found
   }
   const text = (n: FakeNode): string => (n.tag === '#text' ? n.text : n.children.map(text).join(''))
-  return { root, state, selected, windows, sorted, rows, row, text }
+  return { root, state, selected, via, windows, sorted, rows, row, text, table }
 }
 
 const key = (el: FakeNode, k: string) => {
@@ -79,6 +87,7 @@ describe('DataTable virtual mode, in use', () => {
     await nextTick()
     fire(t.row(2), 'click', { target: t.row(2) })
     expect(t.selected.map((r) => r.id)).toEqual(['r2'])
+    expect(t.via).toEqual(['pointer'])
     fire(t.row(7), 'click', { target: t.row(7) })
     const link = { closest: (s: string) => (s.includes('a') ? {} : null) }
     fire(t.row(3), 'click', { target: link })
@@ -91,6 +100,8 @@ describe('DataTable virtual mode, in use', () => {
     key(t.row(0), 'ArrowDown')
     await nextTick()
     expect(t.selected.map((r) => r.id)).toEqual(['r1'])
+    // The screen keeps focus in the table for a selection by keyboard.
+    expect(t.via).toEqual(['keyboard'])
     expect(activeElement(t.root)).toBe(t.row(1))
     // Keys pressed before the parent re-renders with the new selection still move it.
     key(t.row(1), 'ArrowDown')
@@ -136,6 +147,34 @@ describe('DataTable virtual mode, in use', () => {
     t.state.store.set(999, { id: 'r999', title: 'Last' })
     await nextTick()
     expect(t.selected.map((r) => r.id)).toEqual(['r999'])
+  })
+
+  it('keeps focus when the placeholder that has it is replaced by its row', async () => {
+    const t = setup(1000, 5)
+    await nextTick()
+    fire(t.row(7), 'focusin')
+    t.row(7).focus()
+    t.state.store.set(7, { id: 'r7', title: 'Row 7' })
+    await nextTick()
+    expect(t.row(7).props['data-row']).toBe('')
+    expect(activeElement(t.root)).toBe(t.row(7))
+  })
+
+  it('moves an element with its row when a row is added above, so focus stays on its item', async () => {
+    const t = setup(1000, 10)
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    key(t.row(1), 'ArrowDown')
+    await nextTick()
+    const focused = activeElement(t.root)
+    expect(focused).toBe(t.row(2))
+    // A new item goes first: every loaded row moves down one.
+    const shifted = new Map<number, Row>([[0, { id: 'new', title: 'New' }]])
+    for (const [i, row] of t.state.store) shifted.set(i + 1, row)
+    t.state.store = shifted
+    await nextTick()
+    expect(t.row(3)).toBe(focused)
+    expect(t.text(t.row(3))).toContain('Row 2')
   })
 
   it('lets a click cancel a keyboard move still waiting for its row', async () => {
@@ -224,6 +263,58 @@ describe('DataTable virtual mode, scrolling', () => {
     // Across a window edge, both windows are asked for.
     await t.scrollTo(395 * 38)
     expect(t.windows.at(-1)).toMatchObject({ offsets: [200, 400] })
+  })
+
+  it('keeps the focused row rendered when the wheel scrolls it out of view', async () => {
+    const t = scrollable()
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    await nextTick()
+    const focused = t.row(1)
+    expect(activeElement(t.root)).toBe(focused)
+    await t.scrollTo(300 * 38)
+    // Row 1 stays where it belongs, between a spacer for row 0 and one up to row 291, and
+    // keeps focus, so the next arrow key moves on from it.
+    expect(t.rows().map((r) => r.props['data-index'])).toEqual([
+      1,
+      ...Array.from({ length: 27 }, (_, i) => 291 + i),
+    ])
+    expect(t.row(1)).toBe(focused)
+    expect(activeElement(t.root)).toBe(focused)
+    const spacers = findAll(t.root, (n) => n.tag === 'tr' && 'data-spacer' in n.props)
+    expect(spacers.map((n) => n.props['data-spacer'])).toEqual(['above', 'between', 'below'])
+    // The kept row is not in view: only the window in view is asked for.
+    expect(t.windows.at(-1)?.offsets).toEqual([200])
+    expect(t.table.value?.isInView(1)).toBe(false)
+    expect(t.table.value?.isInView(300)).toBe(true)
+  })
+
+  it('keeps focus on its item when a row is added above it while scrolled away', async () => {
+    const t = scrollable()
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    await nextTick()
+    const focused = t.row(1)
+    await t.scrollTo(300 * 38)
+    // A live create: every loaded row moves down one.
+    const shifted = new Map<number, Row>([[0, { id: 'new', title: 'New' }]])
+    for (const [i, row] of t.state.store) shifted.set(i + 1, row)
+    t.state.store = shifted
+    await nextTick()
+    await nextTick()
+    // Row 1's item is now at row 2: its element is kept there, still focused.
+    expect(t.row(2)).toBe(focused)
+    expect(t.text(t.row(2))).toContain('Row 1')
+    expect(activeElement(t.root)).toBe(focused)
+    expect(t.rows().map((r) => r.props['data-index'])).not.toContain(1)
+  })
+
+  it('keeps a row reached with Tab rendered too', async () => {
+    const t = scrollable()
+    await nextTick()
+    fire(t.row(4), 'focusin')
+    await t.scrollTo(300 * 38)
+    expect(t.rows()[0]?.props['data-index']).toBe(4)
   })
 
   it('asks for nothing while scrolling inside the windows it already asked for', async () => {

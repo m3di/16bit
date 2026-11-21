@@ -1,3 +1,4 @@
+import type { Item } from '@16bit/core'
 import { createSSRApp, h, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { renderToString } from 'vue/server-renderer'
@@ -36,29 +37,22 @@ const render = async (c: Component, props: Record<string, unknown> = {}, slot?: 
 }
 
 const columns = folderColumns(description, 'bld')
-const ready = (ids: string[], nextCursor: string | null = null): Load<ItemList> => ({
+const ready = (total: number, more: Partial<ItemList> = {}): Load<ItemList> => ({
   state: 'ready',
-  data: {
-    ids,
-    nextCursor,
-    more: false,
-    moreError: null,
-    moreRefused: false,
-    sort: null,
-    sorting: false,
-  },
+  data: { total, sort: null, where: null, sorting: false, failed: [], failure: null, ...more },
 })
 
 const block = (
   list: Load<ItemList>,
-  rows = [item('i1', 12, { title: 'Ship', stage: 'done', points: 3 })],
+  rows: Item[] = [item('i1', 12, { title: 'Ship', stage: 'done', points: 3 })],
   readOnly = false,
   sort: SortKey | null = null,
 ) =>
   render(ItemsBlock, {
     folderName: 'Build',
     list,
-    rows,
+    rowAt: (i: number) => rows[i],
+    indexOf: (id: string) => rows.findIndex((r) => r.id === id),
     columns,
     idPrefix: 'BLD',
     itemLink: (i: { id: string }) => ({ query: { item: i.id } }),
@@ -83,7 +77,7 @@ const header = (html: string, label: string) =>
 
 describe('ItemsBlock', () => {
   it('shows one column per attribute after the ID, in position order', async () => {
-    const html = await block(ready(['i1']))
+    const html = await block(ready(1))
     expect(headerTexts(html)).toEqual(['ID', 'Title', 'Stage', 'Points'])
     expect(html).toContain('<caption')
     expect(html).toMatch(/<a [^>]*href="\/w\/w\/hubs\/bld\?item=i1"[^>]*>BLD-12<\/a>/)
@@ -93,7 +87,7 @@ describe('ItemsBlock', () => {
   })
 
   it('makes headers of indexed, sortable attributes sort buttons', async () => {
-    const html = await block(ready(['i1']))
+    const html = await block(ready(1))
     // Stage is indexed; Title and Points are not, and the ID column has no attribute.
     expect(header(html, 'Stage')).toMatch(/<button type="button"[^>]*>(\s|<!---->)*Stage/)
     expect(header(html, 'Stage')).toContain('data-sort="none"')
@@ -105,13 +99,13 @@ describe('ItemsBlock', () => {
   })
 
   it('marks the sorted column with aria-sort and an arrow', async () => {
-    const asc = await block(ready(['i1']), undefined, false, {
+    const asc = await block(ready(1), undefined, false, {
       attribute: 'stage',
       direction: 'asc',
     })
     expect(header(asc, 'Stage')).toContain('aria-sort="ascending"')
     expect(header(asc, 'Stage')).toContain('data-sort-icon="ascending"')
-    const desc = await block(ready(['i1']), undefined, false, {
+    const desc = await block(ready(1), undefined, false, {
       attribute: 'stage',
       direction: 'desc',
     })
@@ -119,34 +113,35 @@ describe('ItemsBlock', () => {
     expect(header(desc, 'Stage')).toContain('data-sort-icon="descending"')
   })
 
-  it('keeps the rows while a new order loads, and holds "Load more" back', async () => {
-    const list = ready(['i1'], 'c1')
-    if (list.state === 'ready') list.data.sorting = true
-    const html = await block(list)
+  it('keeps the rows while a new order loads', async () => {
+    const html = await block(ready(1, { sorting: true }))
     expect(html).toContain('aria-busy="true"')
     expect(html).toContain('Ship')
     expect(html).toContain('Sorting…')
-    expect(html).not.toContain('Load more')
   })
 
-  it('offers more when there is a next page', async () => {
-    expect(await block(ready(['i1'], 'c1'))).toContain('Load more')
-    expect(await block(ready(['i1']))).not.toContain('Load more')
-  })
-
-  it('offers the default order instead of "Load more" once the sort was refused (#85)', async () => {
-    const list = ready(['i1'], 'c1')
-    if (list.state === 'ready') list.data.moreRefused = true
-    const html = await block(list, undefined, false, { attribute: 'stage', direction: 'asc' })
+  it('is a virtual table sized by the total, with placeholders for rows not loaded (D61)', async () => {
+    const html = await block(ready(50_000))
+    expect(html).toContain('data-mode="virtual"')
+    expect(html).toMatch(/<table[^>]*aria-rowcount="50001"/)
     expect(html).toContain('Ship')
+    expect(html).toContain('data-placeholder')
     expect(html).not.toContain('Load more')
-    expect(html).toContain('More items cannot be loaded in this order.')
-    expect(html).toMatch(/<button[^>]*>(<!--\[-->)?Show newest update first(<!--\]-->)?<\/button>/)
+    // The ID column is narrow and fixed; columns do not jump while scrolling.
+    expect(html).toMatch(/<th[^>]*style="width:104px;"[^>]*>(<!--\[-->)?ID/)
+  })
+
+  it('says which rows could not be loaded, with a retry', async () => {
+    const html = await block(
+      ready(50_000, { failed: [200], failure: new ApiRequestError('internal', 'Down.', 500) }),
+    )
+    expect(html).toMatch(/role="alert"[^>]*>Rows 201 to 400 could not be loaded\. Down\./)
+    expect(html).toMatch(/<button[^>]*>(<!--\[-->)?Try again(<!--\]-->)?<\/button>/)
   })
 
   const states: [string, Load<ItemList>, string][] = [
     ['loading', { state: 'loading' }, 'role="status"'],
-    ['empty', ready([]), 'No items in this folder yet'],
+    ['empty', ready(0), 'No items in this folder yet'],
     ['error', { state: 'error', error: new ApiRequestError('internal', 'Boom', 500) }, 'Try again'],
     [
       'no permission',
@@ -171,11 +166,11 @@ describe('ItemsBlock', () => {
   })
 
   it('offers "New item" in the empty state', async () => {
-    expect(await block(ready([]), [])).toContain('New item')
+    expect(await block(ready(0), [])).toContain('New item')
   })
 
   it('offers no "New item" once the hub is read-only, and leaves the reason to the page', async () => {
-    const html = await block(ready([]), [], true)
+    const html = await block(ready(0), [], true)
     expect(html).toContain('No items in this folder yet')
     expect(html).not.toContain('New item')
     // HubPage's header states the read-only reason once; the empty state does not repeat it.

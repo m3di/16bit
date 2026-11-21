@@ -105,6 +105,10 @@ jobs:
       - run: pnpm seed > /dev/null
         env:
           MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
+      # The 50,000-item folder for e2e/tests/large-folder.spec.ts (D61).
+      - run: pnpm seed:large
+        env:
+          MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
       # Playwright starts the API and the web app itself (webServer in e2e/playwright.config.ts).
       - run: pnpm e2e
 

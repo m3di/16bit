@@ -143,3 +143,17 @@ export const item = (
   updatedAt: '2026-11-16T10:00:00.000Z',
   updatedBy: 'lead',
 })
+
+/** The rows a windowed list has loaded, in order, skipping rows not loaded (D61). */
+export function rowsOf(s: {
+  list: { value: { state: string; data?: { total: number } } }
+  rowAt: (index: number) => Item | undefined
+}): Item[] {
+  const total = s.list.value.state === 'ready' ? (s.list.value.data?.total ?? 0) : 0
+  const out: Item[] = []
+  for (let i = 0; i < total; i++) {
+    const row = s.rowAt(i)
+    if (row) out.push(row)
+  }
+  return out
+}
