@@ -283,10 +283,29 @@ export function useItems(
   const orderKeys = new Map<string, string>()
   /** Items this view deleted, so the echo of a delete does not read the rows again. */
   const removedHere = new Set<string>()
+  /**
+   * The highest item number this view has seen in the open folder. Items never change folder,
+   * so an item it has not listed with a higher number is new, and first in the default order,
+   * whatever its version: a create and an edit made together reach the feed as one change (D58).
+   */
+  let highestSeen = 0
+  const see = (seqId: number) => {
+    if (seqId > highestSeen) highestSeen = seqId
+  }
 
   function rowsChanged() {
     rowsVersion.value++
     if (list.value.state === 'ready') list.value.data.total = positions.total
+  }
+
+  /**
+   * Rows were added or removed: later rows moved by one, and holes moved into loaded windows.
+   * The windows in view that are no longer whole are read again; the table only asks when the
+   * windows in view change.
+   */
+  function rowsShifted() {
+    rowsChanged()
+    if (inView) showWindows(inView)
   }
 
   /** The item at a row, or undefined while its window is not loaded. */
@@ -377,6 +396,7 @@ export function useItems(
       page.items.map((i) => i.id),
       page.total ?? into.total,
     )
+    for (const item of page.items) see(item.seqId)
     if (reorders(data)) for (const item of page.items) orderKeys.set(item.id, orderKey(item, data))
   }
 
@@ -483,6 +503,7 @@ export function useItems(
     list.value = { state: 'loading' }
     // The table is mounted afresh at the top once the rows arrive.
     inView = null
+    highestSeen = 0
     try {
       const reads = await readWindows(folder, [0], order)
       if (gen !== generation) return
@@ -544,6 +565,8 @@ export function useItems(
     const gen = ++generation
     const data = current.data
     data.sorting = true
+    const rows = positions
+    const shifts = rows.shifts
     try {
       const reads = await readWindows(folder, offsetsInView(), next)
       if (gen !== generation) return
@@ -551,6 +574,8 @@ export function useItems(
       list.value = readyList(next, positions.total)
       rowsChanged()
       if (inView) showWindows(inView)
+      // A create or delete while this was read may be missing from it: read the view again.
+      if (rows.shifts !== shifts) scheduleRefetch()
       // The rows are in the order asked for, so a notice about the previous order no longer applies.
       if (sortNotice) say(null)
     } catch (thrown) {
@@ -577,11 +602,20 @@ export function useItems(
     if (current.state !== 'ready' || !folder) return
     const data = current.data
     const gen = generation
+    const rows = positions
+    const shifts = rows.shifts
     loading.add(offset)
     data.failed = data.failed.filter((o) => o !== offset)
     try {
       const page = await fetchWindow(folder, offset, data.sort, data.where)
       if (gen !== generation) return
+      if (rows.shifts !== shifts) {
+        // Rows were added or removed while this was read, so it belongs at other rows: drop it,
+        // and read the windows in view again.
+        loading.delete(offset)
+        if (inView) showWindows(inView)
+        return
+      }
       putWindow(positions, offset, page, data)
       rowsChanged()
     } catch (thrown) {
@@ -654,6 +688,8 @@ export function useItems(
     loading.clear()
     const offsets = offsetsInView()
     for (const offset of offsets) loading.add(offset)
+    const rows = positions
+    const shifts = rows.shifts
     const before = new Map<string, number>()
     if (inView) {
       for (let i = inView.start; i < inView.end; i++) {
@@ -672,6 +708,8 @@ export function useItems(
       reordered.value = { before }
       // A window scrolled to while these were read was dropped with the old rows.
       if (inView) showWindows(inView)
+      // A create or delete while this was read may be missing from it: read the view again.
+      if (rows.shifts !== shifts) scheduleRefetch()
       return true
     } catch (thrown) {
       if (gen !== generation) return true
@@ -908,7 +946,7 @@ export function useItems(
     const gen = generation
     if (list.value.state === 'ready') {
       positions.insertAt(0, id)
-      rowsChanged()
+      rowsShifted()
     }
 
     try {
@@ -920,13 +958,14 @@ export function useItems(
         fetchFn,
       )
       const item = confirmed(response) ?? withoutSeq(response)
+      if (item.folderId === folderId.value) see(item.seqId)
       if (list.value.state === 'ready' && reorders(list.value.data)) scheduleRefetch()
       return { ok: true, item }
     } catch (thrown) {
       const error = asRequestError(thrown)
       if (gen === generation && list.value.state === 'ready') {
         positions.removeAt(positions.indexOf(id))
-        rowsChanged()
+        rowsShifted()
       }
       if (error.status === 403) {
         readOnly.value = true
@@ -946,7 +985,7 @@ export function useItems(
     if (at >= 0) {
       positions.removeAt(at)
       orderKeys.delete(id)
-      rowsChanged()
+      rowsShifted()
     }
     return at
   }
@@ -975,7 +1014,7 @@ export function useItems(
       removedHere.delete(id)
       if (at < 0 || gen !== generation || list.value.state !== 'ready') return
       if (positions.indexOf(id) < 0) positions.insertAt(at, id)
-      rowsChanged()
+      rowsShifted()
     }
     return enqueue(id, async (): Promise<RemoveResult> => {
       const before = store.get(id) ?? shown
@@ -1049,8 +1088,12 @@ export function useItems(
     const listed = positions.indexOf(change.itemId) >= 0
     const item = store.get(change.itemId)
     if (!change.item || !item) {
-      // Gone. One that is not loaded may still have been in this folder, and counted.
-      if (unlist(change.itemId) < 0 && !removedHere.has(change.itemId)) scheduleRefetch()
+      // Gone. One that is not loaded may still have been in this folder, and counted, unless
+      // it was in another hub or this view deleted it (the echo of its own delete).
+      const own = removedHere.delete(change.itemId)
+      const hub = options.hubId?.()
+      const elsewhere = hub !== undefined && hub !== null && change.hubId !== hub
+      if (unlist(change.itemId) < 0 && !own && !elsewhere) scheduleRefetch()
       return
     }
     if (item.folderId !== folderId.value) {
@@ -1062,15 +1105,18 @@ export function useItems(
       checkOrder(item)
       return
     }
+    // Numbered above every item this view has seen: new, whatever its version.
+    const isNew = item.seqId > highestSeen
+    see(item.seqId)
     if (reorders(data)) {
       scheduleRefetch()
       return
     }
-    // A new item has the highest number, so it is first; one moved in from another folder
-    // has its place among the others, which only a read can say.
-    if (item.version === 1) {
+    // A new item has the highest number, so it is first. Any other unlisted item among the rows
+    // in view has a place only a read can say.
+    if (isNew) {
       positions.insertAt(0, item.id)
-      rowsChanged()
+      rowsShifted()
     } else if (withinView(item.seqId)) scheduleRefetch()
   }
 

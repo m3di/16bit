@@ -37,6 +37,10 @@ function setup(rowCount = 1000, loaded = 50) {
           height: 400,
           selectedId: state.selectedId,
           rowAt: (i: number) => state.store.get(i),
+          indexOf: (id: string) => {
+            for (const [i, row] of state.store) if (row.id === id) return i
+            return -1
+          },
           onSelect: (row: Row, how: string) => {
             selected.push(row)
             via.push(how)
@@ -283,6 +287,26 @@ describe('DataTable virtual mode, scrolling', () => {
     expect(t.windows.at(-1)?.offsets).toEqual([200])
     expect(t.table.value?.isInView(1)).toBe(false)
     expect(t.table.value?.isInView(300)).toBe(true)
+  })
+
+  it('keeps focus on its item when a row is added above it while scrolled away', async () => {
+    const t = scrollable()
+    await nextTick()
+    key(t.row(0), 'ArrowDown')
+    await nextTick()
+    const focused = t.row(1)
+    await t.scrollTo(300 * 38)
+    // A live create: every loaded row moves down one.
+    const shifted = new Map<number, Row>([[0, { id: 'new', title: 'New' }]])
+    for (const [i, row] of t.state.store) shifted.set(i + 1, row)
+    t.state.store = shifted
+    await nextTick()
+    await nextTick()
+    // Row 1's item is now at row 2: its element is kept there, still focused.
+    expect(t.row(2)).toBe(focused)
+    expect(t.text(t.row(2))).toContain('Row 1')
+    expect(activeElement(t.root)).toBe(focused)
+    expect(t.rows().map((r) => r.props['data-index'])).not.toContain(1)
   })
 
   it('keeps a row reached with Tab rendered too', async () => {

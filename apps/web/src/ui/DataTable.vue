@@ -67,6 +67,7 @@ const {
   rowAttrs = () => ({}),
   rowCount = 0,
   rowAt = null,
+  indexOf = null,
   windowSize = DEFAULT_WINDOW_SIZE,
   height = 480,
 } = defineProps<{
@@ -88,6 +89,11 @@ const {
   rowCount?: number
   /** `virtual`: the row at an index, or undefined while it is not loaded. */
   rowAt?: ((index: number) => Row | undefined) | null
+  /**
+   * `virtual`: the row an item is at, or -1 when it is not loaded. The active row is followed by
+   * its ID through it, so focus stays on its item when rows are added or removed above it.
+   */
+  indexOf?: ((id: string) => number) | null
   /** `virtual`: rows per window in the `windows` event (D61: 200). */
   windowSize?: number
   /** `virtual`: the scroll box's height, in px or any CSS length (such as `100%`). */
@@ -129,12 +135,23 @@ const box = ref<HTMLDivElement | null>(null)
 // or moved to, or the selected row when it is in view. It holds the tab stop, so the table is
 // one stop, and it stays rendered when scrolled out of view, so a wheel or scrollbar scroll
 // never drops the focus it may hold.
-const active = ref(-1)
+const activeAt = ref(-1)
+/** The active row's item, once loaded: rows added or removed above it move it (D61). */
+const activeId = ref<string | null>(null)
+function setActive(index: number) {
+  activeAt.value = index
+  activeId.value = rowAt?.(index)?.id ?? null
+}
+/** The active row's index now, following its item when it is known. */
+const active = computed(() => {
+  const id = activeId.value
+  const at = id !== null && indexOf ? indexOf(id) : -1
+  return at >= 0 ? at : activeAt.value
+})
 /** The active row, when the range in view does not include it. */
 let kept = -1
-function keepActive(range: Range): number[] {
+function keepActive(range: Range, index: number): number[] {
   const indexes = defaultRangeExtractor(range)
-  const index = active.value
   kept = -1
   if (index < 0 || index >= range.count || indexes.length === 0 || indexes.includes(index))
     return indexes
@@ -144,18 +161,22 @@ function keepActive(range: Range): number[] {
 
 const boxHeight = computed(() => (typeof height === 'number' ? `${String(height)}px` : height))
 const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>(
-  computed(() => ({
-    count: virtual.value ? rowCount : 0,
-    enabled: virtual.value,
-    getScrollElement: () => box.value,
-    estimateSize: () => VIRTUAL_ROW_HEIGHT,
-    overscan: VIRTUAL_OVERSCAN,
-    scrollMargin: VIRTUAL_HEADER_HEIGHT,
-    scrollPaddingStart: VIRTUAL_HEADER_HEIGHT,
-    rangeExtractor: keepActive,
-    // Before the box is measured (and in server rendering), assume it has its stated height.
-    initialRect: { width: 0, height: typeof height === 'number' ? height : 480 },
-  })),
+  computed(() => {
+    // Read here, so the rows rendered follow the active row when it moves.
+    const keep = active.value
+    return {
+      count: virtual.value ? rowCount : 0,
+      enabled: virtual.value,
+      getScrollElement: () => box.value,
+      estimateSize: () => VIRTUAL_ROW_HEIGHT,
+      overscan: VIRTUAL_OVERSCAN,
+      scrollMargin: VIRTUAL_HEADER_HEIGHT,
+      scrollPaddingStart: VIRTUAL_HEADER_HEIGHT,
+      rangeExtractor: (range: Range) => keepActive(range, keep),
+      // Before the box is measured (and in server rendering), assume it has its stated height.
+      initialRect: { width: 0, height: typeof height === 'number' ? height : 480 },
+    }
+  }),
 )
 const items = computed(() => (virtual.value ? virtualizer.value.getVirtualItems() : []))
 const rowOf = (index: number): Row | undefined => rowAt?.(index)
@@ -217,7 +238,7 @@ watch(
   () =>
     selectedId === null ? -1 : (bodyRows.value.find((r) => r.row?.id === selectedId)?.index ?? -1),
   (index) => {
-    if (index >= 0) active.value = index
+    if (index >= 0) setActive(index)
   },
   { immediate: true },
 )
@@ -283,7 +304,7 @@ const pageRows = () => {
 }
 
 function moveTo(index: number) {
-  active.value = index
+  setActive(index)
   virtualizer.value.scrollToIndex(index, { align: 'auto' })
   focusPending.value = index
   void nextTick(focusIfRendered)
@@ -306,7 +327,7 @@ function onRowKeydown(event: KeyboardEvent, index: number) {
 
 /** Focus reached a row (Tab, or its ID link): it becomes the active row, and stays rendered. */
 function onRowFocus(index: number, key: string) {
-  active.value = index
+  setActive(index)
   focused = { index, key }
 }
 function onRowBlur(key: string) {
@@ -318,7 +339,7 @@ function onVirtualRowClick(event: MouseEvent, index: number, row: Row | undefine
   // A click wins over a keyboard move still waiting for its row to load or render.
   selectPending.value = -1
   focusPending.value = -1
-  active.value = index
+  setActive(index)
   if (row) emit('select', row, 'pointer')
 }
 

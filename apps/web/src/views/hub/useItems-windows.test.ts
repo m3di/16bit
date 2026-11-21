@@ -268,3 +268,172 @@ describe('followSelected (D61)', () => {
     expect(followSelected(null, 'sel', at(40), visible)).toBeNull()
   })
 })
+
+/**
+ * A folder of `n` items on a fake server, numbered 1 to `n`, read newest first in windows. A
+ * read can be held: it is answered as the folder was when the request was made, on release.
+ */
+function server(n: number) {
+  let items = Array.from({ length: n }, (_, i) => item(`i${String(n - i)}`, n - i))
+  const holds = new Set<number>()
+  const held: (() => void)[] = []
+  const answer = (offset: number) => page(items.slice(offset, offset + 200), items.length)
+  return {
+    get items() {
+      return items
+    },
+    query(body: QueryBody): Response | Promise<Response> {
+      const response = answer(body.offset)
+      if (!holds.delete(body.offset)) return response
+      return new Promise((resolve) => {
+        held.push(() => {
+          resolve(response)
+        })
+      })
+    },
+    /** The next read of the window at `offset` waits for `release`. */
+    hold(offset: number) {
+      holds.add(offset)
+    },
+    release() {
+      for (const go of held.splice(0)) go()
+    },
+    create(seqId: number, version = 1) {
+      const created = item(`i${String(seqId)}`, seqId, {}, version)
+      items = [created, ...items]
+      return created
+    },
+    remove(id: string) {
+      items = items.filter((i) => i.id !== id)
+    },
+  }
+}
+
+/** Every loaded row is the server's item at that row, none twice, and `total` is right. */
+function expectInStep(s: ReturnType<typeof useItems>, items: readonly Item[]) {
+  expect(total(s)).toBe(items.length)
+  const seen = new Set<string>()
+  for (let i = 0; i < items.length; i++) {
+    const row = s.rowAt(i)
+    if (!row) continue
+    expect(row.id, `row ${String(i)}`).toBe(items[i]?.id)
+    expect(seen.has(row.id), `${row.id} listed twice`).toBe(false)
+    seen.add(row.id)
+  }
+}
+
+/** Every row from `start` up to `end` is loaded. */
+function expectLoaded(s: ReturnType<typeof useItems>, start: number, end: number) {
+  for (let i = start; i < end; i++) expect(s.rowAt(i), `row ${String(i)}`).toBeDefined()
+}
+
+describe('several windows while rows shift (D61)', () => {
+  /** 1,000 items; the reader has read window 0 and is at rows 400 to 420. */
+  async function deep() {
+    const folder = server(1000)
+    const t = await (async () => {
+      const store = createWorkspaceStore('w')
+      const api = fakeApi((call) => folder.query(call.body as QueryBody))
+      const s = useItems('w', () => 'BLD', api.fetchFn, {
+        store,
+        hubId: () => 'bld',
+        refetchDelay: 5,
+      })
+      await s.openFolder('bld')
+      const reads = () => api.calls.map((c) => (c.body as QueryBody).offset)
+      return { s, store, reads }
+    })()
+    t.s.showWindows({ start: 400, end: 420, offsets: [400] })
+    await tick()
+    expectLoaded(t.s, 400, 420)
+    return { folder, ...t }
+  }
+
+  it('puts a new item first even when its change already shows an edit (version 2)', async () => {
+    const { s, store, folder } = await deep()
+    // A create and an edit within one batch reach the feed as one change, at version 2 (D58).
+    store.receive([changed(folder.create(1001, 2))])
+    await settle()
+    expect(s.rowAt(0)?.id).toBe('i1001')
+    expectInStep(s, folder.items)
+  })
+
+  it('reads the rows in view again when a create moves an unread row into them', async () => {
+    const { s, store, folder, reads } = await deep()
+    store.receive([changed(folder.create(1001))])
+    await settle()
+    // Row 400 is now the old row 399, which was never read: window 400 is read again.
+    expect(reads().filter((o) => o === 400)).toHaveLength(2)
+    expectLoaded(s, 400, 420)
+    expectInStep(s, folder.items)
+  })
+
+  it('reads the rows in view again when a delete moves an unread row into them', async () => {
+    const { s, store, folder, reads } = await deep()
+    // Row 10 goes: window 400 now ends with the old row 600, which was never read.
+    folder.remove('i990')
+    store.receive([removed('i990')])
+    await settle()
+    expect(reads().filter((o) => o === 400)).toHaveLength(2)
+    expect(s.rowAt(599)?.id).toBe('i400')
+    expectInStep(s, folder.items)
+  })
+
+  it('drops a window read that a create raced, and reads it again', async () => {
+    const { s, store, folder, reads } = await deep()
+    folder.hold(200)
+    s.showWindows({ start: 190, end: 215, offsets: [0, 200] })
+    await tick()
+    // The read of window 200 is on its way when a create shifts every row by one.
+    store.receive([changed(folder.create(1001))])
+    folder.release()
+    await settle()
+    expect(reads().filter((o) => o === 200)).toHaveLength(2)
+    expectLoaded(s, 190, 215)
+    expectInStep(s, folder.items)
+    // The row the stale read would have overwritten is still there.
+    expect(s.indexOf('i801')).toBe(200)
+  })
+
+  it('reads the view again when a create raced a refetch', async () => {
+    const { s, store, folder, reads } = await deep()
+    // A delete of an item not loaded makes the view read its windows again.
+    folder.remove('i10')
+    folder.hold(400)
+    store.receive([removed('i10')])
+    await settle()
+    // That read is on its way when a create arrives; it answers without the new item.
+    store.receive([changed(folder.create(1001))])
+    folder.release()
+    await settle()
+    await settle()
+    // Read once on opening the view, once for the delete, and again because the create raced it.
+    expect(reads().filter((o) => o === 400)).toHaveLength(3)
+    expectLoaded(s, 400, 420)
+    expectInStep(s, folder.items)
+  })
+
+  it('reads the view again when a create raced a new sort', async () => {
+    const { s, store, folder, reads } = await deep()
+    folder.hold(400)
+    const sorting = s.setSort({ attribute: 'stage', direction: 'asc' })
+    await tick()
+    store.receive([changed(folder.create(1001))])
+    folder.release()
+    await sorting
+    const before = reads().length
+    await settle()
+    // The sorted read predates the create, so the view is read again in the new order.
+    expect(reads().length).toBeGreaterThan(before)
+    expectLoaded(s, 400, 420)
+    expectInStep(s, folder.items)
+  })
+
+  it('does not read again for a delete in another hub', async () => {
+    const { store, reads } = await deep()
+    const before = reads().length
+    store.receive([{ seq: 30, hubId: 'other', itemId: 'x1', item: null }])
+    await settle()
+    expect(reads()).toHaveLength(before)
+  })
+})
