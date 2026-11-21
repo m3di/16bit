@@ -184,9 +184,5 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
     test.info().annotations.push({ type: 'in long frames', description: scripts.join('; ') })
   }
   expect(mostRows).toBeLessThan(MAX_ROWS_IN_DOM)
-  // Issue 218: GitHub's runners see long tasks here (one to 26 per run so far), so in CI they
-  // are reported above, not asserted. Not a `test.fail()` pin: a run with none would turn red.
-  // The fix for issue 218 removes this condition.
-  if (process.env['CI']) return
   expect(longTasks.filter((ms) => ms > LONG_TASK_MS)).toEqual([])
 })

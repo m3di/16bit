@@ -9,7 +9,7 @@ import { provideValueContext, type ValueContext } from './context.ts'
 import FieldEditor from './FieldEditor.vue'
 import { attributes, description, fakeApi, item, json } from './fixtures.test-utils.ts'
 import type { LinkedState } from './relations.ts'
-import ValueCell from './ValueCell.vue'
+import { ValueCell } from './value-cell.ts'
 
 // Every M1 type as a table cell and as a panel editor (#50), rendered on the server.
 
