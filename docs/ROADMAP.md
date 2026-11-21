@@ -4,6 +4,8 @@
 
 A deployable web app, backed only by Postgres, where people and agents share structured data through a fast API and a real-time dashboard. The team that builds it moves its own coordination into it as soon as it can.
 
+Design target from the first outside use case (D75): a few hundred to 2,000 items per hub, 5 to 15 agents at once, tens of writes per minute, reads far outnumbering writes. Not planned: see D74.
+
 Each milestone ends with something the maintainer can open and judge. The team stops at the end of each one and waits for feedback.
 
 ## M0: first look
@@ -37,7 +39,7 @@ The settings surface: workspace members, roles and invites, hub settings (genera
 
 ## M3: sync
 
-The change feed, WebSocket subscriptions, the client store, optimistic writes with rollback, virtual scrolling, chunked loading.
+The change feed, WebSocket subscriptions, the client store, optimistic writes with rollback, virtual scrolling, chunked loading. Added during M3: an optional cause (note, evidence URLs, the change it follows from) on every item write, shown in item history (D63).
 
 *Exit:* two browsers and one agent editing the same folder stay consistent, and a 50,000-item folder scrolls smoothly.
 
@@ -47,21 +49,23 @@ The block registry and root view composer. Blocks: list, board, chart, number, f
 
 *Exit:* the "project home" and "my work" mockups are built as real root views from real data.
 
-## M5: MCP and the dogfood switch
+*Backend track alongside M4:* external keys with get and upsert by key (D64), batch writes (D65), and write preconditions with server-clock timestamps (D66).
 
-The MCP server with describe, get, query, view, digest, and write tools. The build team moves its backlog from GitHub issues into a 16bit hub and coordinates there from then on.
+## M5: MCP and agent coordination
+
+The MCP server with describe, get, query, view, digest, and write tools. The build team moves its backlog from GitHub issues into a 16bit hub and coordinates there from then on. Also: neighbours (D67), claim, renew and release tools (D68), freshness on date attributes (D69), basic search over titles and text (D70), hub template export and import (D71), and trusted-header sign-in behind a gateway (D72).
 
 *Exit:* a sprint is run end to end with the agents reading and writing their tasks through MCP.
 
 ## M6: communication
 
-Comments, mentions, reactions, the activity block, rich text with the document block, search.
+Comments, mentions, reactions, the activity block, rich text with the document block, search over rich text and comments (basic search comes in M5, D70).
 
 *Exit:* the "task" mockup is real, and agents hand work to each other through comments on items.
 
 ## M7: hardening and deployment
 
-End-to-end coverage for every major function, sharded across runners. Load tests. Container image, migration job, Kubernetes manifests, deploy from `main` to the cluster. Webhooks.
+End-to-end coverage for every major function, sharded across runners. Load tests. Container image, migration job, Kubernetes manifests, deploy from `main` to the cluster. Webhooks. Full hub export with items, links and history, backup and restore documentation, and OIDC sign-in (D73).
 
 *Exit:* a merge to `main` rolls out to the cluster without manual steps, and the backend scales horizontally under load.
 
