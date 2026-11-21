@@ -64,16 +64,37 @@ describe('feed client: connecting and subscribing', () => {
     expect(socket()?.sent).toEqual([subscribe('bld', 12)])
   })
 
-  it('advances a restarted hub again once its catch-up has been answered', () => {
-    const { feed, socket } = fakeFeed(handlers())
+  it('keeps a restarted hub at the restart until the socket closes', () => {
+    const { feed, socket, clock } = fakeFeed(handlers())
     feed.track('bld', 20)
     socket()?.open()
     socket()?.push({ type: 'changes', seq: 20, hubIds: ['bld'], changes: [] })
     feed.track('bld', 12)
     socket()?.push({ type: 'changes', seq: 25, hubIds: ['bld'], changes: [] })
-    expect(feed.position('bld')).toBe(12)
     socket()?.push({ type: 'changes', seq: 26, hubIds: ['bld', 'x'], changes: [] })
-    expect(feed.position('bld')).toBe(26)
+    expect(feed.position('bld')).toBe(12)
+    // A new socket has no old subscription in flight: the hub advances normally again.
+    socket()?.drop()
+    clock.advance(1000)
+    socket()?.open()
+    expect(socket()?.sent).toEqual([subscribe('bld', 12)])
+    socket()?.push({ type: 'changes', seq: 30, hubIds: ['bld'], changes: [] })
+    socket()?.push({ type: 'changes', seq: 31, hubIds: ['bld'], changes: [] })
+    expect(feed.position('bld')).toBe(31)
+  })
+
+  it('does not skip the catch-up of a restart after two batches of the old subscription (regression)', () => {
+    const { feed, socket, clock } = fakeFeed(handlers())
+    feed.track('bld', 20)
+    socket()?.open()
+    socket()?.push({ type: 'changes', seq: 20, hubIds: ['bld'], changes: [] }) // first answer
+    feed.track('bld', 12) // restart from an older read
+    socket()?.push({ type: 'changes', seq: 40, hubIds: ['bld'], changes: [] }) // old subscription
+    socket()?.push({ type: 'changes', seq: 50, hubIds: ['bld'], changes: [] }) // old subscription
+    socket()?.drop() // before the restart's catch-up of (12, 20]
+    clock.advance(1000)
+    socket()?.open()
+    expect(socket()?.sent).toEqual([subscribe('bld', 12)])
   })
 
   it('restarts a subscription from an older read, and ignores a newer one', () => {

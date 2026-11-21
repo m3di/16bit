@@ -11,6 +11,7 @@ import { RouterLink } from 'vue-router'
 import { BaseButton, FormNotice } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import ActorValue from '../hub/ActorValue.vue'
+import { nameFor, useOptionalValueContext } from '../hub/context.ts'
 import FieldEditor from '../hub/FieldEditor.vue'
 import { displayId } from '../hub/relations.ts'
 import { formatTimestamp } from '../hub/values.ts'
@@ -30,6 +31,7 @@ const {
   readOnly,
   saving,
   notice = null,
+  refusedValue = () => null,
 } = defineProps<{
   workspaceId: string
   item: Item
@@ -43,10 +45,14 @@ const {
   saving: boolean
   /** The last write that failed, until dismissed. */
   notice?: string | null
+  /** The reader's value for a field that a 409 refused, and who changed it (D60). */
+  refusedValue?: (attributeId: string) => { value: ItemValues[string]; by: string } | null
 }>()
 
 const emit = defineEmits<{
-  save: [values: ItemValues]
+  /** `basedOn`: the version the edit started from (D60). */
+  save: [values: ItemValues, basedOn: number | null]
+  dismissRefused: [attributeId: string]
   delete: []
   dismiss: []
   retryBacklinks: []
@@ -66,7 +72,14 @@ defineExpose({ focusReadOnly: () => readOnlyNote.value?.focus() })
 const errors = ref<Record<string, string>>({})
 
 // Checked here first with the same rules as the server, so a value it would refuse is not sent.
-function commit(attributeId: string, value: ItemValues[string]) {
+const context = useOptionalValueContext()
+const changedBy = computed(() => nameFor(context, item.updatedBy))
+const refusedFor = (attributeId: string) => {
+  const refused = refusedValue(attributeId)
+  return refused ? { value: refused.value, by: nameFor(context, refused.by) } : null
+}
+
+function commit(attributeId: string, value: ItemValues[string], basedOn: number | null) {
   if (readOnly) return
   const result = validateItemValues(columns, { [attributeId]: value }, { partial: true })
   if (!result.ok) {
@@ -74,7 +87,7 @@ function commit(attributeId: string, value: ItemValues[string]) {
     return
   }
   errors.value = Object.fromEntries(Object.entries(errors.value).filter(([k]) => k !== attributeId))
-  emit('save', result.values)
+  emit('save', result.values, basedOn)
 }
 </script>
 
@@ -149,7 +162,11 @@ function commit(attributeId: string, value: ItemValues[string]) {
         :error="errors[attribute.id]"
         :read-only="readOnly"
         :item-id="item.id"
-        @commit="commit(attribute.id, $event)"
+        :version="item.version"
+        :changed-by="changedBy"
+        :refused="refusedFor(attribute.id)"
+        @commit="(value, basedOn) => commit(attribute.id, value, basedOn)"
+        @dismiss-refused="emit('dismissRefused', attribute.id)"
       />
       <p v-if="columns.length === 0" class="m-0 text-ink2">This folder has no fields yet.</p>
     </section>

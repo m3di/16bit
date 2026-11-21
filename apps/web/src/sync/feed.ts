@@ -84,10 +84,12 @@ interface Subscription {
   /** Subscribes sent on this socket; a second one is a restart. */
   sentOnSocket: number
   /**
-   * A restart is waiting for its answer. Until then a message naming the hub may still come from
-   * the subscription it replaced, so the hub does not advance, not even on the presumed answer:
-   * resuming from the restart's `after` only replays, while advancing early could skip changes
-   * between the older read and the old start.
+   * The hub restarted on this socket. Its position stays at the restart's `after` until the
+   * socket closes: a message cannot say which subscribe it answers, so any of them may still be
+   * from the subscription the restart replaced, and advancing on one could skip the changes
+   * between the older read and the old start. A resume then replays from the older read, or
+   * gets a `resync` past `MAX_MISSED_CHANGES`; both are correct. Restarts are rare (they need a
+   * read older than the subscription).
    */
   restarting: boolean
 }
@@ -277,12 +279,9 @@ export function createFeed(
           if (sub.awaiting > 0) {
             if (message.hubIds.length !== 1) continue
             sub.awaiting--
-            if (sub.restarting || !sub.sent) {
-              if (sub.awaiting === 0) sub.restarting = false
-              continue
-            }
+            if (!sub.sent) continue
           }
-          if (!sub.sent) continue
+          if (!sub.sent || sub.restarting) continue
           sub.after = Math.max(sub.after, message.seq)
         }
         handlers.changes(message)

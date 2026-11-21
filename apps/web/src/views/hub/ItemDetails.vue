@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import type { FolderAttributeDefinition, Item, ItemValues } from '@16bit/core'
 import { validateItemValues } from '@16bit/core'
-import { ref, useId } from 'vue'
+import { computed, ref, useId } from 'vue'
+import { nameFor, useOptionalValueContext } from './context.ts'
 import FieldEditor from './FieldEditor.vue'
 import { formatTimestamp } from './values.ts'
 
-const { item, columns, saving, disabled, readOnly } = defineProps<{
+const {
+  item,
+  columns,
+  saving,
+  disabled,
+  readOnly,
+  refusedValue = () => null,
+} = defineProps<{
   item: Item
   columns: readonly FolderAttributeDefinition[]
   /** An edit is on its way to the server. */
@@ -14,15 +22,28 @@ const { item, columns, saving, disabled, readOnly } = defineProps<{
   disabled?: boolean
   /** The server refused an edit in this hub with 403: values are shown, not editable. */
   readOnly?: boolean
+  /** The reader's value for a field that a 409 refused, and who changed it (D60). */
+  refusedValue?: (attributeId: string) => { value: ItemValues[string]; by: string } | null
 }>()
 
-const emit = defineEmits<{ save: [values: ItemValues] }>()
+const emit = defineEmits<{
+  /** `basedOn`: the version the edit started from (D60). */
+  save: [values: ItemValues, basedOn: number | null]
+  dismissRefused: [attributeId: string]
+}>()
+
+const context = useOptionalValueContext()
+const changedBy = computed(() => nameFor(context, item.updatedBy))
+const refusedFor = (attributeId: string) => {
+  const refused = refusedValue(attributeId)
+  return refused ? { value: refused.value, by: nameFor(context, refused.by) } : null
+}
 
 const headingId = useId()
 const errors = ref<Record<string, string>>({})
 
 // Checked here first with the same rules as the server, so a value it would refuse is not sent.
-function commit(attributeId: string, value: ItemValues[string]) {
+function commit(attributeId: string, value: ItemValues[string], basedOn: number | null) {
   if (disabled || readOnly) return
   const result = validateItemValues(columns, { [attributeId]: value }, { partial: true })
   if (!result.ok) {
@@ -30,7 +51,7 @@ function commit(attributeId: string, value: ItemValues[string]) {
     return
   }
   errors.value = Object.fromEntries(Object.entries(errors.value).filter(([k]) => k !== attributeId))
-  emit('save', result.values)
+  emit('save', result.values, basedOn)
 }
 </script>
 
@@ -49,7 +70,11 @@ function commit(attributeId: string, value: ItemValues[string]) {
         :disabled="disabled"
         :read-only="readOnly"
         :item-id="item.id"
-        @commit="commit(attribute.id, $event)"
+        :version="item.version"
+        :changed-by="changedBy"
+        :refused="refusedFor(attribute.id)"
+        @commit="(value, basedOn) => commit(attribute.id, value, basedOn)"
+        @dismiss-refused="emit('dismissRefused', attribute.id)"
       />
       <p v-if="columns.length === 0" class="m-0 text-ink2">This folder has no fields yet.</p>
     </section>

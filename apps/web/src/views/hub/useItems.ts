@@ -547,6 +547,24 @@ export function useItems(
     return run
   }
 
+  /** Edits a 409 refused, by item, until the reader keeps them or takes the other value. */
+  const refusedEdits = ref<Record<string, { values: ItemValues; by: string }>>({})
+  /** The reader's refused value for one field, and the principal whose change won. */
+  function refusedValue(id: string, attributeId: string) {
+    const entry = refusedEdits.value[id]
+    if (!entry || !(attributeId in entry.values)) return null
+    return { value: entry.values[attributeId] ?? null, by: entry.by }
+  }
+  function forgetRefused(id: string, attributeIds: readonly string[]) {
+    const entry = refusedEdits.value[id]
+    if (!entry) return
+    const values = Object.fromEntries(
+      Object.entries(entry.values).filter(([k]) => !attributeIds.includes(k)),
+    )
+    if (Object.keys(values).length === 0) Reflect.deleteProperty(refusedEdits.value, id)
+    else refusedEdits.value[id] = { ...entry, values }
+  }
+
   /**
    * The versions this view's own confirmed writes moved each item through, `from` to `to`. A
    * queued write sends the version the reader's edit was based on, moved on only by these: a
@@ -580,15 +598,16 @@ export function useItems(
    * On a 409 the item shows the server's current values, and every edit still queued for it
    * is dropped, since it was made against the old version. Any other failure undoes this edit.
    */
-  function save(id: string, values: ItemValues): Promise<boolean> {
+  function save(id: string, values: ItemValues, basedOn: number | null = null): Promise<boolean> {
     // The server does not have the item yet, so there is nothing to PATCH.
     if (store.isCreating(id)) {
       say('The new item is still being saved. Edit it once it has been created.')
       return Promise.resolve(false)
     }
     const mutationId = newItemId()
-    // The version the reader's edit is based on: the server copy they see under their own edits.
-    const base = store.get(id)?.version
+    // The version the reader's edit is based on: from the field when it knows (a draft kept while
+    // someone else saved, D60), else the server copy they see under their own edits.
+    const base = basedOn ?? store.get(id)?.version
     store.addPending(id, { kind: 'patch', mutationId, values })
     const drop = () => {
       store.dropPending(id, mutationId)
@@ -613,6 +632,7 @@ export function useItems(
         stepped(id, version, response.version)
         confirmed(response)
         drop()
+        forgetRefused(id, Object.keys(values))
         return true
       } catch (thrown) {
         const error = asRequestError(thrown)
@@ -624,6 +644,18 @@ export function useItems(
             `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`,
           )
         } else if (error.code === 'conflict' && conflict.success) {
+          // Every edit still pending was made against the old version: all of them are offered
+          // back field by field ("Keep mine"), beside the other person's values.
+          const mine = store
+            .pending(id)
+            .reduce<ItemValues>(
+              (acc, w) => (w.kind === 'patch' ? { ...acc, ...w.values } : acc),
+              {},
+            )
+          refusedEdits.value[id] = {
+            values: { ...refusedEdits.value[id]?.values, ...mine },
+            by: conflict.data.current.updatedBy,
+          }
           store.apply(conflict.data.current)
           store.dropPendingKind(id, 'patch')
           say(
@@ -865,5 +897,7 @@ export function useItems(
     readOnly,
     store,
     dispose,
+    refusedValue,
+    forgetRefused,
   }
 }

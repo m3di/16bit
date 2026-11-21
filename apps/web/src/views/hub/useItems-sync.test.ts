@@ -402,3 +402,43 @@ describe('after the session ended (4401)', () => {
     expect(feeds[1]?.socket()?.sent).toEqual([{ type: 'subscribe', hubId: 'bld', after: 5 }])
   })
 })
+
+describe('a draft kept while someone else saved (D60)', () => {
+  it('saves against the version the draft was based on and offers the refused value back', async () => {
+    const theirs = item('i1', 1, { title: 'Theirs' }, 2)
+    let versions: number[] = []
+    const { s, socket } = await live(
+      () => page([item('i1', 1, { title: 'Old' }, 1)], 10),
+      (call) => {
+        const body = call.body as { version: number; values: Record<string, unknown> }
+        versions = [...versions, body.version]
+        return body.version === 1
+          ? json({ error: 'conflict', message: 'Version mismatch', current: theirs }, 409)
+          : json(withSeq(item('i1', 1, { title: 'Mine' }, 3), 12))
+      },
+    )
+    // Their change arrives while the reader is typing; the field saves against version 1.
+    socket()?.push(changes(11, [changed(theirs, 11)]))
+    expect(await s.save('i1', { title: 'Mine' }, 1)).toBe(false)
+    expect(versions).toEqual([1])
+    expect(s.view('i1')).toMatchObject({ version: 2, values: { title: 'Theirs' } })
+    expect(s.refusedValue('i1', 'title')).toEqual({ value: 'Mine', by: theirs.updatedBy })
+    expect(s.refusedValue('i1', 'points')).toBeNull()
+
+    // Keep mine: saved again over the version now shown, and the offer goes.
+    expect(await s.save('i1', { title: 'Mine' }, 2)).toBe(true)
+    expect(versions).toEqual([1, 2])
+    expect(s.refusedValue('i1', 'title')).toBeNull()
+  })
+
+  it('drops the offer when the reader takes the other value', async () => {
+    const theirs = item('i1', 1, { title: 'Theirs' }, 2)
+    const { s } = await live(
+      () => page([item('i1', 1, { title: 'Old' }, 1)], 10),
+      () => json({ error: 'conflict', message: 'Version mismatch', current: theirs }, 409),
+    )
+    await s.save('i1', { title: 'Mine' }, 1)
+    s.forgetRefused('i1', ['title'])
+    expect(s.refusedValue('i1', 'title')).toBeNull()
+  })
+})

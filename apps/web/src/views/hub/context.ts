@@ -35,6 +35,15 @@ export const provideValueContext = (context: ValueContext) => {
   provide(key, context)
 }
 
+/** The context where one is provided, or `null` (components that also render without it). */
+export const useOptionalValueContext = (): ValueContext | null => inject(key, null)
+
+/** A principal's name for a sentence, or "Someone else" when it cannot be named. */
+export function nameFor(context: ValueContext | null, id: string): string {
+  const actor = context?.actor(id)
+  return actor?.known ? actor.name : 'Someone else'
+}
+
 export function useValueContext(): ValueContext {
   const context = inject(key, null)
   if (!context) throw new Error('useValueContext() needs provideValueContext() in a parent')
