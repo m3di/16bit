@@ -1,16 +1,27 @@
 <script setup lang="ts">
 import type { FolderAttributeDefinition, Item } from '@16bit/core'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
+import type { RowWindows } from '../../ui/data-table.ts'
 import { BaseButton, DataTable, StateBlock, type TableColumn } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
-import { canSort, nextSort, type ItemList, type SortKey } from './useItems.ts'
+import { WINDOW_SIZE } from './folder-rows.ts'
+import {
+  canSort,
+  followSelected,
+  nextSort,
+  type ItemList,
+  type Reorder,
+  type SortKey,
+} from './useItems.ts'
 import ValueCell from './ValueCell.vue'
 
 const {
   folderName,
   list,
-  rows,
+  rowAt,
+  indexOf,
+  reordered = null,
   columns,
   idPrefix,
   selectedId = null,
@@ -21,7 +32,12 @@ const {
 } = defineProps<{
   folderName: string
   list: Load<ItemList>
-  rows: readonly Item[]
+  /** The item at a row, or undefined while its window is not loaded (D61). */
+  rowAt: (index: number) => Item | undefined
+  /** The row an item is at, or -1 when it is not loaded. */
+  indexOf: (id: string) => number
+  /** The last time the rows in view were read again after a change. */
+  reordered?: Reorder | null
   columns: readonly FolderAttributeDefinition[]
   idPrefix: string
   selectedId?: string | null
@@ -35,11 +51,15 @@ const {
 }>()
 
 const emit = defineEmits<{
-  open: [item: Item]
+  /** Open an item. `keyboard`: the arrow keys moved the selection, and focus stays in the table. */
+  open: [item: Item, via: 'pointer' | 'keyboard']
   retry: []
-  more: []
   create: []
   sort: [sort: SortKey | null]
+  /** The rows in view and the windows that hold them; load the ones missing. */
+  windows: [windows: RowWindows]
+  /** Read the windows that failed again. */
+  retryWindows: []
 }>()
 
 const ariaSort = (attributeId: string): 'ascending' | 'descending' | 'none' => {
@@ -47,22 +67,55 @@ const ariaSort = (attributeId: string): 'ascending' | 'descending' | 'none' => {
   return sort.direction === 'asc' ? 'ascending' : 'descending'
 }
 
+// Virtual rows lay columns out from the header (fixed layout): the ID and numbers are narrow,
+// the rest share what is left.
 const tableColumns = computed<TableColumn[]>(() => [
-  { key: '#id', label: 'ID' },
+  { key: '#id', label: 'ID', width: '104px' },
   ...columns.map(({ attribute }) => ({
     key: attribute.id,
     label: attribute.name,
     align: attribute.type === 'number' ? ('end' as const) : ('start' as const),
+    ...(attribute.type === 'number' ? { width: '112px' } : {}),
     ...(canSort(attribute) ? { sort: ariaSort(attribute.id) } : {}),
   })),
 ])
+/** Below this width the table scrolls sideways inside its box, so cells are not squeezed. */
+const minWidth = computed(() => 104 + 160 * columns.length)
 
 // A row still being created has no server copy yet, so it cannot be opened.
-function select(row: Item) {
-  if (!isCreating(row.id)) emit('open', row)
+function select(row: Item, via: 'pointer' | 'keyboard') {
+  if (!isCreating(row.id)) emit('open', row, via)
 }
 
 const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.attribute])))
+
+// After the rows in view were read again (D61), the selected row may have moved. If it was in
+// view, it is scrolled to where it is now, so the reader does not lose it.
+const table = ref<{
+  scrollToIndex: (index: number) => void
+  isInView: (index: number) => boolean
+} | null>(null)
+watch(
+  () => reordered,
+  (reorder) => {
+    const t = table.value
+    const index = t ? followSelected(reorder, selectedId, indexOf, t.isInView) : null
+    if (t && index !== null) t.scrollToIndex(index)
+  },
+)
+
+/** Rows `from` to `to` (1-based) of the windows that failed, for the message. */
+const failedRanges = computed(() => {
+  if (list.state !== 'ready') return ''
+  const total = list.data.total
+  return [...list.data.failed]
+    .sort((a, b) => a - b)
+    .map((offset) => {
+      const n = (x: number) => new Intl.NumberFormat('en').format(x)
+      return `${n(offset + 1)} to ${n(Math.min(offset + WINDOW_SIZE, total))}`
+    })
+    .join(', ')
+})
 </script>
 
 <template>
@@ -89,24 +142,32 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
     </template>
   </StateBlock>
   <StateBlock
-    v-else-if="rows.length === 0"
+    v-else-if="list.data.total === 0"
     state="empty"
-    title="No items in this folder yet"
-    :message="readOnly ? '' : 'Items you add here show up in this table.'"
+    :title="list.data.where ? 'No items match this filter' : 'No items in this folder yet'"
+    :message="readOnly || list.data.where ? '' : 'Items you add here show up in this table.'"
   >
-    <template v-if="!readOnly" #action>
+    <template v-if="!readOnly && !list.data.where" #action>
       <BaseButton size="sm" @click="emit('create')">New item</BaseButton>
     </template>
   </StateBlock>
   <div v-else class="flex min-w-0 flex-col gap-3">
+    <!-- A large folder is read in windows of 200 rows; only the rows in view are rendered. -->
     <DataTable
+      ref="table"
+      mode="virtual"
       :caption="`Items in ${folderName}`"
       :columns="tableColumns"
-      :rows="rows"
+      :rows="[]"
+      :row-at="rowAt"
+      :row-count="list.data.total"
+      height="max(320px, calc(100vh - 260px))"
+      :min-width="minWidth"
       :selected-id="selectedId"
       :busy="list.data.sorting"
       @select="select"
       @sort="emit('sort', nextSort(sort, $event))"
+      @windows="emit('windows', $event)"
     >
       <template #cell="{ row, column }">
         <template v-if="column.key === '#id'">
@@ -127,23 +188,12 @@ const attributes = computed(() => new Map(columns.map((c) => [c.attribute.id, c.
       <span v-if="list.data.sorting" role="status" class="text-secondary text-ink3" data-sorting
         >Sorting…</span
       >
-      <template v-else-if="list.data.moreRefused">
-        <span role="status" class="text-secondary text-ink3" data-more-refused
-          >More items cannot be loaded in this order.</span
+      <template v-if="list.data.failed.length > 0">
+        <span role="alert" class="text-secondary text-danger" data-window-error
+          >Rows {{ failedRanges }} could not be loaded. {{ list.data.failure?.message }}</span
         >
-        <BaseButton size="sm" @click="emit('sort', null)">Show newest update first</BaseButton>
+        <BaseButton size="sm" @click="emit('retryWindows')">Try again</BaseButton>
       </template>
-      <BaseButton
-        v-else-if="list.data.nextCursor"
-        size="sm"
-        :disabled="list.data.more"
-        @click="emit('more')"
-      >
-        {{ list.data.more ? 'Loading…' : 'Load more' }}
-      </BaseButton>
-      <span v-if="list.data.moreError" role="alert" class="text-secondary text-danger">
-        More items could not be loaded. {{ list.data.moreError.message }}
-      </span>
     </div>
   </div>
 </template>

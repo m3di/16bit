@@ -1,17 +1,18 @@
 import {
   attributeTypes,
   conflictErrorSchema,
-  DEFAULT_PAGE_LIMIT,
   itemQueryResultSchema,
   itemReadSchema,
   itemWriteResultSchema,
   type Attribute,
+  type Filter,
   type Item,
   type ItemQueryResult,
+  type ItemWriteResult,
   type ItemValues,
   type ValueError,
 } from '@16bit/core'
-import { computed, ref } from 'vue'
+import { getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
 import {
   ApiRequestError,
   asRequestError,
@@ -21,6 +22,9 @@ import {
   type Fetch,
 } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
+import { workspaceStore, type AppliedChange, type WorkspaceStore } from '../../sync/store.ts'
+import type { RowWindows } from '../../ui/data-table.ts'
+import { FolderRows, WINDOW_SIZE } from './folder-rows.ts'
 import { listValue, type LinkedState } from './relations.ts'
 
 /** Direct reads of linked items running at once, until #73 lets one request cover them. */
@@ -33,20 +37,39 @@ export interface SortKey {
 }
 
 export interface ItemList {
-  ids: string[]
-  nextCursor: string | null
-  /** A "load more" request is running. */
-  more: boolean
-  moreError: ApiRequestError | null
-  /**
-   * "Load more" was refused because the server no longer sorts by `sort`. The cursor is not
-   * retried; the rest can only be read after reloading in the default order.
-   */
-  moreRefused: boolean
-  /** The order `ids` are in, which `nextCursor` belongs to. `null` is newest update first. */
+  /** How many items the folder has (or pass the filter), as the last window read counted. */
+  total: number
+  /** The attribute order the rows are in, or `null` for item number, newest first (D61). */
   sort: SortKey | null
-  /** A request for another order is running; the rows shown are still in `sort` order. */
+  /** The filter the rows pass, or `null` for the whole folder. */
+  where: Filter | null
+  /** A request for another order or filter is running; the rows shown are still the old ones. */
   sorting: boolean
+  /** Offsets of windows whose read failed. Their rows stay placeholders until a retry. */
+  failed: number[]
+  /** Why the last window read failed. */
+  failure: ApiRequestError | null
+}
+
+/** The rows in view were read again after a change (D61): where their items were before. */
+export interface Reorder {
+  before: ReadonlyMap<string, number>
+}
+
+/**
+ * Where to scroll after the rows in view were read again (D61): the selected row's new index if
+ * it was in view and moved, so the reader keeps it in view, or null to leave the scroll alone.
+ */
+export function followSelected(
+  reorder: Reorder | null,
+  selectedId: string | null,
+  indexOf: (id: string) => number,
+  isInView: (index: number) => boolean,
+): number | null {
+  const was = selectedId ? reorder?.before.get(selectedId) : undefined
+  if (!selectedId || was === undefined || !isInView(was)) return null
+  const index = indexOf(selectedId)
+  return index >= 0 && index !== was ? index : null
 }
 
 /**
@@ -74,12 +97,6 @@ export function refusedSort(error: ApiRequestError): boolean {
   return (raw as { path?: unknown }[]).some(
     (e) => typeof e.path === 'string' && (e.path === 'sort' || e.path.startsWith('sort.')),
   )
-}
-
-/** An edit applied locally and not yet confirmed by the server. */
-interface PendingEdit {
-  key: number
-  values: ItemValues
 }
 
 export type CreateResult = { ok: true; item: Item } | { ok: false; error: ApiRequestError }
@@ -117,7 +134,7 @@ export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> =
 
 /**
  * A response without the workspace `seq` it carries (D58, issue 168), so the store holds
- * items only. The store subscribing with it comes with the feed (M3-08).
+ * items only. The `seq` itself goes to `noteRead`, which subscribes the hub with it.
  */
 export function withoutSeq<T extends Item & { seq?: number | undefined }>(
   response: T,
@@ -136,29 +153,75 @@ export function inHub(result: Load<Item>, hubId: string): Load<Item> {
   }
 }
 
+export interface ItemsOptions {
+  /**
+   * `false` for a page without a folder list (the item page): linked items are then read
+   * without waiting for a list query that never comes.
+   */
+  list?: boolean
+  /** The workspace's store; the tab's own by default (D60). */
+  store?: WorkspaceStore
+  /** The hub the list belongs to, so a list read keeps it live even when it is empty. */
+  hubId?: () => string | null
+  /**
+   * How long a change that may reorder a sorted or filtered list waits before the rows in view
+   * are read again, so a burst of changes costs one read (D61). In ms.
+   */
+  refetchDelay?: number
+}
+
+/** The default wait before the rows in view are read again after a reordering change. */
+export const REFETCH_DELAY = 300
+
+/** Attributes a filter tests, so a change to one of them can be seen to matter. */
+export function filterAttributes(where: Filter | null): string[] {
+  if (!where) return []
+  if ('and' in where) return where.and.flatMap(filterAttributes)
+  if ('or' in where) return where.or.flatMap(filterAttributes)
+  return [where.attribute]
+}
+
 /**
- * Items of one hub: the selected folder's list, single items opened by ID, and writes.
- * The server's copy of each item is kept apart from local edits, so a rejected edit rolls
- * back by dropping it, and a 409 replaces the server copy with the item as it is now.
- *
- * `options.list: false` is for a page without a folder list (the item page): linked items are
- * then read without waiting for a list query that never comes.
+ * Items of one hub as a view sees them: the selected folder's rows, single items opened by ID,
+ * and writes. Items live in the workspace store (D60); this keeps which item is at which row
+ * and what the view has read. The rows are read in windows of 200 by offset, with the folder's
+ * `total`, by item number newest first unless an attribute sort is asked for (D61). Writes are optimistic: they sit in the store's pending layer with a
+ * `clientMutationId` until the HTTP response confirms them, and are dropped on rejection (D59).
+ * A 409 replaces the server copy with the item as it is now. Every read and write response
+ * that carries a `seq` keeps its hub live from that `seq` (D58).
  */
 export function useItems(
   workspaceId: string,
   idPrefix: () => string,
   fetchFn: Fetch = (...args) => fetch(...args),
-  options: { list?: boolean } = {},
+  options: ItemsOptions = {},
 ) {
   const hasList = options.list ?? true
+  const store = options.store ?? workspaceStore(workspaceId)
   const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}`
   const itemPath = (id: string) => `${base}/items/${encodeURIComponent(id)}`
 
-  /** Server copies by ID. */
-  const server = ref<Record<string, Item>>({})
-  const pending = ref<Record<string, PendingEdit[]>>({})
-  /** Items created locally and not yet confirmed. */
-  const creating = ref<Record<string, true>>({})
+  /**
+   * Items this view has read since its hub was last reloaded. Only these are trusted from the
+   * store without a request: another page may have left a copy that went stale while its hub
+   * was not live.
+   */
+  const seen = new Set<string>()
+  /** Hubs this view holds live, with their release. */
+  const held = new Map<string, () => void>()
+  /** Keeps a hub live from a read or write response at `seq`. */
+  function noteRead(hubId: string | undefined | null, seq: number | undefined) {
+    if (!hubId) return
+    if (!held.has(hubId)) held.set(hubId, store.hold(hubId))
+    store.noteRead(hubId, seq)
+  }
+  /** Takes in items read from the server and returns the copies the store holds. */
+  function absorb(read: Item) {
+    store.apply(read)
+    seen.add(read.id)
+    return store.get(read.id)
+  }
+
   const list = ref<Load<ItemList>>({ state: 'loading' })
   const folderId = ref<string | null>(null)
   /** The last write that failed, shown until dismissed or replaced. */
@@ -184,35 +247,61 @@ export function useItems(
   let expand: string[] = []
   /** The order asked for. While a new order loads, the rows are still in `list.data.sort`. */
   const sort = ref<SortKey | null>(null)
+  /** The filter asked for. While it loads, the rows still pass `list.data.where`. */
+  const where = ref<Filter | null>(null)
 
   let generation = 0
-  let editKey = 0
   const queues = new Map<string, Promise<unknown>>()
   const opening = new Map<string, Promise<Load<Item>>>()
+  /** Items opened by ID (the panel, the item page), read again on a resync. */
+  const opened = new Set<string>()
 
   const label = (item: Item | undefined) =>
-    item && !creating.value[item.id] ? `${idPrefix()}-${String(item.seqId)}` : 'the new item'
+    item && !store.isCreating(item.id) ? `${idPrefix()}-${String(item.seqId)}` : 'the new item'
 
-  /** An item as shown: the server copy with local edits applied in order. */
-  function view(id: string): Item | undefined {
-    const item = server.value[id]
-    const edits = pending.value[id]
-    if (!item || !edits?.length) return item
-    const values = edits.reduce<ItemValues>((acc, e) => ({ ...acc, ...e.values }), item.values)
-    return { ...item, values }
+  /** An item as shown: the server copy with pending writes applied in order. */
+  const view = (id: string): Item | undefined => store.view(id)
+
+  /**
+   * Which item is at which row. Not reactive itself, since it can hold 50,000 positions;
+   * `rowsChanged` tells the table to read it again.
+   */
+  let positions = new FolderRows()
+  const rowsVersion = ref(0)
+  /** Windows being read for the current rows, by offset. */
+  const loading = new Set<number>()
+  /** The rows the table shows and the windows that hold them, from its last `windows` event. */
+  let inView: RowWindows | null = null
+  /** The last reorder of the rows in view, so the screen can keep the selected row in view. */
+  const reordered = shallowRef<Reorder | null>(null)
+  /**
+   * For a sorted or filtered list, what each listed item had in the attributes that order or
+   * filter it, when it was read. A change to them may move the row (D61).
+   */
+  const orderKeys = new Map<string, string>()
+  /** Items this view deleted, so the echo of a delete does not read the rows again. */
+  const removedHere = new Set<string>()
+
+  function rowsChanged() {
+    rowsVersion.value++
+    if (list.value.state === 'ready') list.value.data.total = positions.total
   }
 
-  const rows = computed(() =>
-    list.value.state === 'ready'
-      ? list.value.data.ids.flatMap((id) => {
-          const item = view(id)
-          return item ? [item] : []
-        })
-      : [],
-  )
+  /** The item at a row, or undefined while its window is not loaded. */
+  function rowAt(index: number): Item | undefined {
+    if (rowsVersion.value < 0) return undefined // Read only to track changes to the rows.
+    const id = positions.ids[index]
+    return id === undefined ? undefined : view(id)
+  }
 
-  const isCreating = (id: string) => Boolean(creating.value[id])
-  const isSaving = (id: string) => Boolean(pending.value[id]?.length || creating.value[id])
+  /** The row an item is at, or -1 when it is not loaded. */
+  function indexOf(id: string): number {
+    if (rowsVersion.value < 0) return -1 // Read only to track changes to the rows.
+    return positions.indexOf(id)
+  }
+
+  const isCreating = (id: string) => store.isCreating(id)
+  const isSaving = (id: string) => store.isSaving(id)
 
   /**
    * Keeps what an expanded page says about its linked items. An ID in an expanded value with
@@ -230,24 +319,63 @@ export function useItems(
     }
   }
 
-  async function fetchPage(folder: string, cursor: string | null, order: SortKey | null) {
+  /** Whether rows are in an attribute order or filtered, so a change may move them (D61). */
+  const reorders = (data: Pick<ItemList, 'sort' | 'where'>) =>
+    data.sort !== null || data.where !== null
+
+  /** What an item has in the attributes that order or filter the list. */
+  function orderKey(item: Item, data: Pick<ItemList, 'sort' | 'where'>): string {
+    const attributes = [
+      ...(data.sort ? [data.sort.attribute] : []),
+      ...filterAttributes(data.where),
+    ]
+    return JSON.stringify(attributes.map((a) => item.values[a] ?? null))
+  }
+
+  /** Reads one window of the open folder (D61), with the folder's total. */
+  async function fetchWindow(
+    folder: string,
+    offset: number,
+    order: SortKey | null,
+    filter: Filter | null,
+  ) {
     const attributes = expand
     const page = await sendJson(
       'POST',
       `${base}/query`,
       {
         from: folder,
-        limit: DEFAULT_PAGE_LIMIT,
-        cursor,
+        limit: WINDOW_SIZE,
+        offset,
+        count: true,
         expand: attributes,
         sort: order ? [order] : [],
+        // Without an attribute sort, item number newest first: an edit never moves a row.
+        ...(order ? {} : { order: 'number' }),
+        ...(filter ? { where: filter } : {}),
       },
       itemQueryResultSchema,
       fetchFn,
     )
-    for (const item of page.items) server.value[item.id] = item
+    for (const item of page.items) absorb(item)
+    noteRead(options.hubId?.() ?? page.items[0]?.hubId, page.seq)
     absorbLinked(page, attributes)
     return page
+  }
+
+  /** Puts a window read into `into`, keeping each row's order key when the list needs them. */
+  function putWindow(
+    into: FolderRows,
+    offset: number,
+    page: ItemQueryResult,
+    data: Pick<ItemList, 'sort' | 'where'>,
+  ) {
+    into.put(
+      offset,
+      page.items.map((i) => i.id),
+      page.total ?? into.total,
+    )
+    if (reorders(data)) for (const item of page.items) orderKeys.set(item.id, orderKey(item, data))
   }
 
   /** What is known about a linked item. */
@@ -309,27 +437,39 @@ export function useItems(
     pumpLinked()
   }
 
-  const firstPage = (page: ItemQueryResult, order: SortKey | null): Load<ItemList> => ({
+  type Order = Pick<ItemList, 'sort' | 'where'>
+
+  /** A fresh list from windows read in one order, replacing the rows. */
+  function freshRows(order: Order, reads: { offset: number; page: ItemQueryResult }[]) {
+    const next = new FolderRows()
+    orderKeys.clear()
+    for (const { offset, page } of reads) putWindow(next, offset, page, order)
+    positions = next
+    loading.clear()
+  }
+
+  const readyList = (order: Order, total: number): Load<ItemList> => ({
     state: 'ready',
-    data: {
-      ids: page.items.map((i) => i.id),
-      nextCursor: page.nextCursor,
-      more: false,
-      moreError: null,
-      moreRefused: false,
-      sort: order,
-      sorting: false,
-    },
+    data: { total, ...order, sorting: false, failed: [], failure: null },
   })
 
+  /** Reads windows at `offsets` together; the rows are only replaced once all have arrived. */
+  async function readWindows(folder: string, offsets: readonly number[], order: Order) {
+    const pages = await Promise.all(
+      offsets.map((offset) => fetchWindow(folder, offset, order.sort, order.where)),
+    )
+    return offsets.map((offset, i) => ({ offset, page: pages[i] as ItemQueryResult }))
+  }
+
+  /** The windows the table shows, or the first one before it has said. */
+  const offsetsInView = () => (inView && inView.offsets.length > 0 ? inView.offsets : [0])
+
   const staleSortNotice =
-    'The table can no longer be sorted by that column, so the items are shown newest update first.'
-  const moreRefusedNotice =
-    'The table can no longer be sorted by that column, so no more items can be loaded in this order. Show them newest update first to see the rest.'
+    'The table can no longer be sorted by that column, so the items are shown newest first.'
 
   /**
-   * Reads the open folder's first page in the order asked for, from the loading state. If the
-   * server refuses the sort, the sort is dropped and the default order is read instead, so a
+   * Reads the open folder's first window in the order asked for, from the loading state. If
+   * the server refuses the sort, the sort is dropped and the default order is read instead, so a
    * retry never sends the refused sort again. `dropped` says a refused sort was just dropped:
    * the notice says so once the default order is shown, and not before.
    */
@@ -337,17 +477,21 @@ export function useItems(
     const gen = ++generation
     const folder = folderId.value
     if (!folder) return
-    const order = sort.value
+    const order: Order = { sort: sort.value, where: where.value }
     list.value = { state: 'loading' }
+    // The table is mounted afresh at the top once the rows arrive.
+    inView = null
     try {
-      const page = await fetchPage(folder, null, order)
+      const reads = await readWindows(folder, [0], order)
       if (gen !== generation) return
-      list.value = firstPage(page, order)
+      freshRows(order, reads)
+      list.value = readyList(order, positions.total)
+      rowsChanged()
       if (dropped) say(staleSortNotice, true)
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
-      if (order && refusedSort(error)) {
+      if (order.sort && refusedSort(error)) {
         sort.value = null
         await reload(true)
         return
@@ -357,10 +501,10 @@ export function useItems(
   }
 
   /**
-   * Shows a folder's first page. `expandIds` are relation attributes whose linked items come
-   * back with each page. Another folder starts in the default order, newest update first; the
-   * same folder keeps its order while the attribute is among `sortableIds`, the folder's
-   * columns that pass `canSort`.
+   * Shows a folder's rows. `expandIds` are relation attributes whose linked items come back
+   * with each window. Another folder starts in the default order, item number newest first, and
+   * unfiltered; the same folder keeps its order while the attribute is among `sortableIds`, the
+   * folder's columns that pass `canSort`.
    */
   async function openFolder(
     id: string,
@@ -368,8 +512,10 @@ export function useItems(
     sortableIds?: readonly string[],
   ) {
     let dropped = false
-    if (id !== folderId.value) sort.value = null
-    else if (sort.value && sortableIds && !sortableIds.includes(sort.value.attribute)) {
+    if (id !== folderId.value) {
+      sort.value = null
+      where.value = null
+    } else if (sort.value && sortableIds && !sortableIds.includes(sort.value.attribute)) {
       sort.value = null
       dropped = true
     }
@@ -379,12 +525,14 @@ export function useItems(
   }
 
   /**
-   * Shows the folder in another order. The header shows the new order at once and the rows
-   * stay until the sorted page arrives. If the server refuses, the order the rows are in comes
+   * Shows the folder in another order or with another filter. The header shows the new order
+   * at once and the rows stay until the windows in view arrive in it; the windows elsewhere are
+   * dropped and read again when scrolled to (D61). If the server refuses, the rows' order comes
    * back and the notice says why.
    */
-  async function setSort(next: SortKey | null) {
-    sort.value = next
+  async function requery(next: Order) {
+    sort.value = next.sort
+    where.value = next.where
     const current = list.value
     const folder = folderId.value
     if (current.state !== 'ready' || !folder) {
@@ -393,14 +541,14 @@ export function useItems(
     }
     const gen = ++generation
     const data = current.data
-    // A page still loading for the old order is dropped with the old generation.
-    data.more = false
-    data.moreError = null
     data.sorting = true
     try {
-      const page = await fetchPage(folder, null, next)
+      const reads = await readWindows(folder, offsetsInView(), next)
       if (gen !== generation) return
-      list.value = firstPage(page, next)
+      freshRows(next, reads)
+      list.value = readyList(next, positions.total)
+      rowsChanged()
+      if (inView) showWindows(inView)
       // The rows are in the order asked for, so a notice about the previous order no longer applies.
       if (sortNotice) say(null)
     } catch (thrown) {
@@ -408,6 +556,7 @@ export function useItems(
       const error = asRequestError(thrown)
       data.sorting = false
       sort.value = data.sort
+      where.value = data.where
       const reason = refusedSort(error)
         ? 'This column can no longer be sorted; reload the page to see the current columns.'
         : `The items could not be shown in that order. ${sentence(error.message)}`
@@ -415,58 +564,143 @@ export function useItems(
     }
   }
 
-  /**
-   * Reads the next page in the order the rows are in. If the server no longer sorts by it,
-   * the rows stay as they are and the cursor is not retried; the notice offers the default
-   * order instead of replacing the rows unasked.
-   */
-  async function loadMore() {
-    const gen = generation
+  const setSort = (next: SortKey | null) => requery({ sort: next, where: where.value })
+  /** Filters the rows. The folder view has no filter controls yet; the rows follow D61 already. */
+  const setFilter = (next: Filter | null) => requery({ sort: sort.value, where: next })
+
+  /** Reads one window the table needs, in the order the rows are in. */
+  async function loadWindow(offset: number) {
     const current = list.value
     const folder = folderId.value
-    if (
-      current.state !== 'ready' ||
-      !current.data.nextCursor ||
-      current.data.more ||
-      current.data.moreRefused ||
-      current.data.sorting ||
-      !folder
-    )
-      return
+    if (current.state !== 'ready' || !folder) return
     const data = current.data
-    data.more = true
-    data.moreError = null
+    const gen = generation
+    loading.add(offset)
+    data.failed = data.failed.filter((o) => o !== offset)
     try {
-      // The cursor only fits the order its page came in.
-      const page = await fetchPage(folder, data.nextCursor, data.sort)
+      const page = await fetchWindow(folder, offset, data.sort, data.where)
       if (gen !== generation) return
-      const known = new Set(data.ids)
-      data.ids.push(...page.items.map((i) => i.id).filter((id) => !known.has(id)))
-      data.nextCursor = page.nextCursor
+      putWindow(positions, offset, page, data)
+      rowsChanged()
     } catch (thrown) {
       if (gen !== generation) return
       const error = asRequestError(thrown)
       if (data.sort && refusedSort(error)) {
-        data.moreRefused = true
-        say(moreRefusedNotice, true)
-      } else data.moreError = error
+        // The column can no longer be sorted: show the default order, and say why.
+        sort.value = null
+        await reload(true)
+        return
+      }
+      data.failed = [...data.failed, offset]
+      data.failure = error
     } finally {
-      if (gen === generation) data.more = false
+      if (gen === generation) loading.delete(offset)
     }
   }
 
-  /** Makes sure an item is in the store, fetching it if it is not in the loaded list. */
+  /**
+   * The table's `windows` event: the rows in view and the windows that hold them. Reads the
+   * windows not loaded yet. A window whose read failed waits for `retryWindows`.
+   */
+  function showWindows(windows: RowWindows) {
+    inView = windows
+    const current = list.value
+    if (current.state !== 'ready' || current.data.sorting) return
+    for (const offset of windows.offsets) {
+      if (loading.has(offset) || current.data.failed.includes(offset)) continue
+      if (!positions.hasWindow(offset)) void loadWindow(offset)
+    }
+  }
+
+  /** Reads the windows that failed again. */
+  function retryWindows() {
+    const current = list.value
+    if (current.state !== 'ready') return
+    const offsets = current.data.failed
+    current.data.failed = []
+    current.data.failure = null
+    for (const offset of offsets) void loadWindow(offset)
+  }
+
+  let refetchTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Reads the windows in view again after a change that may have moved rows (D61), debounced.
+   * The rows stay until the windows arrive; the ones out of view are dropped and read again
+   * when scrolled to.
+   */
+  function scheduleRefetch() {
+    if (refetchTimer !== null) clearTimeout(refetchTimer)
+    refetchTimer = setTimeout(() => {
+      refetchTimer = null
+      void refetchInView()
+    }, options.refetchDelay ?? REFETCH_DELAY)
+  }
+
+  async function refetchInView() {
+    const current = list.value
+    const folder = folderId.value
+    if (current.state !== 'ready' || current.data.sorting || !folder) return
+    const data = current.data
+    const order: Order = { sort: data.sort, where: data.where }
+    const gen = ++generation
+    loading.clear()
+    const offsets = offsetsInView()
+    for (const offset of offsets) loading.add(offset)
+    const before = new Map<string, number>()
+    if (inView) {
+      for (let i = inView.start; i < inView.end; i++) {
+        const id = positions.ids[i]
+        if (id) before.set(id, i)
+      }
+    }
+    try {
+      const reads = await readWindows(folder, offsets, order)
+      if (gen !== generation) return
+      freshRows(order, reads)
+      data.failed = []
+      data.failure = null
+      rowsChanged()
+      reordered.value = { before }
+      // A window scrolled to while these were read was dropped with the old rows.
+      if (inView) showWindows(inView)
+    } catch {
+      // The rows shown stay; the next change or a scroll reads them again.
+      if (gen === generation) loading.clear()
+    }
+  }
+
+  const gone = (): Load<Item> => ({
+    state: 'error',
+    error: new ApiRequestError('not_found', 'This item has been deleted.', 404),
+  })
+
+  /** Reads an item, keeps it in the store, and keeps its hub live from the read's `seq`. */
+  async function fetchItem(path: string) {
+    const {
+      seq,
+      linked: links,
+      linkedTruncated,
+      ...read
+    } = await getJson(path, itemReadSchema, fetchFn)
+    const item = absorb(read)
+    noteRead(read.hubId, seq)
+    return { links, linkedTruncated, item }
+  }
+
+  /**
+   * Makes sure an item is in the store. A copy this view has read is used as it is; any other
+   * is read again, since it may have gone stale while its hub was not live.
+   */
   function openItem(id: string): Promise<Load<Item>> {
-    const known = server.value[id]
-    if (known) return Promise.resolve({ state: 'ready', data: known })
+    if (store.isDeleted(id)) return Promise.resolve(gone())
+    opened.add(id)
+    const known = store.get(id)
+    if (known && (seen.has(id) || store.isLive(known.hubId)))
+      return Promise.resolve({ state: 'ready', data: known })
     let running = opening.get(id)
     if (!running) {
-      running = getJson(itemPath(id), itemReadSchema, fetchFn)
-        .then((read): Load<Item> => {
-          const item = withoutSeq(read)
-          server.value[item.id] = item
-          return { state: 'ready', data: item }
-        })
+      running = fetchItem(itemPath(id))
+        .then(({ item }): Load<Item> => (item ? { state: 'ready', data: item } : gone()))
         .catch((error: unknown): Load<Item> => ({ state: 'error', error: asRequestError(error) }))
         .finally(() => opening.delete(id))
       opening.set(id, running)
@@ -476,21 +710,16 @@ export function useItems(
 
   /**
    * Reads an item again with `expand` (relation attributes, at most `MAX_EXPAND_ATTRIBUTES`),
-   * so its linked items arrive with it, as with a folder query. The server copy is replaced
-   * unless a newer version is already known.
+   * so its linked items arrive with it, as with a folder query. The store keeps whichever
+   * version is newer.
    */
   async function readItem(id: string, expandIds: readonly string[]): Promise<Load<Item>> {
     const query =
       expandIds.length > 0 ? `?expand=${expandIds.map(encodeURIComponent).join(',')}` : ''
     try {
-      const {
-        linked: links,
-        linkedTruncated,
-        ...read
-      } = await getJson(`${itemPath(id)}${query}`, itemReadSchema, fetchFn)
-      const item = withoutSeq(read)
-      const known = server.value[id]
-      if (!known || known.version <= item.version) server.value[id] = item
+      opened.add(id)
+      const { links, linkedTruncated, item } = await fetchItem(`${itemPath(id)}${query}`)
+      if (!item) return gone()
       absorbLinked({ items: [item], nextCursor: null, linked: links, linkedTruncated }, expandIds)
       return { state: 'ready', data: item }
     } catch (thrown) {
@@ -509,6 +738,14 @@ export function useItems(
     return run
   }
 
+  /** Takes in a write's response: the item as written, and the `seq` it was written at. */
+  function confirmed(response: ItemWriteResult) {
+    const { seq } = response
+    const item = absorb(withoutSeq(response))
+    noteRead(response.hubId, seq)
+    return item
+  }
+
   /**
    * Applies `values` at once and saves them. Resolves `true` when the server accepted them.
    * On a 409 the item shows the server's current values, and every edit still queued for it
@@ -516,33 +753,35 @@ export function useItems(
    */
   function save(id: string, values: ItemValues): Promise<boolean> {
     // The server does not have the item yet, so there is nothing to PATCH.
-    if (creating.value[id]) {
+    if (store.isCreating(id)) {
       say('The new item is still being saved. Edit it once it has been created.')
       return Promise.resolve(false)
     }
-    const edit: PendingEdit = { key: ++editKey, values }
-    pending.value[id] = [...(pending.value[id] ?? []), edit]
+    const mutationId = newItemId()
+    store.addPending(id, { kind: 'patch', mutationId, values })
     const drop = () => {
-      pending.value[id] = (pending.value[id] ?? []).filter((e) => e.key !== edit.key)
+      store.dropPending(id, mutationId)
     }
 
     return enqueue(id, async () => {
-      if (!pending.value[id]?.some((e) => e.key === edit.key)) return false
-      const before = server.value[id]
+      if (!store.pending(id).some((w) => w.mutationId === mutationId)) return false
+      const before = store.get(id)
       if (!before) {
         drop()
         return false
       }
       try {
-        const updated = await sendJson(
+        const response = await sendJson(
           'PATCH',
           itemPath(id),
-          { version: before.version, values },
+          { version: before.version, values, clientMutationId: mutationId },
           itemWriteResultSchema,
           fetchFn,
-        ).then(withoutSeq)
-        server.value[id] = updated
+        )
+        const saved = confirmed(response)
         drop()
+        // Without the feed nothing else says that the row may have moved.
+        if (saved) checkOrder(saved)
         return true
       } catch (thrown) {
         const error = asRequestError(thrown)
@@ -554,8 +793,8 @@ export function useItems(
             `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`,
           )
         } else if (error.code === 'conflict' && conflict.success) {
-          server.value[id] = conflict.data.current
-          pending.value[id] = []
+          store.apply(conflict.data.current)
+          store.dropPendingKind(id, 'patch')
           say(
             `${label(before)} was changed by someone else before your edit was saved. Your edit was not applied; the latest values are shown.`,
           )
@@ -569,8 +808,10 @@ export function useItems(
   }
 
   /**
-   * Adds the item to the top of the list at once and creates it. The client picks the ID, so
-   * the row keeps its identity when the server confirms it. On failure the row is removed.
+   * Adds the item to the top of the rows at once and creates it: the default order is item
+   * number, newest first, so a new item is first. The client picks the ID, so the row keeps its
+   * identity when the server confirms it. On failure the row is removed. In an attribute order
+   * or with a filter the rows in view are read again once it is created (D61).
    */
   async function create(values: ItemValues): Promise<CreateResult> {
     const folder = folderId.value
@@ -578,10 +819,11 @@ export function useItems(
       return { ok: false, error: new ApiRequestError('invalid_request', 'No folder is open.') }
     }
     const id = newItemId()
+    const mutationId = newItemId()
     const placeholder: Item = {
       workspaceId,
       id,
-      hubId: '',
+      hubId: options.hubId?.() ?? '',
       folderId: folder,
       seqId: 1,
       values,
@@ -589,26 +831,29 @@ export function useItems(
       updatedAt: new Date().toISOString(),
       updatedBy: '',
     }
-    server.value[id] = placeholder
-    creating.value[id] = true
+    store.addPending(id, { kind: 'create', mutationId, item: Object.freeze(placeholder) })
     const gen = generation
-    if (list.value.state === 'ready') list.value.data.ids.unshift(id)
+    if (list.value.state === 'ready') {
+      positions.insertAt(0, id)
+      rowsChanged()
+    }
 
     try {
-      const item = await sendJson(
+      const response = await sendJson(
         'POST',
         `${base}/items`,
-        { id, folderId: folder, values },
+        { id, folderId: folder, values, clientMutationId: mutationId },
         itemWriteResultSchema,
         fetchFn,
-      ).then(withoutSeq)
-      server.value[id] = item
+      )
+      const item = confirmed(response) ?? withoutSeq(response)
+      if (list.value.state === 'ready' && reorders(list.value.data)) scheduleRefetch()
       return { ok: true, item }
     } catch (thrown) {
       const error = asRequestError(thrown)
-      Reflect.deleteProperty(server.value, id)
       if (gen === generation && list.value.state === 'ready') {
-        list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
+        positions.removeAt(positions.indexOf(id))
+        rowsChanged()
       }
       if (error.status === 403) {
         readOnly.value = true
@@ -618,37 +863,59 @@ export function useItems(
       }
       return { ok: false, error }
     } finally {
-      Reflect.deleteProperty(creating.value, id)
+      store.dropPending(id, mutationId)
     }
   }
 
+  /** Takes a row out; later rows move up. Returns where it was, or -1. */
+  function unlist(id: string): number {
+    const at = positions.indexOf(id)
+    if (at >= 0) {
+      positions.removeAt(at)
+      orderKeys.delete(id)
+      rowsChanged()
+    }
+    return at
+  }
+
   /**
-   * Deletes an item at the version shown, after any edit still on its way. Nothing is removed
-   * from view until the server agrees: the caller leaves the item's page on success. On a 409
-   * the item shows its current values and the message says so; a 404 means it is already gone,
-   * which is what was asked.
+   * Deletes an item at the version shown, after any edit still on its way. The row leaves at
+   * once and comes back at its place if the server refuses, with the reason. On a 409 the item
+   * shows its current values and the message says so; a 404 means it is already gone, which is
+   * what was asked.
    */
   function remove(id: string): Promise<RemoveResult> {
-    if (creating.value[id]) {
+    if (store.isCreating(id)) {
       return Promise.resolve({
         ok: false,
         message: 'The new item is still being saved. Delete it once it has been created.',
       })
     }
+    const shown = store.get(id)
+    if (!shown) return Promise.resolve({ ok: false, message: 'This item is not loaded.' })
+    const mutationId = newItemId()
+    store.addPending(id, { kind: 'delete', mutationId })
+    const gen = generation
+    removedHere.add(id)
+    const at = unlist(id)
+    const putBack = () => {
+      removedHere.delete(id)
+      if (at < 0 || gen !== generation || list.value.state !== 'ready') return
+      if (positions.indexOf(id) < 0) positions.insertAt(at, id)
+      rowsChanged()
+    }
     return enqueue(id, async (): Promise<RemoveResult> => {
-      const before = server.value[id]
-      if (!before) return { ok: false, message: 'This item is not loaded.' }
+      const before = store.get(id) ?? shown
       try {
-        await sendJson(
-          'DELETE',
-          `${itemPath(id)}?version=${String(before.version)}`,
-          undefined,
-          noContent,
-          fetchFn,
-        )
+        const query = `?version=${String(before.version)}&clientMutationId=${mutationId}`
+        await sendJson('DELETE', `${itemPath(id)}${query}`, undefined, noContent, fetchFn)
       } catch (thrown) {
         const error = asRequestError(thrown)
         const conflict = conflictErrorSchema.safeParse(error.body)
+        if (!error.isNotFound) {
+          store.dropPending(id, mutationId)
+          putBack()
+        }
         if (error.isNotFound) {
           // Fall through: it is gone either way.
         } else if (error.status === 403) {
@@ -658,8 +925,8 @@ export function useItems(
             message: `${label(before)} was not deleted. You can view the items in this hub but not change them.`,
           }
         } else if (error.code === 'conflict' && conflict.success) {
-          server.value[id] = conflict.data.current
-          pending.value[id] = []
+          store.apply(conflict.data.current)
+          store.dropPendingKind(id, 'patch')
           return {
             ok: false,
             message: `${label(before)} was changed by someone else, so it was not deleted. The latest values are shown; delete it again if you still want to.`,
@@ -671,12 +938,101 @@ export function useItems(
           }
         }
       }
-      if (list.value.state === 'ready') {
-        list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
-      }
+      store.tombstone(id)
+      store.dropPending(id, mutationId)
+      unlist(id)
       return { ok: true }
     })
   }
+
+  /**
+   * A listed item changed: in an attribute order or with a filter, a change to the attributes
+   * that order or filter the rows may move it, so the rows in view are read again (D61). In the
+   * default order an edit never moves a row.
+   */
+  function checkOrder(item: Item) {
+    const current = list.value
+    if (current.state !== 'ready' || !reorders(current.data)) return
+    if (positions.indexOf(item.id) < 0) return
+    const key = orderKey(item, current.data)
+    if (orderKeys.get(item.id) === key) return
+    orderKeys.set(item.id, key)
+    scheduleRefetch()
+  }
+
+  /**
+   * Keeps the rows in step with the feed (D61). A listed item updates in place, and leaves when
+   * it is deleted or moved to another folder; later rows move up. In the default order (item
+   * number, newest first) a new item goes first. A change that may reorder a sorted or filtered
+   * list, or that the rows loaded cannot place, reads the rows in view again, debounced. The
+   * echo of the reader's own create is already listed, so it is not added twice (D59).
+   */
+  function onChange({ change }: AppliedChange) {
+    const current = list.value
+    if (current.state !== 'ready') return
+    const data = current.data
+    const listed = positions.indexOf(change.itemId) >= 0
+    const item = store.get(change.itemId)
+    if (!change.item || !item) {
+      // Gone. One that is not loaded may still have been in this folder, and counted.
+      if (unlist(change.itemId) < 0 && !removedHere.has(change.itemId)) scheduleRefetch()
+      return
+    }
+    if (item.folderId !== folderId.value) {
+      unlist(item.id)
+      return
+    }
+    seen.add(item.id)
+    if (listed) {
+      checkOrder(item)
+      return
+    }
+    if (reorders(data)) {
+      scheduleRefetch()
+      return
+    }
+    // A new item has the highest number, so it is first; one moved in from another folder
+    // has its place among the others, which only a read can say.
+    if (item.version === 1) {
+      positions.insertAt(0, item.id)
+      rowsChanged()
+    } else if (withinView(item.seqId)) scheduleRefetch()
+  }
+
+  /** In the default order: whether an item number falls among the rows in view. */
+  function withinView(seqId: number): boolean {
+    if (!inView) return true
+    const first = positions.ids[inView.start]
+    const last = positions.ids[inView.end - 1]
+    const top = first === undefined ? undefined : store.get(first)?.seqId
+    const bottom = last === undefined ? undefined : store.get(last)?.seqId
+    if (top === undefined || bottom === undefined) return true
+    return seqId <= top && seqId >= bottom
+  }
+
+  /**
+   * Too much was missed while away (D58): read the rows in view and the items opened by ID
+   * again, so their reads subscribe the hub afresh from their `seq`. The rows stay until the
+   * windows arrive.
+   */
+  async function onResync(hubId: string) {
+    if (!held.has(hubId)) return
+    seen.clear()
+    const ids = [...opened]
+    for (const id of ids) void fetchItem(itemPath(id)).catch(() => undefined)
+    if (!hasList) return
+    await refetchInView()
+  }
+
+  const stops = [store.on('change', onChange), store.on('resync', (hubId) => void onResync(hubId))]
+  /** Lets go of the store: listeners and live hubs. Runs on its own when the scope ends. */
+  function dispose() {
+    if (refetchTimer !== null) clearTimeout(refetchTimer)
+    for (const stop of stops) stop()
+    for (const release of held.values()) release()
+    held.clear()
+  }
+  if (getCurrentScope()) onScopeDispose(dispose)
 
   const dismissNotice = () => {
     say(null)
@@ -684,17 +1040,22 @@ export function useItems(
 
   return {
     list,
-    rows,
+    rowAt,
+    indexOf,
+    reordered,
     folderId,
     sort,
     setSort,
+    where,
+    setFilter,
+    showWindows,
+    retryWindows,
     notice,
     view,
     isSaving,
     isCreating,
     label,
     openFolder,
-    loadMore,
     openItem,
     readItem,
     save,
@@ -706,5 +1067,7 @@ export function useItems(
     rememberLinked,
     resolveLinked,
     readOnly,
+    store,
+    dispose,
   }
 }

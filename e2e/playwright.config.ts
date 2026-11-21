@@ -15,6 +15,8 @@ const externalBaseUrl = process.env['E2E_BASE_URL']
 // Port of the web dev server started for the suite, when 5173 is taken by another checkout.
 const webPort = process.env['E2E_WEB_PORT'] ?? '5173'
 const webUrl = `http://localhost:${webPort}`
+/** Specs that measure time on the page's main thread (the `budgets` project below). */
+const BUDGETS = /-budgets\.spec\.ts$/
 
 // Specs live in tests/*.spec.ts. Each one sets up its own items through the API, so specs can run
 // in any order, in parallel, and across shards. The database must be migrated and seeded first
@@ -39,6 +41,18 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'], storageState: OWNER_STATE },
       dependencies: ['setup'],
+      testIgnore: BUDGETS,
+    },
+    // D61's timing budgets (issue 178). They measure the page's main thread, so they run after
+    // every other spec, one at a time, on an otherwise idle machine: next to other workers the
+    // same build shows long tasks it does not have alone. If a spec above fails these are
+    // skipped. To run only them: `pnpm e2e --project budgets --no-deps`.
+    {
+      name: 'budgets',
+      testMatch: BUDGETS,
+      use: { ...devices['Desktop Chrome'], storageState: OWNER_STATE },
+      dependencies: ['chromium'],
+      workers: 1,
     },
   ],
   // Locally, a running `pnpm dev` is reused. In CI both servers are started fresh.
