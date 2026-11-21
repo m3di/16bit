@@ -8,10 +8,12 @@ import {
   type Attribute,
   type Item,
   type ItemQueryResult,
+  type ItemWriteResult,
+  type Change,
   type ItemValues,
   type ValueError,
 } from '@16bit/core'
-import { computed, ref } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, ref } from 'vue'
 import {
   ApiRequestError,
   asRequestError,
@@ -21,6 +23,8 @@ import {
   type Fetch,
 } from '../../api/client.ts'
 import type { Load } from '../home/useDashboard.ts'
+import { backoff } from '../../sync/feed.ts'
+import { workspaceStore, type WorkspaceStore } from '../../sync/store.ts'
 import { listValue, type LinkedState } from './relations.ts'
 
 /** Direct reads of linked items running at once, until #73 lets one request cover them. */
@@ -76,12 +80,6 @@ export function refusedSort(error: ApiRequestError): boolean {
   )
 }
 
-/** An edit applied locally and not yet confirmed by the server. */
-interface PendingEdit {
-  key: number
-  values: ItemValues
-}
-
 export type CreateResult = { ok: true; item: Item } | { ok: false; error: ApiRequestError }
 
 /** Ends a server message with a full stop, so another sentence can follow it. */
@@ -117,7 +115,7 @@ export function newItemId(c: Pick<Crypto, 'getRandomValues'> & Partial<Crypto> =
 
 /**
  * A response without the workspace `seq` it carries (D58, issue 168), so the store holds
- * items only. The store subscribing with it comes with the feed (M3-08).
+ * items only. The `seq` itself goes to `noteRead`, which subscribes the hub with it.
  */
 export function withoutSeq<T extends Item & { seq?: number | undefined }>(
   response: T,
@@ -136,29 +134,58 @@ export function inHub(result: Load<Item>, hubId: string): Load<Item> {
   }
 }
 
+export interface ItemsOptions {
+  /**
+   * `false` for a page without a folder list (the item page): linked items are then read
+   * without waiting for a list query that never comes.
+   */
+  list?: boolean
+  /** The workspace's store; the tab's own by default (D60). */
+  store?: WorkspaceStore
+  /** The hub the list belongs to, so a list read keeps it live even when it is empty. */
+  hubId?: () => string | null
+}
+
 /**
- * Items of one hub: the selected folder's list, single items opened by ID, and writes.
- * The server's copy of each item is kept apart from local edits, so a rejected edit rolls
- * back by dropping it, and a 409 replaces the server copy with the item as it is now.
- *
- * `options.list: false` is for a page without a folder list (the item page): linked items are
- * then read without waiting for a list query that never comes.
+ * Items of one hub as a view sees them: the selected folder's list, single items opened by ID,
+ * and writes. Items live in the workspace store (D60); this keeps the order of the list and
+ * what the view has read. Writes are optimistic: they sit in the store's pending layer with a
+ * `clientMutationId` until the HTTP response confirms them, and are dropped on rejection (D59).
+ * A 409 replaces the server copy with the item as it is now. Every read and write response
+ * that carries a `seq` keeps its hub live from that `seq` (D58).
  */
 export function useItems(
   workspaceId: string,
   idPrefix: () => string,
   fetchFn: Fetch = (...args) => fetch(...args),
-  options: { list?: boolean } = {},
+  options: ItemsOptions = {},
 ) {
   const hasList = options.list ?? true
+  const store = options.store ?? workspaceStore(workspaceId)
   const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}`
   const itemPath = (id: string) => `${base}/items/${encodeURIComponent(id)}`
 
-  /** Server copies by ID. */
-  const server = ref<Record<string, Item>>({})
-  const pending = ref<Record<string, PendingEdit[]>>({})
-  /** Items created locally and not yet confirmed. */
-  const creating = ref<Record<string, true>>({})
+  /**
+   * Items this view has read since its hub was last reloaded. Only these are trusted from the
+   * store without a request: another page may have left a copy that went stale while its hub
+   * was not live.
+   */
+  const seen = new Set<string>()
+  /** Hubs this view holds live, with their release. */
+  const held = new Map<string, () => void>()
+  /** Keeps a hub live from a read or write response at `seq`. */
+  function noteRead(hubId: string | undefined | null, seq: number | undefined) {
+    if (!hubId) return
+    if (!held.has(hubId)) held.set(hubId, store.hold(hubId))
+    store.noteRead(hubId, seq)
+  }
+  /** Takes in items read from the server and returns the copies the store holds. */
+  function absorb(read: Item) {
+    store.apply(read)
+    seen.add(read.id)
+    return store.get(read.id)
+  }
+
   const list = ref<Load<ItemList>>({ state: 'loading' })
   const folderId = ref<string | null>(null)
   /** The last write that failed, shown until dismissed or replaced. */
@@ -186,21 +213,16 @@ export function useItems(
   const sort = ref<SortKey | null>(null)
 
   let generation = 0
-  let editKey = 0
   const queues = new Map<string, Promise<unknown>>()
   const opening = new Map<string, Promise<Load<Item>>>()
+  /** Items opened by ID (the panel, the item page), read again on a resync. */
+  const opened = new Set<string>()
 
   const label = (item: Item | undefined) =>
-    item && !creating.value[item.id] ? `${idPrefix()}-${String(item.seqId)}` : 'the new item'
+    item && !store.isCreating(item.id) ? `${idPrefix()}-${String(item.seqId)}` : 'the new item'
 
-  /** An item as shown: the server copy with local edits applied in order. */
-  function view(id: string): Item | undefined {
-    const item = server.value[id]
-    const edits = pending.value[id]
-    if (!item || !edits?.length) return item
-    const values = edits.reduce<ItemValues>((acc, e) => ({ ...acc, ...e.values }), item.values)
-    return { ...item, values }
-  }
+  /** An item as shown: the server copy with pending writes applied in order. */
+  const view = (id: string): Item | undefined => store.view(id)
 
   const rows = computed(() =>
     list.value.state === 'ready'
@@ -211,8 +233,8 @@ export function useItems(
       : [],
   )
 
-  const isCreating = (id: string) => Boolean(creating.value[id])
-  const isSaving = (id: string) => Boolean(pending.value[id]?.length || creating.value[id])
+  const isCreating = (id: string) => store.isCreating(id)
+  const isSaving = (id: string) => store.isSaving(id)
 
   /**
    * Keeps what an expanded page says about its linked items. An ID in an expanded value with
@@ -245,7 +267,8 @@ export function useItems(
       itemQueryResultSchema,
       fetchFn,
     )
-    for (const item of page.items) server.value[item.id] = item
+    for (const item of page.items) absorb(item)
+    noteRead(options.hubId?.() ?? page.items[0]?.hubId, page.seq)
     absorbLinked(page, attributes)
     return page
   }
@@ -455,18 +478,38 @@ export function useItems(
     }
   }
 
-  /** Makes sure an item is in the store, fetching it if it is not in the loaded list. */
+  const gone = (): Load<Item> => ({
+    state: 'error',
+    error: new ApiRequestError('not_found', 'This item has been deleted.', 404),
+  })
+
+  /** Reads an item, keeps it in the store, and keeps its hub live from the read's `seq`. */
+  async function fetchItem(path: string) {
+    const {
+      seq,
+      linked: links,
+      linkedTruncated,
+      ...read
+    } = await getJson(path, itemReadSchema, fetchFn)
+    const item = absorb(read)
+    noteRead(read.hubId, seq)
+    return { links, linkedTruncated, item }
+  }
+
+  /**
+   * Makes sure an item is in the store. A copy this view has read is used as it is; any other
+   * is read again, since it may have gone stale while its hub was not live.
+   */
   function openItem(id: string): Promise<Load<Item>> {
-    const known = server.value[id]
-    if (known) return Promise.resolve({ state: 'ready', data: known })
+    if (store.isDeleted(id)) return Promise.resolve(gone())
+    opened.add(id)
+    const known = store.get(id)
+    if (known && (seen.has(id) || store.isLive(known.hubId)))
+      return Promise.resolve({ state: 'ready', data: known })
     let running = opening.get(id)
     if (!running) {
-      running = getJson(itemPath(id), itemReadSchema, fetchFn)
-        .then((read): Load<Item> => {
-          const item = withoutSeq(read)
-          server.value[item.id] = item
-          return { state: 'ready', data: item }
-        })
+      running = fetchItem(itemPath(id))
+        .then(({ item }): Load<Item> => (item ? { state: 'ready', data: item } : gone()))
         .catch((error: unknown): Load<Item> => ({ state: 'error', error: asRequestError(error) }))
         .finally(() => opening.delete(id))
       opening.set(id, running)
@@ -476,21 +519,16 @@ export function useItems(
 
   /**
    * Reads an item again with `expand` (relation attributes, at most `MAX_EXPAND_ATTRIBUTES`),
-   * so its linked items arrive with it, as with a folder query. The server copy is replaced
-   * unless a newer version is already known.
+   * so its linked items arrive with it, as with a folder query. The store keeps whichever
+   * version is newer.
    */
   async function readItem(id: string, expandIds: readonly string[]): Promise<Load<Item>> {
     const query =
       expandIds.length > 0 ? `?expand=${expandIds.map(encodeURIComponent).join(',')}` : ''
     try {
-      const {
-        linked: links,
-        linkedTruncated,
-        ...read
-      } = await getJson(`${itemPath(id)}${query}`, itemReadSchema, fetchFn)
-      const item = withoutSeq(read)
-      const known = server.value[id]
-      if (!known || known.version <= item.version) server.value[id] = item
+      opened.add(id)
+      const { links, linkedTruncated, item } = await fetchItem(`${itemPath(id)}${query}`)
+      if (!item) return gone()
       absorbLinked({ items: [item], nextCursor: null, linked: links, linkedTruncated }, expandIds)
       return { state: 'ready', data: item }
     } catch (thrown) {
@@ -509,40 +547,92 @@ export function useItems(
     return run
   }
 
+  /** Edits a 409 refused, by item, until the reader keeps them or takes the other value. */
+  const refusedEdits = ref<Record<string, { values: ItemValues; by: string }>>({})
+  /** The reader's refused value for one field, and the principal whose change won. */
+  function refusedValue(id: string, attributeId: string) {
+    const entry = refusedEdits.value[id]
+    if (!entry || !(attributeId in entry.values)) return null
+    return { value: entry.values[attributeId] ?? null, by: entry.by }
+  }
+  function forgetRefused(id: string, attributeIds: readonly string[]) {
+    const entry = refusedEdits.value[id]
+    if (!entry) return
+    const values = Object.fromEntries(
+      Object.entries(entry.values).filter(([k]) => !attributeIds.includes(k)),
+    )
+    if (Object.keys(values).length === 0) Reflect.deleteProperty(refusedEdits.value, id)
+    else refusedEdits.value[id] = { ...entry, values }
+  }
+
+  /**
+   * The versions this view's own confirmed writes moved each item through, `from` to `to`. A
+   * queued write sends the version the reader's edit was based on, moved on only by these: a
+   * change by someone else that the feed delivered meanwhile still makes it a 409, never a
+   * silent overwrite (D8, D58).
+   */
+  const ownSteps = new Map<string, Map<number, number>>()
+  function versionFor(id: string, base: number): number {
+    const steps = ownSteps.get(id)
+    let version = base
+    for (let next = steps?.get(version); next !== undefined; next = steps?.get(version))
+      version = next
+    return version
+  }
+  function stepped(id: string, from: number, to: number) {
+    const steps = ownSteps.get(id) ?? new Map<number, number>()
+    steps.set(from, to)
+    ownSteps.set(id, steps)
+  }
+
+  /** Takes in a write's response: the item as written, and the `seq` it was written at. */
+  function confirmed(response: ItemWriteResult) {
+    const { seq } = response
+    const item = absorb(withoutSeq(response))
+    noteRead(response.hubId, seq)
+    return item
+  }
+
   /**
    * Applies `values` at once and saves them. Resolves `true` when the server accepted them.
    * On a 409 the item shows the server's current values, and every edit still queued for it
    * is dropped, since it was made against the old version. Any other failure undoes this edit.
    */
-  function save(id: string, values: ItemValues): Promise<boolean> {
+  function save(id: string, values: ItemValues, basedOn: number | null = null): Promise<boolean> {
     // The server does not have the item yet, so there is nothing to PATCH.
-    if (creating.value[id]) {
+    if (store.isCreating(id)) {
       say('The new item is still being saved. Edit it once it has been created.')
       return Promise.resolve(false)
     }
-    const edit: PendingEdit = { key: ++editKey, values }
-    pending.value[id] = [...(pending.value[id] ?? []), edit]
+    const mutationId = newItemId()
+    // The version the reader's edit is based on: from the field when it knows (a draft kept while
+    // someone else saved, D60), else the server copy they see under their own edits.
+    const base = basedOn ?? store.get(id)?.version
+    store.addPending(id, { kind: 'patch', mutationId, values })
     const drop = () => {
-      pending.value[id] = (pending.value[id] ?? []).filter((e) => e.key !== edit.key)
+      store.dropPending(id, mutationId)
     }
 
     return enqueue(id, async () => {
-      if (!pending.value[id]?.some((e) => e.key === edit.key)) return false
-      const before = server.value[id]
-      if (!before) {
+      if (!store.pending(id).some((w) => w.mutationId === mutationId)) return false
+      const before = store.get(id)
+      if (!before || base === undefined) {
         drop()
         return false
       }
+      const version = versionFor(id, base)
       try {
-        const updated = await sendJson(
+        const response = await sendJson(
           'PATCH',
           itemPath(id),
-          { version: before.version, values },
+          { version, values, clientMutationId: mutationId },
           itemWriteResultSchema,
           fetchFn,
-        ).then(withoutSeq)
-        server.value[id] = updated
+        )
+        stepped(id, version, response.version)
+        confirmed(response)
         drop()
+        forgetRefused(id, Object.keys(values))
         return true
       } catch (thrown) {
         const error = asRequestError(thrown)
@@ -554,8 +644,20 @@ export function useItems(
             `Your change to ${label(before)} was not saved. You can view the items in this hub but not change them.`,
           )
         } else if (error.code === 'conflict' && conflict.success) {
-          server.value[id] = conflict.data.current
-          pending.value[id] = []
+          // Every edit still pending was made against the old version: all of them are offered
+          // back field by field ("Keep mine"), beside the other person's values.
+          const mine = store
+            .pending(id)
+            .reduce<ItemValues>(
+              (acc, w) => (w.kind === 'patch' ? { ...acc, ...w.values } : acc),
+              {},
+            )
+          refusedEdits.value[id] = {
+            values: { ...refusedEdits.value[id]?.values, ...mine },
+            by: conflict.data.current.updatedBy,
+          }
+          store.apply(conflict.data.current)
+          store.dropPendingKind(id, 'patch')
           say(
             `${label(before)} was changed by someone else before your edit was saved. Your edit was not applied; the latest values are shown.`,
           )
@@ -578,10 +680,11 @@ export function useItems(
       return { ok: false, error: new ApiRequestError('invalid_request', 'No folder is open.') }
     }
     const id = newItemId()
+    const mutationId = newItemId()
     const placeholder: Item = {
       workspaceId,
       id,
-      hubId: '',
+      hubId: options.hubId?.() ?? '',
       folderId: folder,
       seqId: 1,
       values,
@@ -589,24 +692,22 @@ export function useItems(
       updatedAt: new Date().toISOString(),
       updatedBy: '',
     }
-    server.value[id] = placeholder
-    creating.value[id] = true
+    store.addPending(id, { kind: 'create', mutationId, item: Object.freeze(placeholder) })
     const gen = generation
     if (list.value.state === 'ready') list.value.data.ids.unshift(id)
 
     try {
-      const item = await sendJson(
+      const response = await sendJson(
         'POST',
         `${base}/items`,
-        { id, folderId: folder, values },
+        { id, folderId: folder, values, clientMutationId: mutationId },
         itemWriteResultSchema,
         fetchFn,
-      ).then(withoutSeq)
-      server.value[id] = item
+      )
+      const item = confirmed(response) ?? withoutSeq(response)
       return { ok: true, item }
     } catch (thrown) {
       const error = asRequestError(thrown)
-      Reflect.deleteProperty(server.value, id)
       if (gen === generation && list.value.state === 'ready') {
         list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
       }
@@ -618,37 +719,38 @@ export function useItems(
       }
       return { ok: false, error }
     } finally {
-      Reflect.deleteProperty(creating.value, id)
+      store.dropPending(id, mutationId)
     }
   }
 
   /**
-   * Deletes an item at the version shown, after any edit still on its way. Nothing is removed
-   * from view until the server agrees: the caller leaves the item's page on success. On a 409
-   * the item shows its current values and the message says so; a 404 means it is already gone,
-   * which is what was asked.
+   * Deletes an item at the version shown, after any edit still on its way. The item is hidden
+   * at once and comes back if the server refuses, with the reason. On a 409 the item shows its
+   * current values and the message says so; a 404 means it is already gone, which is what was
+   * asked.
    */
   function remove(id: string): Promise<RemoveResult> {
-    if (creating.value[id]) {
+    if (store.isCreating(id)) {
       return Promise.resolve({
         ok: false,
         message: 'The new item is still being saved. Delete it once it has been created.',
       })
     }
+    const shown = store.get(id)
+    if (!shown) return Promise.resolve({ ok: false, message: 'This item is not loaded.' })
+    const mutationId = newItemId()
+    store.addPending(id, { kind: 'delete', mutationId })
     return enqueue(id, async (): Promise<RemoveResult> => {
-      const before = server.value[id]
-      if (!before) return { ok: false, message: 'This item is not loaded.' }
+      const before = store.get(id) ?? shown
+      // The version shown when the reader asked, moved on only by their own edits before it.
+      const version = versionFor(id, shown.version)
       try {
-        await sendJson(
-          'DELETE',
-          `${itemPath(id)}?version=${String(before.version)}`,
-          undefined,
-          noContent,
-          fetchFn,
-        )
+        const query = `?version=${String(version)}&clientMutationId=${mutationId}`
+        await sendJson('DELETE', `${itemPath(id)}${query}`, undefined, noContent, fetchFn)
       } catch (thrown) {
         const error = asRequestError(thrown)
         const conflict = conflictErrorSchema.safeParse(error.body)
+        if (!error.isNotFound) store.dropPending(id, mutationId)
         if (error.isNotFound) {
           // Fall through: it is gone either way.
         } else if (error.status === 403) {
@@ -658,8 +760,8 @@ export function useItems(
             message: `${label(before)} was not deleted. You can view the items in this hub but not change them.`,
           }
         } else if (error.code === 'conflict' && conflict.success) {
-          server.value[id] = conflict.data.current
-          pending.value[id] = []
+          store.apply(conflict.data.current)
+          store.dropPendingKind(id, 'patch')
           return {
             ok: false,
             message: `${label(before)} was changed by someone else, so it was not deleted. The latest values are shown; delete it again if you still want to.`,
@@ -671,12 +773,99 @@ export function useItems(
           }
         }
       }
+      store.tombstone(id)
+      store.dropPending(id, mutationId)
       if (list.value.state === 'ready') {
         list.value.data.ids = list.value.data.ids.filter((x) => x !== id)
       }
       return { ok: true }
     })
   }
+
+  /**
+   * Keeps the list in step with the feed. A deleted item leaves it; an item that arrives in the
+   * open folder and is not listed goes to the top, as the default order (newest update first)
+   * puts it; a listed item updates in place. The echo of the reader's own create is already
+   * listed, so it is not added twice (D59).
+   */
+  function onChange(change: Change) {
+    const current = list.value
+    if (current.state !== 'ready') return
+    const data = current.data
+    const listed = data.ids.includes(change.itemId)
+    const item = store.get(change.itemId)
+    if (!change.item || !item) {
+      if (listed) data.ids = data.ids.filter((x) => x !== change.itemId)
+      return
+    }
+    if (item.folderId !== folderId.value) {
+      if (listed) data.ids = data.ids.filter((x) => x !== change.itemId)
+      return
+    }
+    seen.add(item.id)
+    if (!listed) data.ids.unshift(item.id)
+  }
+
+  /**
+   * Too much was missed while away (D58): read the list and the items opened by ID again, so
+   * their reads subscribe the hub afresh from their `seq`. The rows stay until the list arrives.
+   * Until a read succeeds the hub is not live: the shell says so, and the reads are tried again
+   * with the feed's backoff. A list now out of reach shows that instead.
+   */
+  let resyncTimer: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
+  /** A function, so the check after an `await` is not narrowed away by the one before it. */
+  const isDisposed = () => disposed
+  async function onResync(hubId: string, attempt = 0) {
+    if (isDisposed() || !held.has(hubId)) return
+    if (resyncTimer !== null) clearTimeout(resyncTimer)
+    resyncTimer = null
+    seen.clear()
+    const reads: Promise<boolean>[] = [...opened].map((id) =>
+      fetchItem(itemPath(id)).then(
+        () => true,
+        () => false,
+      ),
+    )
+    const current = list.value
+    const folder = folderId.value
+    if (hasList && folder && current.state === 'ready') {
+      const gen = ++generation
+      reads.push(
+        fetchPage(folder, null, current.data.sort).then(
+          (page) => {
+            if (gen === generation) list.value = firstPage(page, current.data.sort)
+            return true
+          },
+          (thrown: unknown) => {
+            const error = asRequestError(thrown)
+            if (gen === generation && (error.isNotFound || error.isNoPermission)) {
+              list.value = { state: 'error', error }
+              return true
+            }
+            return false
+          },
+        ),
+      )
+    }
+    if (reads.length === 0) return
+    const results = await Promise.all(reads)
+    // Every read must land: a copy that failed to reload missed changes no feed will resend.
+    if (isDisposed() || results.every(Boolean)) return
+    store.markBehind(hubId)
+    resyncTimer = setTimeout(() => void onResync(hubId, attempt + 1), backoff(attempt))
+  }
+
+  const stops = [store.on('change', onChange), store.on('resync', (hubId) => void onResync(hubId))]
+  /** Lets go of the store: listeners and live hubs. Runs on its own when the scope ends. */
+  function dispose() {
+    disposed = true
+    if (resyncTimer !== null) clearTimeout(resyncTimer)
+    for (const stop of stops) stop()
+    for (const release of held.values()) release()
+    held.clear()
+  }
+  if (getCurrentScope()) onScopeDispose(dispose)
 
   const dismissNotice = () => {
     say(null)
@@ -706,5 +895,9 @@ export function useItems(
     rememberLinked,
     resolveLinked,
     readOnly,
+    store,
+    dispose,
+    refusedValue,
+    forgetRefused,
   }
 }

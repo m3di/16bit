@@ -3,6 +3,8 @@ import type { Item } from '@16bit/core'
 import { computed, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ShellUser from '../../session/ShellUser.vue'
+import ConnectionStatus from '../../sync/ConnectionStatus.vue'
+import { useLiveHub } from '../../sync/live.ts'
 import { useSession } from '../../session/session.ts'
 import { AppShell, ConfirmDialog } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
@@ -22,7 +24,9 @@ import {
   folderLink,
   itemPageLink,
   malformedItemId,
+  livePageState,
   pageState,
+  type PageState,
 } from './item-page.ts'
 import { useBacklinks } from './useBacklinks.ts'
 
@@ -42,6 +46,15 @@ const description = computed(() => (hubLoad.value?.state === 'ready' ? hubLoad.v
 const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '', fetchFn, {
   list: false,
 })
+// Feed events about the item's hub (D58): a schema change is read again in place; a lost grant
+// shows the no-permission state.
+const live = useLiveHub(
+  items.store,
+  () => hubId.value,
+  (id) => {
+    directory.refresh(id)
+  },
+)
 const principals = usePrincipals(
   workspaceId,
   () => (session.me.value.state === 'ready' ? session.me.value.data : null),
@@ -98,11 +111,20 @@ watch(
   { immediate: true },
 )
 
-const page = computed(() => {
+const page = computed((): PageState => {
   const state = pageState(located.value, hubLoad.value)
-  if (state.state !== 'ready') return state
-  if (!shown.value) return { state: 'loading' as const }
-  return { ...state, item: items.view(itemId) ?? state.item }
+  const loaded: PageState =
+    state.state !== 'ready'
+      ? state
+      : !shown.value
+        ? { state: 'loading' }
+        : // While its own delete is pending the item is hidden from lists; the page keeps it.
+          { ...state, item: items.view(itemId) ?? state.item }
+  return livePageState(loaded, {
+    lost: live.lost.value,
+    deleted: items.store.isDeleted(itemId),
+    deletingHere: deleting.value || leaving.value,
+  })
 })
 
 function retry() {
@@ -135,17 +157,20 @@ onMounted(() => {
 // Delete asks first. The item stays until the server agrees; a refusal shows in the dialog.
 const confirming = ref(false)
 const deleting = ref(false)
+/** Deleted here: the page is on its way back to the folder, not showing "not available". */
+const leaving = ref(false)
 const deleteError = ref('')
 function askDelete() {
   deleteError.value = ''
   confirming.value = true
 }
 async function confirmDelete() {
-  const item = items.view(itemId)
-  if (!item) return
+  if (page.value.state !== 'ready') return
+  const item = page.value.item
   deleting.value = true
   deleteError.value = ''
   const result = await items.remove(itemId)
+  leaving.value = result.ok
   deleting.value = false
   if (result.ok) {
     confirming.value = false
@@ -160,15 +185,17 @@ const body = useTemplateRef<InstanceType<typeof ItemBody>>('body')
 function dialogClosed() {
   if (readOnly.value) body.value?.focusReadOnly()
 }
-const deleteLabel = computed(() => {
-  const item = items.view(itemId)
-  return item && description.value ? displayId(description.value, item) : 'this item'
-})
+const deleteLabel = computed(() =>
+  page.value.state === 'ready' ? displayId(page.value.hub, page.value.item) : 'this item',
+)
 </script>
 
 <template>
   <AppShell>
-    <template #actions><ShellUser /></template>
+    <template #actions>
+      <ConnectionStatus :status="items.store.status.value" />
+      <ShellUser />
+    </template>
     <template v-if="description && page.state === 'ready'" #sidebar>
       <FolderSidebar
         :workspace-id="workspaceId"
@@ -194,7 +221,9 @@ const deleteLabel = computed(() => {
             :read-only="readOnly"
             :saving="items.isSaving(item.id)"
             :notice="items.notice.value"
-            @save="items.save(item.id, $event)"
+            :refused-value="(attributeId: string) => items.refusedValue(item.id, attributeId)"
+            @save="(values, basedOn) => items.save(item.id, values, basedOn)"
+            @dismiss-refused="items.forgetRefused(item.id, [$event])"
             @delete="askDelete"
             @dismiss="items.dismissNotice()"
             @retry-backlinks="backlinks.load()"

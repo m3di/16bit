@@ -68,6 +68,9 @@ test('an edit in the item panel persists', async ({ api, page }) => {
 test('an edit made against a stale version rolls back and says so', async ({ api, page }) => {
   const item = await api.createItem({ values: { [title]: uniqueTitle('conflict ui') } })
   const theirs = uniqueTitle('their edit')
+  // The feed would bring the other edit in before this one is saved (live-sync.spec.ts). Hold it
+  // off, as when that event is still on its way, so the panel still holds version 1.
+  await page.routeWebSocket(/\/feed$/, () => undefined)
 
   await page.goto(`${hubPath}?item=${item.id}`)
   const field = panel(page).getByLabel('Title (required)')

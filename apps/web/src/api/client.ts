@@ -68,6 +68,14 @@ export function setUnauthorizedHandler(handler: () => void): () => void {
   }
 }
 
+/**
+ * Reports an ended session from outside a request, such as the feed socket closed with
+ * `credentialsEnded` (4401): the unauthorized handler sends the reader to sign in.
+ */
+export function notifyUnauthorized() {
+  unauthorizedHandler?.()
+}
+
 /** For responses without a body, such as a 204. */
 export const noContent: Schema<undefined> = { parse: () => undefined }
 

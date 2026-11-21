@@ -98,3 +98,23 @@ export function afterExpandRead(first: Load<Item>, second: Load<Item>): Load<Ite
   }
   return first
 }
+
+/**
+ * The page state with what the feed said since it loaded (D58): a lost grant shows no
+ * permission, and an item deleted elsewhere is not available, as a reload would show. The
+ * reader's own delete (`deletingHere`) keeps the item on screen until the page moves away.
+ */
+export function livePageState(
+  state: PageState,
+  live: { lost: boolean; deleted: boolean; deletingHere: boolean },
+): PageState {
+  if (live.lost) {
+    const error = new ApiRequestError('forbidden', 'You no longer have access to this item.', 403)
+    return { state: 'no-permission', error }
+  }
+  if (state.state === 'ready' && live.deleted && !live.deletingHere) {
+    const error = new ApiRequestError('not_found', 'This item has been deleted.', 404)
+    return { state: 'not-found', error }
+  }
+  return state
+}

@@ -71,9 +71,10 @@ export function useHub(
   const hub = ref<Load<HubDescription>>({ state: 'loading' })
   let loading: Promise<void> | null = null
 
+  const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/hubs/${encodeURIComponent(hubId)}`
+
   async function fetchHub() {
     hub.value = { state: 'loading' }
-    const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/hubs/${encodeURIComponent(hubId)}`
     try {
       hub.value = { state: 'ready', data: await getJson(path, hubDescriptionSchema, fetchFn) }
     } catch (error) {
@@ -89,6 +90,21 @@ export function useHub(
     return loading
   }
 
+  /**
+   * Reads the hub again after a schema change (a feed `hub` event), keeping what is shown until
+   * the answer arrives. A hub that is now out of reach shows that; any other failure keeps the
+   * description shown.
+   */
+  async function refresh(): Promise<void> {
+    if (hub.value.state !== 'ready') return load()
+    try {
+      hub.value = { state: 'ready', data: await getJson(path, hubDescriptionSchema, fetchFn) }
+    } catch (thrown) {
+      const error = asRequestError(thrown)
+      if (error.isNotFound || error.isNoPermission) hub.value = { state: 'error', error }
+    }
+  }
+
   const tree = computed(() => (hub.value.state === 'ready' ? folderTree(hub.value.data) : []))
-  return { hub, tree, load }
+  return { hub, tree, load, refresh }
 }

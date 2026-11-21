@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MAX_EXPAND_ATTRIBUTES, type Item, type ItemValues } from '@16bit/core'
+import { MAX_EXPAND_ATTRIBUTES, type HubDescription, type Item, type ItemValues } from '@16bit/core'
 import { ApiRequestError } from '../../api/client.ts'
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
@@ -7,6 +7,8 @@ import { useSession } from '../../session/session.ts'
 import { canManageSchema } from '../hub-settings/schema.ts'
 import { viewerOf } from '../hub-settings/access.ts'
 import ShellUser from '../../session/ShellUser.vue'
+import ConnectionStatus from '../../sync/ConnectionStatus.vue'
+import { useLiveHub } from '../../sync/live.ts'
 import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
@@ -31,9 +33,26 @@ const { workspaceId, hubId, folderId, itemId } = defineProps<{
 }>()
 
 const router = useRouter()
-const { hub, tree, load: loadHub } = useHub(workspaceId, hubId)
+const { hub: hubRead, tree, load: loadHub, refresh: refreshHub } = useHub(workspaceId, hubId)
+const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '', undefined, {
+  hubId: () => hubId,
+})
+// Feed events about this hub (D58): a schema change is read again in place, and a lost grant
+// shows the no-permission state instead of rows that no longer update.
+const live = useLiveHub(
+  items.store,
+  () => hubId,
+  () => void refreshHub(),
+)
+const hub = computed<Load<HubDescription>>(() =>
+  live.lost.value
+    ? {
+        state: 'error',
+        error: new ApiRequestError('forbidden', 'You no longer have access to this hub.', 403),
+      }
+    : hubRead.value,
+)
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
-const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '')
 const { list, rows, notice } = items
 const session = useSession()
 
@@ -140,7 +159,7 @@ const createErrors = ref<Record<string, string>>({})
 // The folder's query expands its relation columns (at most MAX_EXPAND_ATTRIBUTES), so the
 // table can show linked items, or "no access", without a request per row.
 async function openFolder(id: string) {
-  if (hub.value.state !== 'ready') await loadHub()
+  if (hubRead.value.state !== 'ready') await loadHub()
   if (id !== openFolderId.value) return
   const d = description.value
   const shown = d ? folderColumns(d, id).map((c) => c.attribute) : []
@@ -240,6 +259,7 @@ async function submitCreate(values: ItemValues) {
         data-hub-settings-link
         >Hub settings</RouterLink
       >
+      <ConnectionStatus :status="items.store.status.value" />
       <ShellUser />
     </template>
     <template #sidebar>
@@ -315,7 +335,7 @@ async function submitCreate(values: ItemValues) {
       </main>
 
       <ItemPanel
-        v-if="creating && folder"
+        v-if="creating && folder && !live.lost.value"
         title="New item"
         label="New item"
         class="flex-[1_1_320px]"
@@ -330,7 +350,7 @@ async function submitCreate(values: ItemValues) {
         />
       </ItemPanel>
       <ItemPanel
-        v-else-if="itemId && panelItem"
+        v-else-if="itemId && panelItem && !live.lost.value"
         :title="selectedItem && description ? items.label(selectedItem) : 'Item'"
         class="flex-[1_1_320px]"
         @close="closePanel"
@@ -351,7 +371,9 @@ async function submitCreate(values: ItemValues) {
               :saving="items.isSaving(item.id)"
               :disabled="items.isCreating(item.id)"
               :read-only="readOnly"
-              @save="items.save(item.id, $event)"
+              :refused-value="(attributeId: string) => items.refusedValue(item.id, attributeId)"
+              @save="(values, basedOn) => items.save(item.id, values, basedOn)"
+              @dismiss-refused="items.forgetRefused(item.id, [$event])"
             />
           </template>
         </ItemPanelBody>
