@@ -121,11 +121,6 @@ interface Seen {
 test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 100 rows in the DOM', async ({
   page,
 }) => {
-  // Known to fail on GitHub's runners: issue 218. The fix removes this pin.
-  test.fail(
-    !!process.env['CI'],
-    'Long tasks while scrolling in CI: https://github.com/m3di/16bit/issues/218',
-  )
   await open(page)
   // Observed from here on, so loading the app is not counted, only the scrolling.
   await page.evaluate((longTask) => {
@@ -188,6 +183,10 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
   if (scripts.length) {
     test.info().annotations.push({ type: 'in long frames', description: scripts.join('; ') })
   }
-  expect(longTasks.filter((ms) => ms > LONG_TASK_MS)).toEqual([])
   expect(mostRows).toBeLessThan(MAX_ROWS_IN_DOM)
+  // Issue 218: GitHub's runners see long tasks here (one to 26 per run so far), so in CI they
+  // are reported above, not asserted. Not a `test.fail()` pin: a run with none would turn red.
+  // The fix for issue 218 removes this condition.
+  if (process.env['CI']) return
+  expect(longTasks.filter((ms) => ms > LONG_TASK_MS)).toEqual([])
 })
