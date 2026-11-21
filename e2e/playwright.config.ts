@@ -17,6 +17,14 @@ const webPort = process.env['E2E_WEB_PORT'] ?? '5173'
 const webUrl = `http://localhost:${webPort}`
 /** Specs that measure time on the page's main thread (the `budgets` project below). */
 const BUDGETS = /-budgets\.spec\.ts$/
+// The budgets measure the app as people get it: the production build of the web app, served by
+// the API from the same port, as in the container image (D34, D61). The maintainer decided this
+// for issue 218; the dev server's unminified Vue and module loading are not what users run.
+const builtPort = process.env['E2E_BUILT_PORT'] ?? '3001'
+const builtUrl = `http://localhost:${builtPort}`
+const webRoot = fileURLToPath(new URL('../apps/web/dist', import.meta.url))
+/** An app already running elsewhere for the budgets, as `E2E_BASE_URL` is for the rest. */
+const externalBuiltUrl = process.env['E2E_BUDGETS_BASE_URL'] ?? externalBaseUrl
 
 // Specs live in tests/*.spec.ts. Each one sets up its own items through the API, so specs can run
 // in any order, in parallel, and across shards. The database must be migrated and seeded first
@@ -50,7 +58,12 @@ export default defineConfig({
     {
       name: 'budgets',
       testMatch: BUDGETS,
-      use: { ...devices['Desktop Chrome'], storageState: OWNER_STATE },
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: OWNER_STATE,
+        // Same host as the dev server, so the signed-in session cookie applies here too.
+        baseURL: externalBuiltUrl ?? builtUrl,
+      },
       dependencies: ['chromium'],
       workers: 1,
     },
@@ -75,6 +88,15 @@ export default defineConfig({
           url: webUrl,
           reuseExistingServer: !ci,
           timeout: 60_000,
+        },
+        // For the budgets: the web app built for production, served by a second API process.
+        {
+          name: 'built',
+          command: 'pnpm --filter @16bit/web build && pnpm --filter @16bit/api start',
+          env: { MIGRATION_DATABASE_URL: '', PORT: builtPort, WEB_ROOT: webRoot },
+          url: `http://${process.env['HOST'] ?? '127.0.0.1'}:${builtPort}/health`,
+          reuseExistingServer: !ci,
+          timeout: 180_000,
         },
       ],
 })

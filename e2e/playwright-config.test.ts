@@ -20,6 +20,21 @@ describe('playwright config', () => {
     expect(ignore.test('large-folder.spec.ts')).toBe(false)
   })
 
+  it('measures the budgets on the production build, served by the API (issue 218)', () => {
+    const budgets = (config.projects ?? []).find((p) => p.name === 'budgets')
+    const servers = Array.isArray(config.webServer) ? config.webServer : []
+    const built = servers.find((server) => server.name === 'built')
+    expect(built?.command).toMatch(
+      /^pnpm --filter @16bit\/web build && pnpm --filter @16bit\/api start$/,
+    )
+    expect(built?.env).toMatchObject({ MIGRATION_DATABASE_URL: '' })
+    expect(built?.env?.['WEB_ROOT']).toMatch(/apps\/web\/dist$/)
+    const port = built?.env?.['PORT'] ?? ''
+    expect(built?.url).toMatch(new RegExp(`:${port}/health$`))
+    if (!process.env['E2E_BASE_URL'] && !process.env['E2E_BUDGETS_BASE_URL'])
+      expect(budgets?.use?.baseURL).toBe(`http://localhost:${port}`)
+  })
+
   it('starts the API without the owner URL, which .env may set (#44)', () => {
     const servers = Array.isArray(config.webServer) ? config.webServer : []
     const api = servers.find((server) => server.name === 'api')
