@@ -1,4 +1,11 @@
-import { conflictErrorSchema, type ConflictError, type Item } from '@16bit/core'
+import {
+  conflictErrorSchema,
+  revisionPageSchema,
+  type ConflictError,
+  type Item,
+  type ItemCause,
+  type RevisionEntry,
+} from '@16bit/core'
 import { parseItemRead, parseItemWrite } from './item-responses.ts'
 import { readFileSync } from 'node:fs'
 import { test as base, expect, type APIRequestContext, type APIResponse } from '@playwright/test'
@@ -54,7 +61,7 @@ export class Api {
   /** Sends the PATCH and returns the raw response, so a spec can check a 409. */
   patchItem(
     item: Pick<Item, 'id' | 'workspaceId'>,
-    body: { version: number; values: Record<string, unknown> },
+    body: { version: number; values: Record<string, unknown>; cause?: ItemCause },
   ): Promise<APIResponse> {
     return this.#request.patch(
       this.path(item.workspaceId, `/items/${encodeURIComponent(item.id)}`),
@@ -62,6 +69,15 @@ export class Api {
         data: body,
       },
     )
+  }
+
+  /** The item's history, newest first (first page). */
+  async revisions(id: string, workspaceId: string = demo.workspaceId): Promise<RevisionEntry[]> {
+    const res = await this.#request.get(
+      this.path(workspaceId, `/items/${encodeURIComponent(id)}/revisions`),
+    )
+    await expectStatus(res, 200)
+    return revisionPageSchema.parse(await res.json()).items
   }
 
   async parseItem(res: APIResponse): Promise<Item> {

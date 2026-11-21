@@ -29,6 +29,7 @@ import {
   type PageState,
 } from './item-page.ts'
 import { useBacklinks } from './useBacklinks.ts'
+import { useHistory } from './useHistory.ts'
 
 const { workspaceId, itemId } = defineProps<{ workspaceId: string; itemId: string }>()
 
@@ -61,6 +62,7 @@ const principals = usePrincipals(
   fetchFn,
 )
 const backlinks = useBacklinks(workspaceId, itemId, fetchFn)
+const history = useHistory(workspaceId, itemId, fetchFn)
 
 provideValueContext({
   workspaceId,
@@ -107,6 +109,7 @@ watch(
     }
     shown.value = true
     void backlinks.load()
+    void history.load()
   },
   { immediate: true },
 )
@@ -188,6 +191,17 @@ function dialogClosed() {
 const deleteLabel = computed(() =>
   page.value.state === 'ready' ? displayId(page.value.hub, page.value.item) : 'this item',
 )
+
+// A newer version than the history holds (an edit here, or one from the feed): read the new
+// entries. Pending edits do not count, since the server has not written them yet. Declared
+// last: `page` reads refs declared above, so the watcher cannot run before them.
+watch(
+  () => (page.value.state === 'ready' ? page.value.item.version : null),
+  (version) => {
+    const newest = history.newestVersion()
+    if (version !== null && newest !== null && version > newest) void history.refresh()
+  },
+)
 </script>
 
 <template>
@@ -218,6 +232,7 @@ const deleteLabel = computed(() =>
             :hub="hub"
             :columns="folderColumns(hub, item.folderId)"
             :backlinks="backlinks.list.value"
+            :history="history.list.value"
             :read-only="readOnly"
             :saving="items.isSaving(item.id)"
             :notice="items.notice.value"
@@ -228,6 +243,9 @@ const deleteLabel = computed(() =>
             @dismiss="items.dismissNotice()"
             @retry-backlinks="backlinks.load()"
             @more-backlinks="backlinks.loadMore()"
+            @retry-history="history.load()"
+            @more-history="history.loadMore()"
+            @refresh-history="history.refresh()"
           />
         </template>
       </ItemState>
