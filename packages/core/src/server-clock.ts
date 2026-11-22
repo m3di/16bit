@@ -47,12 +47,14 @@ export function serverClockOffsetMs(duration: string): number | null {
 
 /**
  * A date value or a date condition operand that the server fills in (D66): the database clock,
- * read once per write inside its transaction (after the item's row lock), plus the offset. Every
- * `$now` in one write, values and condition alike, sees the same instant. Accepted wherever a
- * date attribute takes a value: in `values` of create, patch, upsert and batch operations, and
- * as the operand of a `condition` on a date attribute (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`,
- * and each element of `in` and `not_in`). Not in `POST /query`, whose reads have no write
- * transaction. The stored value is an ordinary date: see `resolveServerClock`.
+ * read once per write inside its transaction, plus the offset. The write reads it with
+ * `clock_timestamp()` after taking the item's row lock, never with `now()`, which is the
+ * transaction's start and can be earlier by the whole lock wait (it matters for lease expiry,
+ * D68). Every `$now` in one write, values and condition alike, sees that one instant. Accepted
+ * wherever a date attribute takes a value: in `values` of create, patch, upsert and batch
+ * operations, and as the operand of a `condition` on a date attribute (`eq`, `neq`, `gt`, `gte`,
+ * `lt`, `lte`). Not yet in `POST /query`; M4 views resolve it against the read's own clock. The
+ * stored value is an ordinary date: see `resolveServerClock`.
  */
 export const serverClockValueSchema = z.strictObject({
   $now: z

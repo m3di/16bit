@@ -63,7 +63,24 @@ describe('external key (D64)', () => {
   })
 
   it('refuses whitespace at either end and control characters anywhere', () => {
-    for (const bad of [' a', 'a ', '\ta', 'a\n', '\u00a0a', 'a\u3000', '\ufeffa', 'a\u2028']) {
+    for (const bad of [
+      ' a',
+      'a ',
+      '\ta',
+      'a\n',
+      '\u00a0a',
+      'a\u3000',
+      '\ufeffa',
+      'a\u2028',
+      '\va',
+      'a\f',
+      '\u1680a',
+      'a\u202f',
+      '\u205fa',
+      'a\u2029',
+      '\u2000a',
+      'a\u200a',
+    ]) {
       expect(ok(bad), JSON.stringify(bad)).toBe(false)
     }
     for (const bad of [

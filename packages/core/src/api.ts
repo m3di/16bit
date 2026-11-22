@@ -413,14 +413,17 @@ export type PatchItem = z.infer<typeof patchItemSchema>
  * `itemReadSchema` as `GET /items/:itemId` does; a key no item of the hub holds, and a hub the
  * caller cannot read, are 404.
  *
- * - No item holds the key: creates one in `folderId`, which must be a folder of the hub, with
- *   the key, and answers 201. With a `version` it creates nothing and answers 404: a version
+ * - `folderId` must be a folder of the hub, whether the upsert creates or patches, so a wrong
+ *   one fails at once rather than only once the item is gone: 404 `not_found`, as for a missing
+ *   folder.
+ * - No item holds the key: creates one in `folderId` with the key, and answers 201. With a `version` it creates nothing and answers 404: a version
  *   names an item the client has seen.
  * - An item holds the key: patches it where it is and answers 200. Items never move, so
  *   `folderId` is used only on create, and an item in another folder of the hub is patched in
  *   its own folder (decided by the maintainer, #199). With `version`, a stale one is 409
  *   `conflict`; without, it is last write wins on the values sent. Empty `values` write nothing
- *   and answer 200 with the item as it is.
+ *   and answer 200 with the item as it is; there is no revision, so the `clientMutationId` is
+ *   not recorded and a retry is answered afresh, which is harmless for a no-op.
  * - `condition` (D66) is evaluated against the item that holds the key, or, when none does,
  *   against an item with no values, so `is_empty` and the negative operators hold and the rest
  *   fail. A failed one is 412 `precondition_failed`, with `current: null` when no item holds

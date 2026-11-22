@@ -94,7 +94,11 @@ export const batchWrittenSchema = z.strictObject({
   item: itemWriteResultSchema,
 })
 
-/** A delete that removed the item (or a retry of one), with its revision's `seq` (D58). */
+/**
+ * A delete that removed the item (or a retry of one), with its revision's `seq` (D58). The
+ * route answers 204 with no body; in a batch the `seq` is added so every success carries one.
+ * A retry answers with the first attempt's `seq`, read from the revision its mutation ID found.
+ */
 export const batchDeletedSchema = z.strictObject({
   status: z.literal(204),
   seq: seqSchema,
