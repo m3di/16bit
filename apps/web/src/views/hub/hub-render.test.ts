@@ -195,6 +195,47 @@ describe('FolderSidebar', () => {
     expect(html).toContain('padding-left:20px')
   })
 
+  it('shows the root as the hub, read as its own items, with its own count, and nests the folders', async () => {
+    const product = {
+      ...description,
+      hub: { ...description.hub, itemCount: 1200 },
+      folders: description.folders.map((f) => ({ ...f, itemCount: 300 })),
+    }
+    const html = await render(FolderSidebar, {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(product) },
+      folderId: 'bld',
+    })
+    const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
+    expect(root).toContain('href="/w/w/hubs/bld"')
+    expect(root).toContain('aria-current="page"')
+    expect(root).toContain('aria-label="Build, items in the hub itself, 300 items"')
+    expect(root).not.toContain('Items in')
+    expect(root).toMatch(/>Build</)
+    expect(root).toMatch(/aria-label="300 items"[^>]*>300</)
+    // Every other folder is in a list inside the root's entry, under a hairline guide.
+    const nested = /data-folder-root[^>]*>.*?<\/a>.*?<ul [^>]*border-l[^>]*>(.*?)<\/ul>/s.exec(
+      html,
+    )?.[1]
+    expect(nested?.match(/data-folder-link/g)).toHaveLength(3)
+    expect(html.match(/aria-label="300 items"/g)).toHaveLength(4)
+  })
+
+  it('leaves the root count out when it cannot be told', async () => {
+    const cut = { ...description, truncated: { ...description.truncated, folders: true } }
+    const html = await render(FolderSidebar, {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(cut) },
+      folderId: 'bld',
+    })
+    const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
+    expect(root).toContain('aria-label="Build, items in the hub itself"')
+    expect(root).not.toContain('data-folder-count')
+    expect(html.match(/data-folder-count/g)).toHaveLength(3)
+  })
+
   it('has a loading state', async () => {
     const html = await render(FolderSidebar, {
       workspaceId: 'w',
