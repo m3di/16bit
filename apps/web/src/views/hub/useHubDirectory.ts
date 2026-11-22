@@ -41,12 +41,13 @@ export function useHubDirectory(workspaceId: string, fetchFn: Fetch = (...args) 
   /**
    * Reads a known hub again after a schema change, keeping the description shown until the
    * answer arrives. A hub now out of reach becomes an error; other failures keep what is shown.
+   * Settles once the answer is applied, so callers can keep reads one at a time.
    */
-  function refresh(id: string) {
+  function refresh(id: string): Promise<void> {
     const known = hubs.value[id]
-    if (known?.state !== 'ready') return
+    if (known?.state !== 'ready') return Promise.resolve()
     const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/hubs/${encodeURIComponent(id)}`
-    getJson(path, hubDescriptionSchema, fetchFn).then(
+    return getJson(path, hubDescriptionSchema, fetchFn).then(
       (data) => {
         hubs.value[id] = { state: 'ready', data }
       },
