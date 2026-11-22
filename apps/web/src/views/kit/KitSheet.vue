@@ -7,6 +7,7 @@ import {
   DataTable,
   FormNotice,
   HubCard,
+  ItemPanel,
   PALETTE_COLORS,
   PaletteChip,
   PixelAvatar,
@@ -44,6 +45,8 @@ const tokens = [
 const name = ref('Engineering')
 const prefix = ref('PT')
 const search = ref('')
+const panelOpen = ref(true)
+const panelFields = ['Title', 'Stage', 'Owner', 'Points', 'Due', 'Reporter', 'Area', 'Notes']
 const role = ref('editor')
 const roles = [
   { value: 'admin', label: 'Hub admin' },
@@ -347,6 +350,35 @@ onScopeDispose(() => {
         50,000 rows, 38px each, loaded 200 at a time after a pause: rows not loaded yet are
         placeholders. Click a row, then use the arrow keys, Page Up and Page Down, Home and End. ID
         sorts and reloads.
+      </p>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">ItemPanel</h3>
+      <div class="flex flex-wrap items-stretch border border-line lg:h-[320px]">
+        <div class="flex min-w-0 flex-[999_1_200px] items-start p-4">
+          <BaseButton v-if="!panelOpen" size="sm" @click="panelOpen = true">Open panel</BaseButton>
+          <span v-else class="text-secondary text-ink3">Table side</span>
+        </div>
+        <ItemPanel
+          v-if="panelOpen"
+          title="PT-412"
+          keep-focus
+          class="flex-[1_1_240px]"
+          @close="panelOpen = false"
+        >
+          <BaseInput
+            v-for="field in panelFields"
+            :key="field"
+            :model-value="field === 'Title' ? 'Sync drops a change' : ''"
+            :label="field"
+          />
+        </ItemPanel>
+      </div>
+      <p class="m-0 text-caption text-ink3">
+        At desktop width the panel is as tall as the row beside it and scrolls on its own; it is
+        never taller than the viewport. At phone width it stacks under the row and grows with its
+        fields. Escape or the close button closes it.
       </p>
     </section>
 
