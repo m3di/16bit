@@ -138,9 +138,14 @@ export function type(el: FakeNode, value: string, init: Record<string, unknown> 
 
 export function mount(component: Component, props: Record<string, unknown>) {
   const root = node('root')
-  createApp({ render: () => h(component, props) }).mount(root)
+  const app = createApp({ render: () => h(component, props) })
+  app.mount(root)
   return {
     root,
+    /** Unmounts the app, running the component's unmount hooks. */
+    unmount: () => {
+      app.unmount()
+    },
     /** The first element with this tag; throws when there is none. */
     get: (tag: string) => {
       const found = find(root, tag)

@@ -337,3 +337,101 @@ test('a hub admin grants on their hub, but not on their own grant or an owner or
     404,
   )
 })
+
+// The actions menu on each dashboard hub card (issue 234): its entries follow `can()`.
+const menuEntries = (page: Page, name: string) =>
+  page.getByRole('menu', { name: `Actions for ${name}` }).getByRole('menuitem')
+
+test('the hub menu lists what a hub admin may do, opens without opening the hub, and leads to the settings', async ({
+  pageAs,
+}) => {
+  const page = await pageAs('owner')
+  await page.goto('/')
+  const button = hubCard(page, 'Product').getByRole('button', { name: 'Actions for Product' })
+  await button.click()
+  await expect(menuEntries(page, 'Product')).toHaveText([
+    'Open',
+    'Settings',
+    'Folders',
+    'Attributes',
+    'Access',
+    'Agent keys',
+    'Delete hub…',
+  ])
+  await expect(page).toHaveURL(/\/$/)
+  // Keyboard, as for the settings row menus: Escape closes back to the button.
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('menu')).toHaveCount(0)
+  await expect(button).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(menuEntries(page, 'Product').first()).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(menuEntries(page, 'Product').nth(2)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(new RegExp(`${hubPath('product')}/settings/folders$`))
+  await expect(page.getByRole('heading', { level: 2, name: 'Folders' })).toBeVisible()
+})
+
+for (const [label, viewport] of [
+  ['desktop', undefined],
+  ['phone', PHONE],
+] as const) {
+  test(`a viewer's hub menu offers only Open (${label})`, async ({ pageAs }) => {
+    const page = await pageAs('ivy', viewport)
+    await page.goto('/')
+    const card = hubCard(page, 'Product')
+    const button = card.getByRole('button', { name: 'Actions for Product' })
+    await expect(button).toBeVisible()
+    // The button sits inside the card, on screen.
+    const cardBox = await card.boundingBox()
+    const buttonBox = await button.boundingBox()
+    expect(cardBox && buttonBox).toBeTruthy()
+    if (cardBox && buttonBox) {
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width)
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(
+        page.viewportSize()?.width ?? Infinity,
+      )
+    }
+    await button.click()
+    await expect(menuEntries(page, 'Product')).toHaveText(['Open'])
+    await menuEntries(page, 'Product').click()
+    await expect(page).toHaveURL(new RegExp(`${hubPath('product')}$`))
+    await expect(page.getByRole('heading', { level: 1, name: 'Product' })).toBeVisible()
+  })
+}
+
+test('an admin gives themselves access from the hub menu, and the menu then offers the hub', async ({
+  as,
+  pageAs,
+}) => {
+  const name = uniqueHubName('menu self-grant')
+  const created = await as('owner').post('/hubs', {
+    name,
+    color: 'cyan',
+    idPrefix: uniquePrefix(),
+  })
+  await expectStatus(created, 201)
+  const hub = hubListEntrySchema.parse(await created.json())
+
+  const page = await pageAs('mina')
+  await page.goto('/')
+  const card = hubCard(page, name)
+  await expect(card).toContainText('No access')
+  const button = card.getByRole('button', { name: `Actions for ${name}` })
+  await button.click()
+  await expect(menuEntries(page, name)).toHaveText(['Give myself access'])
+  await menuEntries(page, name).click()
+
+  // The existing self-grant: the card turns into a link, and focus stays on the menu button.
+  await expect(card.getByRole('link', { name: new RegExp(`^${name}\\b`) })).toBeVisible()
+  await expect(card).not.toContainText('No access')
+  await expect(button).toBeFocused()
+  expect((await hubList(as('mina'))).find((h) => h.id === hub.id)).toMatchObject({
+    access: 'granted',
+    hubRole: 'hub_admin',
+  })
+  await page.keyboard.press('Enter')
+  await expect(menuEntries(page, name).first()).toHaveText('Open')
+  await expect(menuEntries(page, name).last()).toHaveText('Delete hub…')
+})
