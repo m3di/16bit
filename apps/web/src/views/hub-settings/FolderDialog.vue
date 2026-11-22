@@ -62,7 +62,7 @@ watch(
 )
 
 const parents = computed(() => parentChoices(description, folderId))
-const title = folderId ? 'Edit folder' : 'New folder'
+const title = computed(() => (folderId ? 'Edit folder' : 'New folder'))
 
 async function submit() {
   const trimmed = name.value.trim()
