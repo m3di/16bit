@@ -348,6 +348,16 @@ describe('DataTable and ItemPanel', () => {
     expect(html).toContain('BLD-4')
     expect(html).toContain('Body')
   })
+
+  it('holds its content in a box that scrolls on its own at desktop width', async () => {
+    const html = await render(ItemPanel, { title: 'BLD-4' }, () => 'Body')
+    // One root, so a screen's class reaches the aside.
+    expect(html).toMatch(/^<aside[^>]*>[\s\S]*<\/aside>$/)
+    expect(html).toMatch(/<aside[^>]*lg:\[contain:size\]/)
+    expect(html).toMatch(
+      /<div[^>]*lg:sticky[^>]*lg:overflow-y-auto[^>]*data-item-panel-scroll[^>]*>[\s\S]*BLD-4[\s\S]*Body/,
+    )
+  })
 })
 
 const failed = (code: 'internal' | 'unauthorized' | 'forbidden' | 'not_found', status: number) =>
