@@ -53,7 +53,7 @@ attribute        (workspace_id, id, hub_id, name, type, config jsonb, indexed bo
 deleted_hub      (workspace_id, id, deleted_at, deleted_by)   -- IDs of deleted hubs (D52)
 deleted_attribute (workspace_id, id, hub_id, deleted_at, deleted_by) -- IDs of deleted attributes (#133)
 folder_attribute (workspace_id, hub_id, folder_id, attribute_id, position, required)
-item             (workspace_id, id, hub_id, folder_id, seq_id,
+item             (workspace_id, id, hub_id, folder_id, seq_id, external_key,
                   values jsonb, version bigint, updated_at, updated_by)
 item_index       (workspace_id, attribute_id, item_id, ord, num, txt, ts)   -- derived; several rows per item for multi-valued types
 link             (workspace_id, from_item, attribute_id, to_item)
@@ -77,6 +77,7 @@ folder_grant     (workspace_id, folder_id, principal_id)
 - `item.seq_id` is taken from the hub's `folder.next_seq` in the item insert transaction. Numbers are never reused.
 - `revision.client_mutation_id` (migration `0012_mutation_ids`, D59) is the UUID a client sent with the write, or null. A partial unique index, `revision_client_mutation_key (workspace_id, actor, client_mutation_id) WHERE client_mutation_id IS NOT NULL`, makes it unique per workspace and actor, so a racing retry fails with 23505 instead of applying twice. The same migration adds `item_folder_number_idx (workspace_id, folder_id, seq_id DESC)` for the `number` order (D61).
 - `revision.cause` (migration `0014_revision_cause`, D63, #197) is `{ note?, evidence?, causedBy? }` or null, the shape of `itemCauseSchema` in core. It was `text` before and never written; 0014 made any old text `{ note }`, trimmed (a blank one null), and stops on a trimmed text over 500 characters; down turns a note-only cause back into its text and any other into its JSON text. The `revision_cause_check` constraint (`revision_cause_ok(cause, seq)`, which calls `revision_cause_valid(cause)`) checks the shape: only those keys and at least one, a note of 1 to 500 characters, 1 to 10 `http`/`https` evidence URLs of at most 2,048 characters, and an integer `causedBy` below the revision's own `seq`. That `causedBy` names a revision the writer can read is the API's check.
+- `item.external_key` (migration `0015_item_external_key`, D64, #199) is the client's own key for the item, or null. `item_external_key_check` follows `externalKeySchema` in core: 1 to 200 characters (code points), no control characters, no JavaScript `\s` whitespace at either end. `item_external_key_key`, unique on `(workspace_id, hub_id, external_key) WHERE external_key IS NOT NULL`, makes it unique per hub, compared exactly; a write that breaks it fails with 23505 naming the index, which the API answers with 409 `key_taken`. The API role may update the column. Down drops the column and every key with it.
 - `attribute.hub_id` must be a hub, and `folder_attribute` joins a folder and an attribute from the same hub. Both are enforced with composite foreign keys (D10).
 - `folder.item_count` on a hub is a counter kept in the write transaction, so the main dashboard never counts items.
 
@@ -161,6 +162,8 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE /v1/items/:id`.
 
 **M0 routes.** Every route except `/health` is scoped to a workspace: `/v1/workspaces/:workspaceId/...`, so the table's `/v1/items/:id` is `/v1/workspaces/:workspaceId/items/:id`. `GET /v1/workspaces` and `GET /v1/workspaces/:workspaceId/hubs` list what the caller can see. `DELETE` takes the expected version as `?version=`. Request and response shapes are in `packages/core/src/api.ts`. A stale version returns 409 `{ error: "conflict", message, current: Item }`. A revision's `patch` is `{ op: "create", folderId, values }`, `{ op: "update", values }`, or `{ op: "delete" }`. Not yet: `POST /v1/items/get`.
+
+**External keys, batches and preconditions (#199, D64 to D66).** The contracts are in `packages/core`: `externalKeySchema` and `relationKeyRefSchema` (`external-key.ts`); `externalKey` on `itemSchema` (absent when none), `createItemSchema`, `patchItemSchema` (`null` clears) and `revisionPatchSchema`; `upsertItemSchema` for `PUT /v1/workspaces/:workspaceId/hubs/:hubId/items/by-key/:key`, whose `GET` reads by key; `condition` (`itemConditionSchema`, the query filter tree) on patch and upsert, with 412 `preconditionFailedErrorSchema`; `serverClockValueSchema`, `serverClockOffsetMs` and `resolveServerClock` (`server-clock.ts`); and `batchRequestSchema` and `batchResponseSchema` for `POST /v1/workspaces/:workspaceId/items/batch` (`batch.ts`). Each schema's comment states its rules. The routes serve them from #200 (keys), #203 (conditions and `$now`) and #202 (batch); until then `POST /items` and `PATCH /items/:itemId` refuse `externalKey` and `condition` with a 400 rather than ignore them.
 
 **Changes, `seq` and mutation IDs (#170, D58, D59).**
 

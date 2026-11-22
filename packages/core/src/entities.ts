@@ -13,6 +13,7 @@ import {
   textConfigSchema,
   urlConfigSchema,
 } from './attribute-types/index.ts'
+import { externalKeySchema } from './external-key.ts'
 import { idSchema } from './ids.ts'
 import { paletteColorSchema } from './palette.ts'
 
@@ -146,6 +147,8 @@ export const itemSchema = z.strictObject({
   folderId: idSchema,
   /** Per-hub sequence, shown with the folder's `idPrefix`, for example `BLD-12`. */
   seqId: z.int().min(1),
+  /** The item's external key (D64), unique in its hub. Absent when it has none. */
+  externalKey: externalKeySchema.optional(),
   values: itemValuesSchema,
   version: z.int().min(1),
   updatedAt: timestampSchema,

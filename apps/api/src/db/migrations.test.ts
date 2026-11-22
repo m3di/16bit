@@ -1,6 +1,6 @@
 import { sql, type Kysely } from 'kysely'
 import { Migrator, NO_MIGRATIONS } from 'kysely/migration'
-import { attributeSchema, indexEntries, PALETTE_COLORS } from '@16bit/core'
+import { attributeSchema, externalKeySchema, indexEntries, PALETTE_COLORS } from '@16bit/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createDb, migrateToLatest, type Database } from './database.ts'
 import { backfill } from './migrations/0002_item_index.ts'
@@ -120,6 +120,7 @@ describe('migrations', () => {
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
       '0014_revision_cause',
+      '0015_item_external_key',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -793,6 +794,7 @@ describe('0009_schema_writes', () => {
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
       '0014_revision_cause',
+      '0015_item_external_key',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -846,6 +848,7 @@ describe('0010_invite_update_owner', () => {
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
       '0014_revision_cause',
+      '0015_item_external_key',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -879,6 +882,7 @@ describe('0011_deleted_attribute', () => {
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
       '0014_revision_cause',
+      '0015_item_external_key',
     ])
     const backfilled = await db
       .selectFrom('deleted_attribute')
@@ -940,6 +944,7 @@ describe('0012_mutation_ids', () => {
       '0012_mutation_ids',
       '0013_hub_prefix_unique',
       '0014_revision_cause',
+      '0015_item_external_key',
     ])
     // Existing revisions carry no ID.
     expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
@@ -1036,7 +1041,11 @@ describe('0013_hub_prefix_unique', () => {
 
     await sql`UPDATE folder SET id_prefix = 'NEW' WHERE workspace_id = 'w1' AND hub_id = 'h3';
               DELETE FROM folder WHERE workspace_id = 'w1' AND id IN ('h4', 'h5')`.execute(db)
-    expect(await migrateToLatest(db)).toEqual(['0013_hub_prefix_unique', '0014_revision_cause'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0013_hub_prefix_unique',
+      '0014_revision_cause',
+      '0015_item_external_key',
+    ])
 
     expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
     await hub('w1', 'h6', 'BLD')
@@ -1115,7 +1124,7 @@ describe('0014_revision_cause', () => {
     await revision(6, `  ${long}\n`)
     await revision(7, '\u00a0 padded\t')
 
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
     const migrated = [
       [1, { note: 'from the old column' }],
       [2, null],
@@ -1150,7 +1159,7 @@ describe('0014_revision_cause', () => {
     expect(functions[0]?.n).toBe(0)
 
     // Up again gives the same causes.
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
     expect(await causes()).toEqual(migrated)
 
     // A structured cause survives down as JSON text, which up then reads as a note.
@@ -1159,7 +1168,7 @@ describe('0014_revision_cause', () => {
     expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
     const json = '{"causedBy": 1, "evidence": ["https://e.example/1"]}'
     expect((await causes())[2]).toEqual([3, json])
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
     expect((await causes())[2]).toEqual([3, { note: json }])
   })
 
@@ -1173,7 +1182,7 @@ describe('0014_revision_cause', () => {
       'revision.cause becomes a note of at most 500 characters (D63); 1 revisions have a longer one',
     )
     await sql`UPDATE revision SET cause = 'short'`.execute(db)
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause'])
+    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
   })
 
   describe('on the latest schema', () => {
@@ -1218,6 +1227,140 @@ describe('0014_revision_cause', () => {
         code: '23514',
         constraint: 'revision_cause_check',
       })
+    })
+  })
+})
+
+describe('0015_item_external_key', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+  const item = (id: string, seq: number, key: string | null, hub = 'h1', folder = 'f1') =>
+    sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by,
+                          external_key)
+        VALUES ('w1', ${id}, ${hub}, ${folder}, ${seq}, '{}', 'p1', ${key})`.execute(db)
+  const columns = async () => {
+    const { rows } = await sql<{ name: string }>`
+      SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'item'
+    `.execute(db)
+    return rows.map((r) => r.name)
+  }
+
+  it('applies to a database migrated to 0014 with items, and migrates down and up again', async () => {
+    expect((await migrator().migrateTo('0014_revision_cause')).error).toBeUndefined()
+    await seedHub()
+    await sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+              VALUES ('w1', 'i1', 'h1', 'f1', 1, '{"a":1}', 'p1')`.execute(db)
+
+    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key'])
+    const keys = () =>
+      db.selectFrom('item').select(['id', 'external_key', 'values']).orderBy('id').execute()
+    expect(await keys()).toEqual([{ id: 'i1', external_key: null, values: { a: 1 } }])
+    await item('i2', 2, 'src/app.ts')
+
+    // Down drops the keys written since; the items stay.
+    expect((await migrator().migrateTo('0014_revision_cause')).error).toBeUndefined()
+    expect(await columns()).not.toContain('external_key')
+    const { rows } = await sql<{ n: number }>`
+      SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'item_external_key_key'
+    `.execute(db)
+    expect(rows[0]?.n).toBe(0)
+    expect(await db.selectFrom('item').select('id').orderBy('id').execute()).toEqual([
+      { id: 'i1' },
+      { id: 'i2' },
+    ])
+
+    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key'])
+    expect((await keys()).map((r) => r.external_key)).toEqual([null, null])
+    await item('i3', 3, 'src/app.ts')
+  })
+
+  describe('on the latest schema', () => {
+    beforeEach(async () => {
+      await migrateToLatest(db)
+      await seedHub()
+    })
+
+    // Each key is checked by core and by the constraint, which must agree.
+    const keys: [string, string, boolean][] = [
+      ['a path', 'src/app.ts', true],
+      ['one character', 'a', true],
+      ['200 characters', 'k'.repeat(200), true],
+      ['200 code points of 2 UTF-16 units each', '😀'.repeat(200), true],
+      ['inner spaces', 'my file.ts', true],
+      ['an inner line separator', 'a\u2028b', true],
+      ['a zero-width space, which is not whitespace', '\u200ba', true],
+      ['a key that differs only by case', 'SRC/APP.TS', true],
+      ['empty', '', false],
+      ['201 characters', 'k'.repeat(201), false],
+      ['201 code points', '😀'.repeat(201), false],
+      ['a leading space', ' a', false],
+      ['a trailing space', 'a ', false],
+      ['a leading no-break space', '\u00a0a', false],
+      ['a trailing byte order mark', 'a\ufeff', false],
+      ['a leading ideographic space', '\u3000a', false],
+      ['a trailing line separator', 'a\u2028', false],
+      ['a tab inside', 'a\tb', false],
+      ['a newline inside', 'a\nb', false],
+      ['DEL inside', 'a\u007fb', false],
+      ['a C1 control inside', 'a\u0085b', false],
+    ]
+
+    it.each(keys)('agrees with core on %s', async (_, key, valid) => {
+      expect(externalKeySchema.safeParse(key).success).toBe(valid)
+      const insert = item('i1', 1, key)
+      if (valid) await insert
+      else {
+        await expect(insert).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'item_external_key_check',
+        })
+      }
+    })
+
+    it('makes a key unique per hub, compared exactly, and frees it with its item', async () => {
+      await item('i1', 1, 'k')
+      await expect(item('i2', 2, 'k', 'h1', 'h1')).rejects.toMatchObject({
+        code: '23505',
+        constraint: 'item_external_key_key',
+      })
+      // Another hub, another case, another normalisation, and no key are all fine.
+      await item('i3', 1, 'k', 'h2', 'h2')
+      await item('i4', 3, 'K')
+      await item('i5', 4, '\u00c4')
+      await item('i6', 5, 'A\u0308')
+      await item('i7', 6, null)
+      await item('i8', 7, null)
+      await sql`DELETE FROM item WHERE workspace_id = 'w1' AND id = 'i1'`.execute(db)
+      await item('i9', 8, 'k')
+      await sql`UPDATE item SET external_key = NULL WHERE id = 'i9'`.execute(db)
+      await sql`UPDATE item SET external_key = 'k' WHERE id = 'i7'`.execute(db)
+    })
+
+    it('allows the same key in another workspace', async () => {
+      await item('i1', 1, 'k')
+      await sql`INSERT INTO workspace (id, name) VALUES ('w2', 'Second')`.execute(db)
+      await sql`INSERT INTO principal (workspace_id, id, kind, name, workspace_role)
+                VALUES ('w2', 'p1', 'user', 'Owner', 'owner')`.execute(db)
+      await sql`INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix)
+                VALUES ('w2', 'h1', 'h1', NULL, 'Build', 'blue', 'BLD')`.execute(db)
+      await sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values,
+                                  updated_by, external_key)
+                VALUES ('w2', 'i1', 'h1', 'h1', 1, '{}', 'p1', 'k')`.execute(db)
+    })
+
+    it('lets the API role update the key, besides the columns it already updated', async () => {
+      const { rows } = await sql<{ column: string }>`
+        SELECT column_name AS column FROM information_schema.column_privileges
+        WHERE table_name = 'item' AND grantee = 'sixteenbit_app' AND privilege_type = 'UPDATE'
+        ORDER BY column_name
+      `.execute(db)
+      expect(rows.map((r) => r.column)).toEqual([
+        'external_key',
+        'updated_at',
+        'updated_by',
+        'values',
+        'version',
+      ])
     })
   })
 })

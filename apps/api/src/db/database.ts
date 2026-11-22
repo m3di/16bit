@@ -134,6 +134,8 @@ export interface ItemTable {
   hub_id: string
   folder_id: string
   seq_id: number
+  /** The item's external key (D64), unique per hub; null when it has none. */
+  external_key: string | null
   values: Json<ItemValues>
   version: Generated<number>
   updated_at: Timestamp
