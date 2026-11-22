@@ -142,7 +142,7 @@ const folderMenus = computed(() => {
   const d = schemaDescription.value
   return managesSchema.value && d ? (f: Folder) => folderActions(d, f) : undefined
 })
-const folderActionsRef = useTemplateRef<InstanceType<typeof FolderActions>>('folderActions')
+const folderActionsRef = useTemplateRef<InstanceType<typeof FolderActions>>('folderActionsDialogs')
 function onFolderAction(f: Folder, key: FolderActionKey) {
   folderActionsRef.value?.run(f, key)
 }
@@ -340,7 +340,7 @@ async function submitCreate(values: ItemValues) {
       </p>
       <FolderActions
         v-if="schemaDescription && managesSchema"
-        ref="folderActions"
+        ref="folderActionsDialogs"
         :description="schemaDescription"
         :model="schema"
         @status="onSidebarStatus"

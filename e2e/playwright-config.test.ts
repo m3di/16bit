@@ -20,6 +20,18 @@ describe('playwright config', () => {
     expect(ignore.test('large-folder.spec.ts')).toBe(false)
   })
 
+  it('runs the production specs on the production build, and not on the dev server', () => {
+    const projects = config.projects ?? []
+    const production = projects.find((p) => p.name === 'production')
+    const budgets = projects.find((p) => p.name === 'budgets')
+    const chromium = projects.find((p) => p.name === 'chromium')
+    const match = production?.testMatch as RegExp
+    expect(match.test('hub-sidebar-production.spec.ts')).toBe(true)
+    expect(match.test('hub-sidebar.spec.ts')).toBe(false)
+    expect((chromium?.testIgnore as RegExp).test('hub-sidebar-production.spec.ts')).toBe(true)
+    expect(production?.use?.baseURL).toBe(budgets?.use?.baseURL)
+  })
+
   it('measures the budgets on the production build, served by the API (issue 218)', () => {
     const budgets = (config.projects ?? []).find((p) => p.name === 'budgets')
     const servers = Array.isArray(config.webServer) ? config.webServer : []
