@@ -195,7 +195,7 @@ describe('FolderSidebar', () => {
     expect(html).toContain('padding-left:20px')
   })
 
-  it("reads the root as the hub's own items, with its own count, and nests the folders", async () => {
+  it('shows the root as the hub, read as its own items, with its own count, and nests the folders', async () => {
     const product = {
       ...description,
       hub: { ...description.hub, itemCount: 1200 },
@@ -210,7 +210,9 @@ describe('FolderSidebar', () => {
     const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
     expect(root).toContain('href="/w/w/hubs/bld"')
     expect(root).toContain('aria-current="page"')
-    expect(root).toContain('Items in Build')
+    expect(root).toContain('aria-label="Build, items in the hub itself, 300 items"')
+    expect(root).not.toContain('Items in')
+    expect(root).toMatch(/>Build</)
     expect(root).toMatch(/aria-label="300 items"[^>]*>300</)
     // Every other folder is in a list inside the root's entry, under a hairline guide.
     const nested = /data-folder-root[^>]*>.*?<\/a>.*?<ul [^>]*border-l[^>]*>(.*?)<\/ul>/s.exec(
@@ -229,7 +231,7 @@ describe('FolderSidebar', () => {
       folderId: 'bld',
     })
     const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
-    expect(root).toContain('Items in Build')
+    expect(root).toContain('aria-label="Build, items in the hub itself"')
     expect(root).not.toContain('data-folder-count')
     expect(html.match(/data-folder-count/g)).toHaveLength(3)
   })

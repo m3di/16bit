@@ -24,6 +24,14 @@ const folders = computed(() => entries.value.filter((e) => e !== root.value))
 const format = new Intl.NumberFormat('en')
 const countLabel = (n: number) => (n === 1 ? '1 item' : `${format.format(n)} items`)
 
+// Shown as just the hub's name; the nesting says the rest. Read out as the hub's own items.
+const rootLabel = (entry: FolderEntry) =>
+  [
+    entry.folder.name,
+    'items in the hub itself',
+    ...(entry.ownCount === null ? [] : [countLabel(entry.ownCount)]),
+  ].join(', ')
+
 const linkTo = (entry: FolderEntry) => ({
   name: 'hub',
   params: {
@@ -51,6 +59,7 @@ const linkClass =
           :to="linkTo(root)"
           :aria-current="currentOf(root)"
           :class="[linkClass, 'pl-2', root.folder.id === folderId && 'bg-selected font-medium']"
+          :aria-label="rootLabel(root)"
           data-folder-link
           data-folder-root
         >
@@ -59,7 +68,7 @@ const linkClass =
             class="size-2 shrink-0"
             :style="{ background: paletteVar(root.folder.color) }"
           />
-          <span class="min-w-0 flex-1 truncate">Items in {{ root.folder.name }}</span>
+          <span class="min-w-0 flex-1 truncate">{{ root.folder.name }}</span>
           <span
             v-if="root.ownCount !== null"
             class="text-caption text-ink3 tabular-nums"

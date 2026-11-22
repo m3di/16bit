@@ -24,6 +24,11 @@ function folderLink(page: Page, name: string | RegExp) {
   return sidebar(page).getByRole('link', { name })
 }
 
+/** The hub's root folder: shown as the hub's name, read as the hub's own items. */
+function rootLink(page: Page, hubName: string) {
+  return folderLink(page, new RegExp(`^${hubName}, items in the hub itself`))
+}
+
 /** Product's own items as the API counts them: its total less its folders'. */
 async function productOwnCount(client: Client): Promise<number> {
   const res = await client.get('/hubs/product')
@@ -44,10 +49,12 @@ test("the demo Product hub shows the root's own count, not the hub's total", asy
   for (const viewport of [undefined, PHONE]) {
     const page = await pageAs('ivy', viewport)
     await page.goto(hubPath('product'))
-    const root = folderLink(page, /^Items in Product/)
+    const root = rootLink(page, 'Product')
     await expect(async () => {
       const own = new Intl.NumberFormat('en').format(await productOwnCount(ivy))
-      await expect(root).toHaveAccessibleName(`Items in Product ${own} items`, { timeout: 1000 })
+      await expect(root).toHaveAccessibleName(`Product, items in the hub itself, ${own} items`, {
+        timeout: 1000,
+      })
       await expect(page.locator('[data-count]')).toHaveText(`${own} items`, { timeout: 1000 })
     }).toPass()
     await expect(root).toHaveAttribute('aria-current', 'page')
@@ -59,7 +66,7 @@ test("the demo Product hub shows the root's own count, not the hub's total", asy
     // The folders are nested inside the root's entry, so they read as the hub's.
     const rootEntry = sidebar(page)
       .getByRole('listitem')
-      .filter({ has: page.getByRole('link', { name: /^Items in Product/ }) })
+      .filter({ has: page.getByRole('link', { name: /^Product, items in the hub itself/ }) })
       .first()
     await expect(rootEntry.getByRole('list').getByRole('link')).toHaveCount(3)
     await page.close()
@@ -99,24 +106,24 @@ test("a create or delete in the root moves only the root's count, live", async (
   )
   const page = await pageWithSession(viewer.sid)
   await page.goto(hubPath(hub.id))
-  const root = folderLink(page, new RegExp(`^Items in ${hub.name}`))
+  const root = rootLink(page, hub.name)
   const folder = folderLink(page, /^Backlog/)
-  await expect(root).toHaveAccessibleName(`Items in ${hub.name} 1 item`)
+  await expect(root).toHaveAccessibleName(`${hub.name}, items in the hub itself, 1 item`)
   await expect(folder).toHaveAccessibleName('Backlog 2 items')
 
   const item = await owner.createItem(hub.id, {})
-  await expect(root).toHaveAccessibleName(`Items in ${hub.name} 2 items`)
+  await expect(root).toHaveAccessibleName(`${hub.name}, items in the hub itself, 2 items`)
   await expect(page.locator('[data-count]')).toHaveText('2 items')
   await expect(folder).toHaveAccessibleName('Backlog 2 items')
 
   await expectStatus(await owner.delete(`/items/${item.id}?version=${String(item.version)}`), 204)
-  await expect(root).toHaveAccessibleName(`Items in ${hub.name} 1 item`)
+  await expect(root).toHaveAccessibleName(`${hub.name}, items in the hub itself, 1 item`)
   await expect(folder).toHaveAccessibleName('Backlog 2 items')
 
   // A create in the folder moves the folder's count and leaves the root's.
   await owner.createItem(backlog.id, {})
   await expect(folder).toHaveAccessibleName('Backlog 3 items')
-  await expect(root).toHaveAccessibleName(`Items in ${hub.name} 1 item`)
+  await expect(root).toHaveAccessibleName(`${hub.name}, items in the hub itself, 1 item`)
 
   // A burst of creates and deletes in the root, faster than the sidebar reads counts, ends on
   // the API's numbers: no change is lost between reads.
@@ -130,7 +137,7 @@ test("a create or delete in the root moves only the root's count, live", async (
   await expectStatus(res, 200)
   const d = hubDescriptionSchema.parse(await res.json())
   expect(d.hub.itemCount - d.folders.reduce((sum, f) => sum + f.itemCount, 0)).toBe(4)
-  await expect(root).toHaveAccessibleName(`Items in ${hub.name} 4 items`)
+  await expect(root).toHaveAccessibleName(`${hub.name}, items in the hub itself, 4 items`)
   await expect(page.locator('[data-count]')).toHaveText('4 items')
   await expect(folder).toHaveAccessibleName('Backlog 3 items')
 })
