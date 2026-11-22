@@ -68,8 +68,29 @@ export function useFillHeight(target: Ref<HTMLElement | null>, min: number): Ref
       below,
       min,
     })
-    // A notice or folder list that appeared since the last time is watched from now on.
-    for (const source of layoutSources(el)) observer?.observe(source)
+    watch(layoutSources(el))
+  }
+
+  // `observe()` on an element already observed starts its observation over, which reports it
+  // again and would measure on every frame. So only new elements are observed: a notice or a
+  // folder list that appeared since the last time. One that left (reported once with size zero
+  // when removed) is let go.
+  const observed = new Set<Element>()
+  function watch(sources: Element[]) {
+    if (!observer) return
+    const now = new Set(sources)
+    for (const el of observed) {
+      if (!now.has(el)) {
+        observer.unobserve(el)
+        observed.delete(el)
+      }
+    }
+    for (const el of now) {
+      if (!observed.has(el)) {
+        observer.observe(el)
+        observed.add(el)
+      }
+    }
   }
   function schedule() {
     if (!frame) frame = requestAnimationFrame(measure)
@@ -82,6 +103,7 @@ export function useFillHeight(target: Ref<HTMLElement | null>, min: number): Ref
   })
   onBeforeUnmount(() => {
     observer?.disconnect()
+    observed.clear()
     window.removeEventListener('resize', schedule)
     if (frame) cancelAnimationFrame(frame)
   })

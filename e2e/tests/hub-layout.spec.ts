@@ -84,6 +84,22 @@ test('the table keeps reaching the bottom with the item panel open', async ({ pa
   await expectFillsViewport(page)
 })
 
+test('at phone width with the item panel open, the table still reaches the bottom and the panel follows it', async ({
+  page,
+}) => {
+  await page.setViewportSize(PHONE)
+  await open(page, BUGS, 'Bugs')
+  await page.locator('[data-item-link]').first().click()
+  const panel = page.locator('[data-item-panel]')
+  await expect(panel).toBeVisible()
+  // Measured in page coordinates: opening the panel scrolls the page down to it.
+  await expectFillsViewport(page)
+  const panelTop = await panel.evaluate((el) => el.getBoundingClientRect().top + window.scrollY)
+  const { box } = await layout(page)
+  // The panel stacks under the items area, after main's bottom padding.
+  expect(panelTop).toBeGreaterThanOrEqual((box ?? Infinity) + PAGE_PADDING - 1)
+})
+
 test('the table follows the window when it is resized', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await open(page, BUGS, 'Bugs')
