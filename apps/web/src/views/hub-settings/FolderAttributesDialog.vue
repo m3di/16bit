@@ -33,11 +33,14 @@ interface Row {
 
 const id = useId()
 const root = useTemplateRef<HTMLElement>('root')
-const folder = computed<Folder | null>(() =>
+const current = (): Folder | null =>
   folderId === description.hub.id
     ? description.hub
-    : (description.folders.find((f) => f.id === folderId) ?? null),
-)
+    : (description.folders.find((f) => f.id === folderId) ?? null)
+// The folder as it was when the dialog opened: its version goes with the save, so a change made
+// meanwhile (the hub page reads the hub again live) is a 409, never silently overwritten. Only a
+// conflict moves it on, to the version the page now shows.
+const folder = ref<Folder | null>(null)
 const byId = computed(() => new Map(description.attributes.map((a) => [a.id, a])))
 
 const nameOf = (attributeId: string) => byId.value.get(attributeId)?.name ?? 'Unknown attribute'
@@ -65,6 +68,7 @@ watch(
   open,
   (isOpen) => {
     if (!isOpen) return
+    folder.value = current()
     reset()
     attach.value = ''
     error.value = ''
@@ -118,6 +122,7 @@ async function dryRun(mine: number) {
   } else if (result.kind === 'conflict') {
     // The reader's draft stays: they are still editing. The page now holds the newer version,
     // so count again against it, and say that saving will replace the other change.
+    folder.value = current()
     error.value =
       'Someone else changed the attributes of this folder while you were editing. Saving now replaces their version with yours; cancel to see theirs.'
     scheduleDryRun()
@@ -178,7 +183,10 @@ async function save() {
     return
   }
   error.value = result.message
-  if (result.kind === 'conflict') reset()
+  if (result.kind === 'conflict') {
+    folder.value = current()
+    reset()
+  }
 }
 
 const title = computed(() => `Attributes in ${folder.value?.name ?? 'this folder'}`)
