@@ -92,6 +92,38 @@ export function deleteBlockedReason(description: HubDescription, folder: Folder)
   return ''
 }
 
+/** The key of each folder action, as `FolderActions` runs them. */
+export type FolderActionKey = 'edit' | 'attributes' | 'new' | 'delete'
+
+/** One entry of a folder's actions menu (a `RowAction` of RowActionsMenu). */
+export interface FolderAction {
+  key: FolderActionKey
+  label: string
+  danger?: boolean
+  disabled?: boolean
+  reason?: string
+}
+
+/**
+ * A folder's actions menu, the same in settings and the hub page's sidebar. The hub's root folder
+ * is renamed in general settings and deleted from the danger zone, so it offers neither.
+ */
+export function folderActions(description: HubDescription, folder: Folder): FolderAction[] {
+  if (folder.id === description.hub.id) {
+    return [
+      { key: 'attributes', label: 'Attributes' },
+      { key: 'new', label: 'New folder inside' },
+    ]
+  }
+  const blocked = deleteBlockedReason(description, folder)
+  return [
+    { key: 'edit', label: 'Rename, recolour or move' },
+    { key: 'attributes', label: 'Attributes' },
+    { key: 'new', label: 'New folder inside' },
+    { key: 'delete', label: 'Delete folder', danger: true, disabled: !!blocked, reason: blocked },
+  ]
+}
+
 /** Names of the folders (and the hub) that show an attribute, in tree order. */
 export function usedIn(description: HubDescription, attributeId: string): string[] {
   const shown = new Set(

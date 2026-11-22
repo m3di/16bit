@@ -1,10 +1,18 @@
 <script setup lang="ts">
-import { MAX_EXPAND_ATTRIBUTES, type HubDescription, type Item, type ItemValues } from '@16bit/core'
+import {
+  MAX_EXPAND_ATTRIBUTES,
+  type Folder,
+  type HubDescription,
+  type Item,
+  type ItemValues,
+} from '@16bit/core'
 import { ApiRequestError } from '../../api/client.ts'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, toRaw, useTemplateRef, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useSession } from '../../session/session.ts'
-import { canManageSchema } from '../hub-settings/schema.ts'
+import FolderActions from '../hub-settings/FolderActions.vue'
+import { canManageSchema, folderActions, type FolderActionKey } from '../hub-settings/schema.ts'
+import { useHubSettings } from '../hub-settings/useHubSettings.ts'
 import { viewerOf } from '../hub-settings/access.ts'
 import ShellUser from '../../session/ShellUser.vue'
 import ConnectionStatus from '../../sync/ConnectionStatus.vue'
@@ -114,6 +122,47 @@ const managesSchema = computed(() => {
   const me = session.me.value
   return !!d && me.state === 'ready' && canManageSchema(me.data, workspaceId, d.hubRole)
 })
+// The sidebar's folder menus, as in Hub settings → Folders, for those who may change the schema.
+// Writes go through the settings model, on a copy of this page's description; after one the page
+// reads the hub again, so the sidebar and the open folder show the change without a reload.
+const schema = useHubSettings(workspaceId, hubId)
+watch(
+  description,
+  (d) => {
+    schema.hub.value = d
+      ? { state: 'ready', data: structuredClone(toRaw(d)) }
+      : { state: 'loading' }
+  },
+  { immediate: true },
+)
+const schemaDescription = computed(() =>
+  schema.hub.value.state === 'ready' ? schema.hub.value.data : null,
+)
+const folderMenus = computed(() => {
+  const d = schemaDescription.value
+  return managesSchema.value && d ? (f: Folder) => folderActions(d, f) : undefined
+})
+const folderActionsRef = useTemplateRef<InstanceType<typeof FolderActions>>('folderActions')
+function onFolderAction(f: Folder, key: FolderActionKey) {
+  folderActionsRef.value?.run(f, key)
+}
+function onFolderChanged(deleted: Folder | null) {
+  void refreshHub()
+  // The open folder is gone: show the hub's own items instead.
+  if (deleted?.id === openFolderId.value) {
+    void router.push({ name: 'hub', params: { workspaceId, hubId } })
+  }
+}
+// What the last folder action did. Focused after a delete, since the row that had focus is gone.
+const sidebarStatus = ref('')
+const sidebarStatusEl = useTemplateRef<HTMLElement>('sidebarStatus')
+async function onSidebarStatus(text: string, focus: boolean) {
+  sidebarStatus.value = text
+  if (!focus) return
+  await nextTick()
+  sidebarStatusEl.value?.focus()
+}
+
 // Owners and admins also manage access, agent keys and deletion there (docs/ROLES.md).
 const opensSettings = computed(() => {
   const me = session.me.value
@@ -277,6 +326,25 @@ async function submitCreate(values: ItemValues) {
         :hub-name="description?.hub.name ?? null"
         :tree="treeLoad"
         :folder-id="openFolderId"
+        :actions-for="folderMenus"
+        @action="onFolderAction"
+      />
+      <p
+        ref="sidebarStatus"
+        tabindex="-1"
+        role="status"
+        class="m-0 px-2 pt-2 text-secondary text-ink2 outline-none empty:hidden"
+        data-sidebar-status
+      >
+        {{ sidebarStatus }}
+      </p>
+      <FolderActions
+        v-if="schemaDescription && managesSchema"
+        ref="folderActions"
+        :description="schemaDescription"
+        :model="schema"
+        @status="onSidebarStatus"
+        @changed="onFolderChanged"
       />
     </template>
 

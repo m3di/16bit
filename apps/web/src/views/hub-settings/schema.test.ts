@@ -7,6 +7,7 @@ import {
   canManageSchema,
   deleteBlockedReason,
   descendantIds,
+  folderActions,
   emptyDraft,
   nextFolderColor,
   parentChoices,
@@ -66,6 +67,28 @@ describe('the folder tree', () => {
     expect(deleteBlockedReason(d, f('sprints'))).toBe('It still holds folders.')
     expect(deleteBlockedReason(d, f('sprint-1'))).toBe('')
     expect(deleteBlockedReason(d, d.hub)).toMatch(/danger zone/)
+  })
+
+  it("gives every folder the settings menu, and the hub's root only its two entries", () => {
+    const d = description()
+    const keys = (id: string) => {
+      const found = id === d.hub.id ? d.hub : d.folders.find((x) => x.id === id)
+      if (!found) throw new Error(id)
+      return folderActions(d, found)
+    }
+    expect(keys(d.hub.id).map((a) => a.label)).toEqual(['Attributes', 'New folder inside'])
+    expect(keys('sprint-1').map((a) => a.label)).toEqual([
+      'Rename, recolour or move',
+      'Attributes',
+      'New folder inside',
+      'Delete folder',
+    ])
+    expect(keys('sprint-1').at(-1)).toMatchObject({ danger: true, disabled: false, reason: '' })
+    // Not empty: disabled, with the same reason as in settings (D52).
+    expect(keys('backlog').at(-1)).toMatchObject({
+      disabled: true,
+      reason: 'It still holds items.',
+    })
   })
 
   it('lists where an attribute is shown, in tree order', () => {
