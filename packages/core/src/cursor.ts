@@ -102,6 +102,28 @@ function base64urlDecode(text: string): number[] | null {
 export const ITEM_CURSOR_ORDERS = ['updated', 'number', 'sort'] as const
 export type ItemCursorOrder = (typeof ITEM_CURSOR_ORDERS)[number]
 
+/**
+ * Characters of a text sort value that order an item query, and so ride in its cursor: the
+ * prefix `item_index_txt_idx` holds, in code points (Postgres `left`). Text values that agree
+ * on it tie, and fall to the next sort key, then the ID (#185).
+ */
+export const SORT_TEXT_PREFIX = 256
+
+/** Longest ID in a cursor. */
+const MAX_CURSOR_ID_LENGTH = 64
+
+// The JSON of the longest sort cursor: `["sort",`, then per key a string of SORT_TEXT_PREFIX code
+// points at 6 bytes each (a `\u001f` escape; a code point is at most 4 bytes of UTF-8), two
+// quotes and a comma, then the quoted ID and `]`. Numbers are far shorter than a text key.
+const MAX_ITEM_CURSOR_JSON_BYTES =
+  '["sort",'.length + MAX_SORT_KEYS * (SORT_TEXT_PREFIX * 6 + 3) + MAX_CURSOR_ID_LENGTH + 3
+
+/** Longest cursor `encodeItemCursor` makes (6,256 characters): its base64url length, unpadded. */
+export const MAX_ITEM_CURSOR_LENGTH = Math.ceil((MAX_ITEM_CURSOR_JSON_BYTES * 4) / 3)
+
+// A text key is cut to SORT_TEXT_PREFIX code points (up to twice that in UTF-16), but older
+// cursors carried the whole value; the API cuts them as it reads them. The length cap above
+// bounds the whole cursor either way.
 const cursorKeySchema = z.union([z.string().max(20_000), z.number(), z.null()])
 
 /**
@@ -112,7 +134,7 @@ const cursorKeySchema = z.union([z.string().max(20_000), z.number(), z.null()])
 export const itemCursorSchema = z.discriminatedUnion('order', [
   z.strictObject({
     order: z.literal('updated'),
-    after: z.tuple([z.iso.datetime(), z.string().min(1).max(64)]),
+    after: z.tuple([z.iso.datetime(), z.string().min(1).max(MAX_CURSOR_ID_LENGTH)]),
   }),
   z.strictObject({ order: z.literal('number'), after: z.tuple([z.int().min(1)]) }),
   z.strictObject({
