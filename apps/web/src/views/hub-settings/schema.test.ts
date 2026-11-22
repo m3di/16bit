@@ -79,7 +79,7 @@ describe('the folder tree', () => {
     }
     expect(keys(d.hub.id).map((a) => a.label)).toEqual(['Attributes', 'New folder inside'])
     expect(keys('sprint-1').map((a) => a.label)).toEqual([
-      'Rename, recolour or move',
+      'Edit folder',
       'Attributes',
       'New folder inside',
       'Delete folder',

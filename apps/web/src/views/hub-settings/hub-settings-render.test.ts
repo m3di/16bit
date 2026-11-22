@@ -206,7 +206,7 @@ describe('FolderDialog', () => {
       folderId: 'sprints',
       model,
     })
-    expect(html).toContain('Edit Sprints')
+    expect(html).toContain('Edit folder')
     expect(html).toMatch(/value="Sprints"/)
     const parents = [...html.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1])
     expect(parents).toEqual([HUB, 'backlog'])
