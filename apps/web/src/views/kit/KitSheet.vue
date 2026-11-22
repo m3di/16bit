@@ -13,6 +13,7 @@ import {
   SizeMeter,
   StateBlock,
   StatusDot,
+  ThemeGlyph,
   paletteVar,
   type RowWindows,
   type TableColumn,
@@ -189,6 +190,20 @@ onScopeDispose(() => {
         <BaseButton variant="primary" disabled>Disabled</BaseButton>
         <BaseButton disabled>Disabled</BaseButton>
         <BaseButton variant="quiet" disabled>Disabled</BaseButton>
+      </div>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <h3 class="m-0 border-b border-line pb-2 text-body font-medium">Theme switch</h3>
+      <div class="flex flex-wrap items-center gap-6">
+        <span class="inline-flex items-center gap-2 text-ink3">
+          <ThemeGlyph name="moon" />
+          <span class="text-secondary">Moon, shown in light mode</span>
+        </span>
+        <span class="inline-flex items-center gap-2 text-ink3">
+          <ThemeGlyph name="sun" />
+          <span class="text-secondary">Sun, shown in dark mode</span>
+        </span>
       </div>
     </section>
 

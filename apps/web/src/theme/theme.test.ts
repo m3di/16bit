@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import indexHtml from '../../index.html?raw'
-import { parsePreference, resolveTheme, THEME_STORAGE_KEY } from './theme.ts'
+import { oppositeTheme, parsePreference, resolveTheme, THEME_STORAGE_KEY } from './theme.ts'
 
 describe('theme', () => {
   it('follows the system only when the preference is system', () => {
@@ -9,6 +9,11 @@ describe('theme', () => {
     expect(resolveTheme('system', false)).toBe('light')
     expect(resolveTheme('light', true)).toBe('light')
     expect(resolveTheme('dark', false)).toBe('dark')
+  })
+
+  it('switches to the opposite theme', () => {
+    expect(oppositeTheme('light')).toBe('dark')
+    expect(oppositeTheme('dark')).toBe('light')
   })
 
   it('reads unknown stored values as system', () => {
@@ -157,6 +162,42 @@ describe('startTheme', () => {
 
     useTheme().preference.value = 'light'
     await nextTick()
+    expect(b.htmlClass()).toBe('theme-light')
+  })
+
+  it('toggle saves the opposite of the system theme on the first click', async () => {
+    const b = fakeBrowser({ dark: true })
+    const { startTheme, useTheme } = await freshTheme()
+    startTheme()
+    expect(b.store.has(THEME_STORAGE_KEY)).toBe(false)
+
+    useTheme().toggle()
+    await nextTick()
+    expect(useTheme().preference.value).toBe('light')
+    expect(b.store.get(THEME_STORAGE_KEY)).toBe('light')
+    expect(b.htmlClass()).toBe('theme-light')
+
+    // The choice is explicit now, so the system no longer moves it.
+    b.setSystemDark(false)
+    b.setSystemDark(true)
+    expect(b.htmlClass()).toBe('theme-light')
+  })
+
+  it('toggle flips a saved choice back and forth', async () => {
+    const b = fakeBrowser({ stored: 'light', dark: true })
+    const { startTheme, useTheme } = await freshTheme()
+    startTheme()
+    const { toggle, theme } = useTheme()
+
+    toggle()
+    await nextTick()
+    expect(theme.value).toBe('dark')
+    expect(b.store.get(THEME_STORAGE_KEY)).toBe('dark')
+
+    toggle()
+    await nextTick()
+    expect(theme.value).toBe('light')
+    expect(b.store.get(THEME_STORAGE_KEY)).toBe('light')
     expect(b.htmlClass()).toBe('theme-light')
   })
 
