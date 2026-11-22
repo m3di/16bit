@@ -44,8 +44,8 @@ test('the sidebar menu entries open their dialogs and save on the production bui
 
   await page.goto(hubPath(hub.id))
   await sidebar(page).getByRole('button', { name: 'Actions for Backlog', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Rename, recolour or move' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Edit Backlog' })
+  await page.getByRole('menuitem', { name: 'Edit folder' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit folder' })
   await dialog.getByLabel('Name').fill('Queue')
   await dialog.getByRole('button', { name: 'Save folder' }).click()
   await expect(dialog).toBeHidden()

@@ -213,7 +213,7 @@ test('a hub admin changes folders from the sidebar, as in settings', async ({ pa
   // A folder's menu: the four entries of settings.
   await menuButton(page, 'Planning').click()
   await expect(page.getByRole('menuitem')).toHaveText([
-    'Rename, recolour or move',
+    'Edit folder',
     'Attributes',
     'New folder inside',
     'Delete folder',
@@ -232,8 +232,8 @@ test('a hub admin changes folders from the sidebar, as in settings', async ({ pa
   // Rename it and move it up to the hub, while it is the open folder.
   await folderLink(page, /^Sprint 1/).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sprint 1')
-  await sidebarMenu(page, 'Sprint 1', 'Rename, recolour or move')
-  dialog = page.getByRole('dialog', { name: 'Edit Sprint 1' })
+  await sidebarMenu(page, 'Sprint 1', 'Edit folder')
+  dialog = page.getByRole('dialog', { name: 'Edit folder' })
   await dialog.getByLabel('Name').fill('Iteration 1')
   await dialog.getByLabel('Inside').selectOption(hub.id)
   await dialog.getByRole('button', { name: 'Save folder' }).click()
@@ -377,10 +377,9 @@ test('a rename made while the sidebar dialog is open is a conflict, not overwrit
   const backlog = folderSchema.parse(await folderRes.json())
 
   await page.goto(hubPath(hub.id))
-  await sidebarMenu(page, 'Backlog', 'Rename, recolour or move')
-  // After the conflict it is named for their version, so it is found by role alone.
+  await sidebarMenu(page, 'Backlog', 'Edit folder')
   const dialog = page.getByRole('dialog')
-  await expect(dialog).toHaveAccessibleName('Edit Backlog')
+  await expect(dialog).toHaveAccessibleName('Edit folder')
   await dialog.getByLabel('Name').fill('Mine')
 
   // Someone renames it meanwhile; the feed brings it to the page while the dialog is open.
@@ -394,7 +393,7 @@ test('a rename made while the sidebar dialog is open is a conflict, not overwrit
   await expect(dialog.locator('[data-folder-error]')).toContainText(
     'Someone else changed this folder while you were editing.',
   )
-  await expect(dialog).toHaveAccessibleName('Edit Theirs')
+  await expect(dialog).toHaveAccessibleName('Edit folder')
   // Their rename stands, and the form now shows it.
   await expect(dialog.getByLabel('Name')).toHaveValue('Theirs')
   expect((await describeHub(owner, hub.id)).folders.find((f) => f.id === backlog.id)?.name).toBe(
@@ -447,8 +446,8 @@ test("at phone width a hub admin sets the root's attributes and recolours a fold
   ).toBeVisible()
 
   // Recolour a folder that is not open, without renaming or moving it.
-  await sidebarMenu(page, 'Backlog', 'Rename, recolour or move')
-  dialog = page.getByRole('dialog', { name: 'Edit Backlog' })
+  await sidebarMenu(page, 'Backlog', 'Edit folder')
+  dialog = page.getByRole('dialog', { name: 'Edit folder' })
   await dialog.getByRole('radio', { name: 'Violet' }).check()
   await dialog.getByRole('button', { name: 'Save folder' }).click()
   await expect(dialog).toBeHidden()

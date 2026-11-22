@@ -117,7 +117,7 @@ export function folderActions(description: HubDescription, folder: Folder): Fold
   }
   const blocked = deleteBlockedReason(description, folder)
   return [
-    { key: 'edit', label: 'Rename, recolour or move' },
+    { key: 'edit', label: 'Edit folder' },
     { key: 'attributes', label: 'Attributes' },
     { key: 'new', label: 'New folder inside' },
     { key: 'delete', label: 'Delete folder', danger: true, disabled: !!blocked, reason: blocked },

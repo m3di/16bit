@@ -84,8 +84,8 @@ test('a hub admin creates, nests, renames and deletes folders; a folder with ite
   expect(sprint).toMatchObject({ parentId: planning?.id, color: 'violet' })
 
   // Rename and move Sprint 1 up to the hub.
-  await menu(page, 'Sprint 1', 'Rename, recolour or move')
-  dialog = page.getByRole('dialog', { name: 'Edit Sprint 1' })
+  await menu(page, 'Sprint 1', 'Edit folder')
+  dialog = page.getByRole('dialog', { name: 'Edit folder' })
   // A folder can never move under itself.
   await expect(dialog.getByLabel('Inside').locator('option')).toHaveText([hub.name, `– Planning`])
   await dialog.getByLabel('Name').fill('Iteration 1')
@@ -141,12 +141,12 @@ test('a folder changed elsewhere is not overwritten: the dialog shows their vers
     await owner.patch(`/folders/${folder.id}`, { version: folder.version, name: 'Queue' }),
     200,
   )
-  await menu(page, 'Backlog', 'Rename, recolour or move')
-  const dialog = page.getByRole('dialog', { name: 'Edit Backlog' })
+  await menu(page, 'Backlog', 'Edit folder')
+  const dialog = page.getByRole('dialog', { name: 'Edit folder' })
   await dialog.getByLabel('Name').fill('Inbox')
   await dialog.getByRole('button', { name: 'Save folder' }).click()
-  // The dialog now shows their version, title included, and says nothing was saved.
-  const theirs = page.getByRole('dialog', { name: 'Edit Queue' })
+  // The dialog now shows their version and says nothing was saved.
+  const theirs = page.getByRole('dialog', { name: 'Edit folder' })
   await expect(theirs.getByRole('alert')).toContainText('your change was not saved')
   await expect(theirs.getByLabel('Name')).toHaveValue('Queue')
   // Not overwritten: the server still has their name, not ours.
