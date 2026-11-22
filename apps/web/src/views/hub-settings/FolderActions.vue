@@ -74,7 +74,9 @@ function onAttributesSaved(result: FolderAttributesResult) {
 }
 
 async function confirmDelete() {
-  const target = description.folders.find((f) => f.id === deleteTarget.value?.id)
+  // The folder as it was when the confirm opened: a change made meanwhile is a 409, and one
+  // deleted meanwhile a 404, each with its message, rather than a delete of something unseen.
+  const target = deleteTarget.value
   if (!target) {
     deleteOpen.value = false
     return
@@ -91,6 +93,10 @@ async function confirmDelete() {
     return
   }
   deleteError.value = result.message
+  // After a conflict the page shows their version; deleting again is a choice made on it.
+  if (result.kind === 'conflict') {
+    deleteTarget.value = description.folders.find((f) => f.id === target.id) ?? target
+  }
 }
 </script>
 

@@ -31,10 +31,12 @@ const {
 
 const emit = defineEmits<{ saved: [folder: Folder, created: boolean] }>()
 
-// Read from the page each time: a conflict may have put a newer version there.
-const folder = computed(() =>
-  folderId ? (description.folders.find((f) => f.id === folderId) ?? null) : null,
-)
+const current = () =>
+  folderId ? (description.folders.find((f) => f.id === folderId) ?? null) : null
+// The folder as it was when the dialog opened: its version goes with the save, so a change made
+// meanwhile (the hub page reads the hub again live) is a 409, never silently overwritten. Only a
+// conflict moves it on, to the version the page now shows.
+const folder = ref<Folder | null>(null)
 
 const formId = useId()
 const name = ref('')
@@ -48,6 +50,7 @@ watch(
   open,
   (isOpen) => {
     if (!isOpen) return
+    folder.value = current()
     const f = folder.value
     name.value = f?.name ?? ''
     color.value = f?.color ?? nextFolderColor(description, PALETTE_COLORS)
@@ -59,7 +62,7 @@ watch(
 )
 
 const parents = computed(() => parentChoices(description, folderId))
-const title = computed(() => (folder.value ? `Edit ${folder.value.name}` : 'New folder'))
+const title = computed(() => (folderId ? `Edit ${folder.value?.name ?? 'folder'}` : 'New folder'))
 
 async function submit() {
   const trimmed = name.value.trim()
@@ -69,6 +72,12 @@ async function submit() {
   error.value = ''
   let result: WriteResult<Folder>
   const f = folder.value
+  if (folderId && !f) {
+    // Opened for a folder that was already gone: never fall through to creating one.
+    busy.value = false
+    error.value = 'This folder is no longer available. Nothing was saved.'
+    return
+  }
   if (f) {
     const change = {
       ...(trimmed !== f.name && { name: trimmed }),
@@ -91,6 +100,7 @@ async function submit() {
     return
   }
   error.value = result.message
+  if (result.kind === 'conflict') folder.value = current()
   if (result.kind === 'conflict' && folder.value) {
     // Show their version, so saving again is a choice made on what is there now.
     name.value = folder.value.name
@@ -118,7 +128,7 @@ async function submit() {
     <template #footer>
       <BaseButton :disabled="busy" @click="open = false">Cancel</BaseButton>
       <BaseButton variant="primary" type="submit" :form="formId" :disabled="busy">{{
-        busy ? 'Saving…' : folder ? 'Save folder' : 'Create folder'
+        busy ? 'Saving…' : folderId ? 'Save folder' : 'Create folder'
       }}</BaseButton>
     </template>
   </BaseDialog>

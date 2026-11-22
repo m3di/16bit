@@ -298,19 +298,65 @@ test('the sidebar menu works by keyboard and shows on focus', async ({ page, as 
 })
 
 test('only those who may change the schema get folder menus', async ({ pageAs }) => {
-  // Leo edits Product and Ivy views it: no menus.
-  for (const person of ['leo', 'ivy'] as const) {
+  // Leo edits Product and Ivy views it. Mina is a workspace admin, but her grant on Product is
+  // editor: managing folders takes a hub admin grant (docs/ROLES.md), so no menus either.
+  for (const person of ['leo', 'ivy', 'mina'] as const) {
     const page = await pageAs(person)
     await page.goto(hubPath('product'))
     await expect(folderLink(page, /^Roadmap/)).toBeVisible()
     await expect(sidebar(page).getByRole('button')).toHaveCount(0)
     await page.close()
   }
-  // Mina is a workspace admin and hub admin of Support. At phone width the buttons show
-  // without hover.
+  // Mina is hub admin of Support. At phone width every button shows without hover: checked by
+  // opacity, since toBeVisible also passes for a button at opacity 0.
   const mina = await pageAs('mina', PHONE)
   await mina.goto(hubPath('support'))
-  await expect(menuButton(mina, 'Support')).toBeVisible()
-  await expect(menuButton(mina, 'Inbox')).toBeVisible()
-  await expect(sidebar(mina).locator('[data-folder-actions]').first()).toHaveCSS('opacity', '1')
+  await expect(menuButton(mina, 'Inbox')).toBeAttached()
+  const wrappers = sidebar(mina).locator('[data-folder-actions]')
+  await expect(wrappers).toHaveCount(3)
+  for (const folder of ['Support', 'Escalated', 'Inbox']) {
+    await expect(
+      wrappers.filter({ has: mina.getByRole('button', { name: `Actions for ${folder}` }) }),
+    ).toHaveCSS('opacity', '1')
+  }
+})
+
+test('a rename made while the sidebar dialog is open is a conflict, not overwritten', async ({
+  page,
+  as,
+}) => {
+  const owner = as('owner')
+  const hub = await newHub(owner, 'sidebar conflict')
+  const folderRes = await owner.post(`/hubs/${hub.id}/folders`, {
+    parentId: hub.id,
+    name: 'Backlog',
+    color: 'blue',
+  })
+  await expectStatus(folderRes, 201)
+  const backlog = folderSchema.parse(await folderRes.json())
+
+  await page.goto(hubPath(hub.id))
+  await sidebarMenu(page, 'Backlog', 'Rename, recolour or move')
+  // After the conflict it is named for their version, so it is found by role alone.
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toHaveAccessibleName('Edit Backlog')
+  await dialog.getByLabel('Name').fill('Mine')
+
+  // Someone renames it meanwhile; the feed brings it to the page while the dialog is open.
+  await expectStatus(
+    await owner.patch(`/folders/${backlog.id}`, { version: backlog.version, name: 'Theirs' }),
+    200,
+  )
+  await expect(folderLink(page, /^Theirs/)).toBeAttached()
+
+  await dialog.getByRole('button', { name: 'Save folder' }).click()
+  await expect(dialog.locator('[data-folder-error]')).toContainText(
+    'Someone else changed this folder while you were editing.',
+  )
+  await expect(dialog).toHaveAccessibleName('Edit Theirs')
+  // Their rename stands, and the form now shows it.
+  await expect(dialog.getByLabel('Name')).toHaveValue('Theirs')
+  expect((await describeHub(owner, hub.id)).folders.find((f) => f.id === backlog.id)?.name).toBe(
+    'Theirs',
+  )
 })
