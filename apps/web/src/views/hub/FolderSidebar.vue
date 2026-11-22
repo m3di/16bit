@@ -52,7 +52,7 @@ const actionsOf = (entry: FolderEntry): readonly FolderAction[] =>
       <li v-if="root">
         <FolderSidebarRow
           :to="linkTo(root)"
-          :label="`Items in ${root.folder.name}`"
+          :label="root.folder.name"
           :color="root.folder.color"
           :count="root.ownCount"
           :current="currentOf(root)"

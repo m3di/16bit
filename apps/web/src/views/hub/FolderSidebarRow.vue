@@ -7,7 +7,7 @@ import type { FolderAction, FolderActionKey } from '../hub-settings/schema.ts'
 // One folder in the hub page's sidebar: a link with the folder's square, name and count, and its
 // actions menu beside the link (never inside it, so opening the menu does not navigate).
 
-defineProps<{
+const props = defineProps<{
   to: RouteLocationRaw
   label: string
   color: PaletteColor
@@ -20,6 +20,7 @@ defineProps<{
   actions: readonly FolderAction[]
   /** Names the menu button: "Actions for Bugs". */
   actionsLabel: string
+  /** The hub's root folder: shown as the hub's name, read out as the hub's own items. */
   root?: boolean
 }>()
 
@@ -27,6 +28,12 @@ const emit = defineEmits<{ action: [key: FolderActionKey] }>()
 
 const format = new Intl.NumberFormat('en')
 const countLabel = (n: number) => (n === 1 ? '1 item' : `${format.format(n)} items`)
+const rootLabel = () =>
+  [
+    props.label,
+    'items in the hub itself',
+    ...(props.count === null ? [] : [countLabel(props.count)]),
+  ].join(', ')
 </script>
 
 <template>
@@ -40,6 +47,7 @@ const countLabel = (n: number) => (n === 1 ? '1 item' : `${format.format(n)} ite
       class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-control pr-2 text-ink no-underline"
       :class="current && 'font-medium'"
       :style="{ paddingLeft: `${String(indent)}px` }"
+      :aria-label="root ? rootLabel() : undefined"
       data-folder-link
       :data-folder-root="root || undefined"
     >
