@@ -1,6 +1,6 @@
 import type { HubListEntry, HubRole, Subject, WorkspaceRole } from '@16bit/core'
 import { describe, expect, it } from 'vitest'
-import { hubSettingsRoute } from './hubSettings.ts'
+import { hubSettingsRoute, opensHubSettings } from './hubSettings.ts'
 
 const granted = (hubRole: HubRole): HubListEntry => ({
   access: 'granted',
@@ -53,5 +53,16 @@ describe('hubSettingsRoute (docs/ROLES.md)', () => {
   it('offers nothing on a hub without a grant, or without a known reader', () => {
     expect(hubSettingsRoute(as('owner'), none)).toBeNull()
     expect(hubSettingsRoute(null, granted('hub_admin'))).toBeNull()
+  })
+})
+
+describe('opensHubSettings (the hub page’s "Hub settings" link)', () => {
+  it('lets owners and admins in before the grant is known, and hub admins once it is', () => {
+    expect(opensHubSettings(as('owner'), null)).toBe(true)
+    expect(opensHubSettings(as('admin'), null)).toBe(true)
+    expect(opensHubSettings(as('member'), null)).toBe(false)
+    expect(opensHubSettings(as('member'), 'hub_admin')).toBe(true)
+    expect(opensHubSettings(as('member'), 'editor')).toBe(false)
+    expect(opensHubSettings(null, 'hub_admin')).toBe(false)
   })
 })

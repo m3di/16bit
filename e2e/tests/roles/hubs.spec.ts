@@ -408,7 +408,10 @@ test('the gear sits inside the card and on screen on a phone', async ({ pageAs }
   }
 })
 
-test('after an admin gives themselves access, the hub gets its gear', async ({ as, pageAs }) => {
+test('after an admin gives themselves access, focus moves to the card and the hub gets its gear', async ({
+  as,
+  pageAs,
+}) => {
   const name = uniqueHubName('gear self-grant')
   const created = await as('owner').post('/hubs', {
     name,
@@ -416,6 +419,7 @@ test('after an admin gives themselves access, the hub gets its gear', async ({ a
     idPrefix: uniquePrefix(),
   })
   await expectStatus(created, 201)
+  const hub = hubListEntrySchema.parse(await created.json())
 
   const page = await pageAs('mina')
   await page.goto('/')
@@ -423,8 +427,16 @@ test('after an admin gives themselves access, the hub gets its gear', async ({ a
   await expect(card).toContainText('No access')
   await expect(settingsLink(page, name)).toHaveCount(0)
   await card.getByRole('button', { name: `Give myself access to ${name}` }).click()
-  await expect(card.getByRole('link', { name: new RegExp(`^${name}\\b`) })).toBeVisible()
-  await settingsLink(page, name).click()
+  // The button goes with the grant; focus moves to the card's new link, and Tab reaches the gear.
+  const cardLink = card.getByRole('link', { name: new RegExp(`^${name}\\b`) })
+  await expect(cardLink).toBeFocused()
+  expect((await hubList(as('mina'))).find((h) => h.id === hub.id)).toMatchObject({
+    access: 'granted',
+    hubRole: 'hub_admin',
+  })
+  await page.keyboard.press('Tab')
+  await expect(settingsLink(page, name)).toBeFocused()
+  await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(page.getByRole('region', { name: 'General' })).toBeVisible()
 })

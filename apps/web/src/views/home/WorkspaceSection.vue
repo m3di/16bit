@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { HubListEntry, Subject } from '@16bit/core'
-import { computed } from 'vue'
+import type { Subject } from '@16bit/core'
+import { computed, nextTick, useTemplateRef, watch } from 'vue'
 import { BaseButton, FormNotice, HubCard, StateBlock } from '../../ui/index.ts'
 import { hubSettingsRoute } from './hubSettings.ts'
 import { selfGrantKey, type SelfGrant, type WorkspaceEntry } from './useDashboard.ts'
@@ -21,7 +21,7 @@ const {
   /** The reader in this workspace, for the hub settings links (`null` until their roles load). */
   viewer?: Subject | null
 }>()
-defineEmits<{
+const emit = defineEmits<{
   retry: []
   grantSelf: [hubId: string]
   dismissSelfGrant: [hubId: string]
@@ -30,8 +30,38 @@ defineEmits<{
 
 const ask = (hubId: string) => selfGrants.get(selfGrantKey(entry.workspace.id, hubId))
 
+// The "Give myself access" button goes away when its card turns into a link, so focus moves to
+// that link once the grant lands (issue 240); a refused grant keeps its button.
+const list = useTemplateRef<HTMLElement>('list')
+const focusOnGrant = new Set<string>()
+function grantSelf(hubId: string) {
+  focusOnGrant.add(hubId)
+  emit('grantSelf', hubId)
+}
+const grantedIds = () =>
+  entry.hubs.state === 'ready'
+    ? entry.hubs.data.filter((h) => h.access === 'granted').map((h) => h.id)
+    : []
+watch(
+  () => grantedIds().join(' '),
+  async () => {
+    for (const id of focusOnGrant) if (ask(id)?.state === 'error') focusOnGrant.delete(id)
+    const id = grantedIds().find((h) => focusOnGrant.has(h))
+    if (!id) return
+    focusOnGrant.delete(id)
+    await nextTick()
+    list.value
+      ?.querySelector<HTMLElement>(`[data-hub-id="${CSS.escape(id)}"] a[data-hub-card]`)
+      ?.focus()
+  },
+)
+
 // Each hub's settings link (issue 240). It sits beside the card, not inside its link.
-const settingsOf = (hub: HubListEntry) => hubSettingsRoute(viewer, hub)
+const cards = computed(() =>
+  entry.hubs.state === 'ready'
+    ? entry.hubs.data.map((hub) => ({ hub, settings: hubSettingsRoute(viewer, hub) }))
+    : [],
+)
 
 const headingId = computed(() => `workspace-${entry.workspace.id}`)
 
@@ -107,15 +137,24 @@ const offersNewHub = computed(
         >
       </template>
     </StateBlock>
-    <ul v-else class="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 p-0">
-      <li v-for="hub in entry.hubs.data" :key="hub.id" class="relative flex min-w-0 flex-col">
+    <ul
+      v-else
+      ref="list"
+      class="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 p-0"
+    >
+      <li
+        v-for="{ hub, settings } in cards"
+        :key="hub.id"
+        :data-hub-id="hub.id"
+        class="relative flex min-w-0 flex-col"
+      >
         <HubCard
           v-if="hub.access === 'granted'"
           :name="hub.name"
           :color="hub.color"
           :count="hub.itemCount"
           :to="{ name: 'hub', params: { workspaceId: hub.workspaceId, hubId: hub.id } }"
-          :class="['flex-1', settingsOf(hub) && 'pr-11']"
+          :class="['flex-1', settings && 'pr-11']"
         />
         <!-- Owners and admins without a grant: name only, and a way to grant themselves access. -->
         <template v-else>
@@ -136,7 +175,7 @@ const offersNewHub = computed(
                 size="sm"
                 variant="quiet"
                 :disabled="ask(hub.id)?.state === 'busy'"
-                @click="$emit('grantSelf', hub.id)"
+                @click="grantSelf(hub.id)"
                 >{{ ask(hub.id)?.state === 'busy' ? 'Giving access' : 'Give myself access'
                 }}<span class="sr-only"> to {{ hub.name }}</span></BaseButton
               >
@@ -153,8 +192,8 @@ const offersNewHub = computed(
         </template>
         <!-- Over the card's top right, centred on its name row, and outside its link. -->
         <RouterLink
-          v-if="settingsOf(hub)"
-          :to="settingsOf(hub)!"
+          v-if="settings"
+          :to="settings"
           :aria-label="`Settings for ${hub.name}`"
           class="absolute top-2.5 right-2 inline-flex size-7 items-center justify-center rounded-control text-ink3 no-underline hover:bg-selected hover:text-ink"
           data-hub-settings
