@@ -2,7 +2,7 @@
 import type { Folder } from '@16bit/core'
 import { computed } from 'vue'
 import { StateBlock } from '../../ui/index.ts'
-import type { FolderAction, FolderActionKey } from '../hub-settings/schema.ts'
+import type { SidebarAction, SidebarActionKey } from '../hub-settings/schema.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebarRow from './FolderSidebarRow.vue'
 import type { FolderEntry } from './useHub.ts'
@@ -16,10 +16,10 @@ const props = defineProps<{
   /** `location` on an item's page: the folder is where the item is, not the page itself. */
   current?: 'page' | 'location'
   /** Each folder's actions menu. Left out, or empty for a folder, means no menu. */
-  actionsFor?: (folder: Folder) => readonly FolderAction[]
+  actionsFor?: (folder: Folder) => readonly SidebarAction[]
 }>()
 
-const emit = defineEmits<{ action: [folder: Folder, key: FolderActionKey] }>()
+const emit = defineEmits<{ action: [folder: Folder, key: SidebarActionKey] }>()
 
 // The hub's root folder holds the items directly in the hub (D2). It reads as the hub's own
 // items, and every other folder is nested under it.
@@ -37,7 +37,7 @@ const linkTo = (entry: FolderEntry) => ({
 })
 const currentOf = (entry: FolderEntry) =>
   entry.folder.id === props.folderId ? (props.current ?? 'page') : undefined
-const actionsOf = (entry: FolderEntry): readonly FolderAction[] =>
+const actionsOf = (entry: FolderEntry): readonly SidebarAction[] =>
   props.actionsFor?.(entry.folder) ?? []
 </script>
 

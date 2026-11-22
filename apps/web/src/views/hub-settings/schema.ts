@@ -124,6 +124,31 @@ export function folderActions(description: HubDescription, folder: Folder): Fold
   ]
 }
 
+/** An entry of the hub page sidebar's folder menu: a folder action, or the hub's settings. */
+export type SidebarActionKey = FolderActionKey | 'settings'
+export interface SidebarAction extends Omit<FolderAction, 'key'> {
+  key: SidebarActionKey
+}
+
+/**
+ * A folder's menu in the hub page's sidebar. Those who may change the schema get the settings
+ * menu (`folderActions`). The hub's root also offers "Hub settings" to whoever sees the page's
+ * Hub settings link, so an owner or admin who is not a hub admin gets a root menu with only that.
+ */
+export function sidebarActions(
+  description: HubDescription,
+  folder: Folder,
+  reader: { managesSchema: boolean; opensSettings: boolean },
+): SidebarAction[] {
+  const isRoot = folder.id === description.hub.id
+  return [
+    ...(reader.managesSchema ? folderActions(description, folder) : []),
+    ...(isRoot && reader.opensSettings
+      ? [{ key: 'settings' as const, label: 'Hub settings' }]
+      : []),
+  ]
+}
+
 /** Names of the folders (and the hub) that show an attribute, in tree order. */
 export function usedIn(description: HubDescription, attributeId: string): string[] {
   const shown = new Set(

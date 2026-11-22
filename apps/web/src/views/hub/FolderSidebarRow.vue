@@ -2,7 +2,7 @@
 import type { PaletteColor } from '@16bit/core'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { RowActionsMenu, paletteVar } from '../../ui/index.ts'
-import type { FolderAction, FolderActionKey } from '../hub-settings/schema.ts'
+import type { SidebarAction, SidebarActionKey } from '../hub-settings/schema.ts'
 
 // One folder in the hub page's sidebar: a link with the folder's square, name and count, and its
 // actions menu beside the link (never inside it, so opening the menu does not navigate).
@@ -17,14 +17,14 @@ const props = defineProps<{
   /** Left padding of the link, in px. */
   indent: number
   /** The folder's actions, or none for no menu. */
-  actions: readonly FolderAction[]
+  actions: readonly SidebarAction[]
   /** Names the menu button: "Actions for Bugs". */
   actionsLabel: string
   /** The hub's root folder: shown as the hub's name, read out as the hub's own items. */
   root?: boolean
 }>()
 
-const emit = defineEmits<{ action: [key: FolderActionKey] }>()
+const emit = defineEmits<{ action: [key: SidebarActionKey] }>()
 
 const format = new Intl.NumberFormat('en')
 const countLabel = (n: number) => (n === 1 ? '1 item' : `${format.format(n)} items`)
@@ -70,7 +70,7 @@ const rootLabel = () =>
       <RowActionsMenu
         :label="actionsLabel"
         :items="actions"
-        @select="emit('action', $event as FolderActionKey)"
+        @select="emit('action', $event as SidebarActionKey)"
       />
     </span>
   </div>

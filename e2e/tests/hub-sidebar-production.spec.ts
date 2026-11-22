@@ -65,5 +65,12 @@ test('the sidebar menu entries open their dialogs and save on the production bui
   await page.keyboard.press('Escape')
   await expect(attributes).toBeHidden()
 
+  // And the root's Hub settings entry leads to the hub's settings.
+  await sidebar(page)
+    .getByRole('button', { name: `Actions for ${hub.name}`, exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Hub settings' }).click()
+  await expect(page).toHaveURL(new RegExp(`${hubPath(hub.id)}/settings/general$`))
+
   expect(errors).toEqual([])
 })

@@ -13,6 +13,7 @@ import {
   parentChoices,
   requiredEmptyText,
   settingsTree,
+  sidebarActions,
   strippedValuesMessage,
   usedIn,
   type AttributeDraft,
@@ -89,6 +90,21 @@ describe('the folder tree', () => {
       disabled: true,
       reason: 'It still holds items.',
     })
+  })
+
+  it('adds Hub settings to the root of the sidebar menu, for those who see the settings link', () => {
+    const d = description()
+    const backlog = d.folders.find((x) => x.id === 'backlog')
+    if (!backlog) throw new Error('backlog')
+    const labels = (f: typeof backlog, managesSchema: boolean, opensSettings: boolean) =>
+      sidebarActions(d, f, { managesSchema, opensSettings }).map((a) => a.label)
+    expect(labels(d.hub, true, true)).toEqual(['Attributes', 'New folder inside', 'Hub settings'])
+    // An owner or admin who is not a hub admin: the root offers only the settings.
+    expect(labels(d.hub, false, true)).toEqual(['Hub settings'])
+    expect(labels(backlog, false, true)).toEqual([])
+    // Subfolders never get it.
+    expect(labels(backlog, true, true)).not.toContain('Hub settings')
+    expect(labels(d.hub, false, false)).toEqual([])
   })
 
   it('lists where an attribute is shown, in tree order', () => {

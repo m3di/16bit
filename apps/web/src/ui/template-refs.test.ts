@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-// A template ref must not share its name with an import or a function of the same component. In
-// the production build, templates are compiled inline with `<script setup>`, so `ref="name"`
-// beside `import { name }` becomes a function ref that calls the import on every render. The
-// dev server compiles templates apart and never shows it (issue 233: the sidebar's folder menus
+// A template ref must not share its name with another binding of the same component: an import,
+// a function, or a value such as `ref('')`. In the production build, templates are compiled
+// inline with `<script setup>`, so `ref="name"` beside `import { name }` becomes a function ref
+// that calls the import on every render, and beside `const name = ref('')` overwrites the value
+// with the element. The dev server compiles templates apart and never shows it (issue 233: the sidebar's folder menus
 // did nothing in the built app, and threw inside `folderActions`).
 const sources = import.meta.glob<string>('../**/*.vue', {
   query: '?raw',
@@ -29,6 +30,22 @@ function callableBindings(source: string): Set<string> {
     }
   }
   for (const [, name = ''] of script.matchAll(/^(?:async\s+)?function\s+(\w+)/gm)) names.add(name)
+  // Any other top-level binding too, unless it is meant to hold the element: `useTemplateRef`, or
+  // a `ref(null)` / `shallowRef(null)`. A `ref('')` named like a template ref gets the element.
+  const declarations = script.split(/\n(?=(?:const|let|function|async function)\s)/)
+  for (const declaration of declarations) {
+    const code = declaration
+      .split('\n')
+      .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+      .join('\n')
+      .trim()
+    const m = /^(?:const|let)\s+(\w+)\s*=\s*([\s\S]*)$/.exec(code)
+    if (!m) continue
+    const [, name = '', init = ''] = m
+    const holdsElement =
+      init.startsWith('useTemplateRef') || /^(?:shallowRef|ref)(?:<[\s\S]*?>)?\(null\)/.test(init)
+    if (!holdsElement) names.add(name)
+  }
   return names
 }
 
@@ -46,22 +63,26 @@ import { folderActions, type FolderActionKey } from './schema.ts'
 import { a as b } from 'x'
 function run() {}
 const box = useTemplateRef('box')
+const area = ref<HTMLElement | null>(null)
+// a comment
+const status = ref('')
 </script>
-<template><FolderActions ref="folderActions" /><div ref="box" /></template>`
+<template><FolderActions ref="folderActions" /><div ref="box" /><div ref="area" /><p ref="status" /></template>`
     expect([...callableBindings(sfc)].sort()).toEqual([
       'FolderActions',
       'b',
       'folderActions',
       'run',
+      'status',
     ])
-    expect(templateRefs(sfc)).toEqual(['folderActions', 'box'])
+    expect(templateRefs(sfc)).toEqual(['folderActions', 'box', 'area', 'status'])
   })
 
   it('found the components', () => {
     expect(Object.keys(sources).length).toBeGreaterThan(5)
   })
 
-  it.each(Object.entries(sources))('%s names no ref after an import or function', (_, source) => {
+  it.each(Object.entries(sources))('%s names no ref after another binding', (_, source) => {
     const callable = callableBindings(source)
     expect(templateRefs(source).filter((name) => callable.has(name))).toEqual([])
   })

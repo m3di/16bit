@@ -189,9 +189,14 @@ test('a hub admin changes folders from the sidebar, as in settings', async ({ pa
 
   await page.goto(hubPath(hub.id))
   const url = page.url()
-  // The root offers what its row in settings offers. Opening a menu never navigates.
+  // The root offers what its row in settings offers, and the way to the hub's settings.
+  // Opening a menu never navigates.
   await menuButton(page, hub.name).click()
-  await expect(page.getByRole('menuitem')).toHaveText(['Attributes', 'New folder inside'])
+  await expect(page.getByRole('menuitem')).toHaveText([
+    'Attributes',
+    'New folder inside',
+    'Hub settings',
+  ])
   expect(page.url()).toBe(url)
   await page.getByRole('menuitem', { name: 'New folder inside' }).click()
   let dialog = page.getByRole('dialog', { name: 'New folder' })
@@ -321,15 +326,28 @@ test('the sidebar menu works by keyboard and shows on focus', async ({ page, as 
 })
 
 test('only those who may change the schema get folder menus', async ({ pageAs }) => {
-  // Leo edits Product and Ivy views it. Mina is a workspace admin, but her grant on Product is
-  // editor: managing folders takes a hub admin grant (docs/ROLES.md), so no menus either.
-  for (const person of ['leo', 'ivy', 'mina'] as const) {
+  // Leo edits Product and Ivy views it: no menus.
+  for (const person of ['leo', 'ivy'] as const) {
     const page = await pageAs(person)
     await page.goto(hubPath('product'))
     await expect(folderLink(page, /^Roadmap/)).toBeVisible()
     await expect(sidebar(page).getByRole('button')).toHaveCount(0)
     await page.close()
   }
+  // Mina is a workspace admin, but her grant on Product is editor: managing folders takes a hub
+  // admin grant (docs/ROLES.md). She sees the page's Hub settings link, so the root's menu has
+  // that one entry, and the folders have none.
+  const admin = await pageAs('mina')
+  await admin.goto(hubPath('product'))
+  await expect(folderLink(admin, /^Roadmap/)).toBeVisible()
+  await expect(sidebar(admin).getByRole('button')).toHaveCount(1)
+  await menuButton(admin, 'Product').click()
+  await expect(admin.getByRole('menuitem')).toHaveText(['Hub settings'])
+  await admin.getByRole('menuitem', { name: 'Hub settings' }).click()
+  await expect(admin).toHaveURL(/\/w\/demo\/hubs\/product\/settings(\/general)?$/)
+  await expect(admin.getByRole('heading', { level: 1, name: 'Product' })).toBeVisible()
+  await admin.close()
+
   // Mina is hub admin of Support. At phone width every button shows without hover: checked by
   // opacity, since toBeVisible also passes for a button at opacity 0.
   const mina = await pageAs('mina', PHONE)
