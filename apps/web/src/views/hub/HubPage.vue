@@ -18,7 +18,7 @@ import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
 import { provideValueContext } from './context.ts'
-import { folderColumns, truncatedNote, useHub } from './useHub.ts'
+import { folderColumns, ownItemCount, truncatedNote, useHub } from './useHub.ts'
 import { useHubDirectory } from './useHubDirectory.ts'
 import { canWriteItems } from './newItem.ts'
 import { canSort, inHub, useItems, valueErrors } from './useItems.ts'
@@ -38,11 +38,13 @@ const items = useItems(workspaceId, () => description.value?.hub.idPrefix ?? '',
   hubId: () => hubId,
 })
 // Feed events about this hub (D58): a schema change is read again in place, and a lost grant
-// shows the no-permission state instead of rows that no longer update.
+// shows the no-permission state instead of rows that no longer update. Item changes read the
+// hub again too, for the sidebar's folder counts.
 const live = useLiveHub(
   items.store,
   () => hubId,
   () => void refreshHub(),
+  () => refreshHub(),
 )
 const hub = computed<Load<HubDescription>>(() =>
   live.lost.value
@@ -131,12 +133,13 @@ const columns = computed(() =>
   description.value ? folderColumns(description.value, openFolderId.value) : [],
 )
 
-// The hub's own count includes every folder, so it is only shown when the hub has no folders.
+// The items directly in the open folder; for the hub, its total less its folders'.
 const countLine = computed(() => {
   const f = folder.value
   const d = description.value
-  if (!f || !d || (f.id === d.hub.id && d.folders.length > 0)) return ''
-  return `${new Intl.NumberFormat('en').format(f.itemCount)} ${f.itemCount === 1 ? 'item' : 'items'}`
+  const count = f && d ? ownItemCount(d, f) : null
+  if (count === null) return ''
+  return `${new Intl.NumberFormat('en').format(count)} ${count === 1 ? 'item' : 'items'}`
 })
 
 // The server caps the hub description. Say so rather than show a partial list as complete.

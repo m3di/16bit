@@ -154,7 +154,7 @@ async function confirmDelete() {
             >Items directly in the hub</span
           >
         </span>
-        <template v-else-if="column.key === 'items'">{{ entry.folder.itemCount }}</template>
+        <template v-else-if="column.key === 'items'">{{ entry.ownCount ?? '' }}</template>
         <template v-else-if="column.key === 'attributes'">{{
           attributeCount(description, entry.folder.id)
         }}</template>

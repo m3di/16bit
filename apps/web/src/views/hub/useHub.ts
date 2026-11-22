@@ -12,6 +12,22 @@ export interface FolderEntry {
   folder: Folder
   /** 0 for the hub itself and its direct children. */
   depth: number
+  /** Items directly in this folder, or `null` when that cannot be told (see `ownItemCount`). */
+  ownCount: number | null
+}
+
+/**
+ * How many items sit directly in a folder. A folder's `itemCount` is its own items, but the
+ * hub's counts every item in the hub, so the hub's own are that less its folders' (every folder
+ * is listed: there are no folder grants, D54). `null` when the server cut the folder list short,
+ * since the folders left out would be counted as the hub's own.
+ */
+export function ownItemCount(description: HubDescription, folder: Folder): number | null {
+  if (folder.id !== description.hub.id) return folder.itemCount
+  if (description.truncated.folders) return null
+  const inFolders = description.folders.reduce((sum, f) => sum + f.itemCount, 0)
+  const own = folder.itemCount - inFolders
+  return own >= 0 ? own : null
 }
 
 /** Folders in tree order: the hub first, then each folder followed by its children, by name. */
@@ -21,20 +37,25 @@ export function folderTree(description: HubDescription): FolderEntry[] {
     const parent = folder.parentId ?? description.hub.id
     children.set(parent, [...(children.get(parent) ?? []), folder])
   }
-  const out: FolderEntry[] = [{ folder: description.hub, depth: 0 }]
+  const entry = (folder: Folder, depth: number): FolderEntry => ({
+    folder,
+    depth,
+    ownCount: ownItemCount(description, folder),
+  })
+  const out: FolderEntry[] = [entry(description.hub, 0)]
   const seen = new Set([description.hub.id])
   const walk = (parentId: string, depth: number) => {
     for (const folder of children.get(parentId) ?? []) {
       if (seen.has(folder.id)) continue
       seen.add(folder.id)
-      out.push({ folder, depth })
+      out.push(entry(folder, depth))
       walk(folder.id, depth + 1)
     }
   }
   walk(description.hub.id, 0)
   // A folder whose parent is missing from the response still gets listed.
   for (const folder of description.folders) {
-    if (!seen.has(folder.id)) out.push({ folder, depth: 0 })
+    if (!seen.has(folder.id)) out.push(entry(folder, 0))
   }
   return out
 }

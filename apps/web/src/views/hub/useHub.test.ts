@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { description, fakeApi, folder, json } from './fixtures.test-utils.ts'
-import { folderColumns, folderTree, truncatedNote, useHub } from './useHub.ts'
+import { folderColumns, folderTree, ownItemCount, truncatedNote, useHub } from './useHub.ts'
 
 describe('folderTree', () => {
   it('puts the hub first, then folders by parent with children under them', () => {
@@ -17,6 +17,53 @@ describe('folderTree', () => {
     const orphan = { ...folder('x', 'gone') }
     const tree = folderTree({ ...description, folders: [orphan] })
     expect(tree.map((e) => e.folder.id)).toEqual(['bld', 'x'])
+  })
+})
+
+describe('ownItemCount', () => {
+  // As on the demo Product hub: 1,200 items, 300 in each of three folders (one nested).
+  const product = {
+    ...description,
+    hub: { ...description.hub, itemCount: 1200 },
+    folders: description.folders.map((f) => ({ ...f, itemCount: 300 })),
+  }
+
+  it("gives the hub its total less every folder's, nested ones included", () => {
+    expect(ownItemCount(product, product.hub)).toBe(300)
+    expect(folderTree(product).map((e) => [e.folder.id, e.ownCount])).toEqual([
+      ['bld', 300],
+      ['b', 300],
+      ['a', 300],
+      ['a1', 300],
+    ])
+  })
+
+  it('gives a folder its own count', () => {
+    const [first] = product.folders
+    if (!first) throw new Error('fixture has no folders')
+    expect(ownItemCount(product, first)).toBe(300)
+  })
+
+  it('moves only with the items in the hub itself', () => {
+    const created = { ...product, hub: { ...product.hub, itemCount: 1201 } }
+    expect(folderTree(created).map((e) => e.ownCount)).toEqual([301, 300, 300, 300])
+    const inFolder = {
+      ...created,
+      folders: created.folders.map((f) => (f.id === 'a1' ? { ...f, itemCount: 301 } : f)),
+    }
+    expect(folderTree(inFolder).map((e) => e.ownCount)).toEqual([300, 300, 300, 301])
+  })
+
+  it('is unknown when the folder list was cut short or the counts disagree', () => {
+    const cut = { ...product, truncated: { ...product.truncated, folders: true } }
+    expect(ownItemCount(cut, cut.hub)).toBeNull()
+    const behind = { ...product, hub: { ...product.hub, itemCount: 100 } }
+    expect(ownItemCount(behind, behind.hub)).toBeNull()
+  })
+
+  it('is the whole count for a hub without folders', () => {
+    const alone = { ...product, folders: [] }
+    expect(ownItemCount(alone, alone.hub)).toBe(1200)
   })
 })
 

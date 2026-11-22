@@ -55,6 +55,10 @@ const live = useLiveHub(
   (id) => {
     directory.refresh(id)
   },
+  // Item changes move the sidebar's folder counts.
+  (id) => {
+    directory.refresh(id)
+  },
 )
 const principals = usePrincipals(
   workspaceId,
