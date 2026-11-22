@@ -11,6 +11,9 @@ async function pageBackground(page: import('@playwright/test').Page): Promise<st
   )
 }
 
+const toDark = { name: 'Switch to dark theme' }
+const toLight = { name: 'Switch to light theme' }
+
 test('a stored dark choice is applied before the first paint', async ({ page }) => {
   await page.addInitScript((key) => {
     localStorage.setItem(key, 'dark')
@@ -28,36 +31,65 @@ test('a stored dark choice is applied before the first paint', async ({ page }) 
 
   await expect(page.locator('html')).toHaveAttribute('data-e2e-theme-at-body', 'theme-dark')
   await expect(page.locator('html')).toHaveClass('theme-dark')
-  await expect(page.getByRole('combobox', { name: 'Theme' })).toHaveValue('dark')
+  await expect(page.getByRole('button', toLight)).toBeVisible()
   expect(await pageBackground(page)).toBe(background.dark)
 })
 
-test('switching the theme updates the page and is kept after a reload', async ({ page }) => {
+test('the theme button switches the page and its icon, and is kept after a reload', async ({
+  page,
+}) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
-  const theme = page.getByRole('combobox', { name: 'Theme' })
-  await expect(theme).toHaveValue('system')
   await expect(page.locator('html')).toHaveClass('theme-light')
+  const switchToDark = page.getByRole('button', toDark)
+  await expect(switchToDark.locator('svg')).toHaveAttribute('data-glyph', 'moon')
 
-  await theme.selectOption({ label: 'Dark' })
+  await switchToDark.click()
   await expect(page.locator('html')).toHaveClass('theme-dark')
   await expect.poll(() => pageBackground(page)).toBe(background.dark)
+  const switchToLight = page.getByRole('button', toLight)
+  await expect(switchToLight.locator('svg')).toHaveAttribute('data-glyph', 'sun')
+  expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe('dark')
 
   await page.reload()
   await expect(page.locator('html')).toHaveClass('theme-dark')
-  await expect(theme).toHaveValue('dark')
+  await expect(switchToLight).toBeVisible()
 
-  await theme.selectOption({ label: 'Light' })
+  await switchToLight.click()
   await expect(page.locator('html')).toHaveClass('theme-light')
   await expect.poll(() => pageBackground(page)).toBe(background.light)
+  await expect(page.getByRole('button', toDark)).toBeVisible()
 })
 
-test('the system theme follows the operating system setting', async ({ page }) => {
+test('the theme button works from the keyboard with a visible focus ring', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+  const button = page.getByRole('button', toDark)
+  await expect(button).toBeVisible()
+  // Tab from the top of the page until the button has focus: it is a stop in the tab order.
+  for (let i = 0; i < 20 && !(await button.evaluate((el) => el === document.activeElement)); i++) {
+    await page.keyboard.press('Tab')
+  }
+  await expect(button).toBeFocused()
+  // The global :focus-visible ring (apps/web/src/styles/main.css) shows for keyboard focus.
+  await expect(button).toHaveCSS('outline-style', 'solid')
+
+  await page.keyboard.press('Enter')
+  await expect(page.locator('html')).toHaveClass('theme-dark')
+  const back = page.getByRole('button', toLight)
+  await expect(back).toBeFocused()
+
+  await page.keyboard.press('Space')
+  await expect(page.locator('html')).toHaveClass('theme-light')
+})
+
+test('with no saved choice the theme follows the operating system', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
-  await expect(page.getByRole('combobox', { name: 'Theme' })).toHaveValue('system')
   await expect(page.locator('html')).toHaveClass('theme-dark')
+  await expect(page.getByRole('button', toLight)).toBeVisible()
 
   await page.emulateMedia({ colorScheme: 'light' })
   await expect(page.locator('html')).toHaveClass('theme-light')
+  await expect(page.getByRole('button', toDark)).toBeVisible()
 })

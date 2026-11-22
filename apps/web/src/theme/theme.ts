@@ -15,6 +15,11 @@ export function resolveTheme(preference: ThemePreference, systemPrefersDark: boo
   return preference
 }
 
+/** The theme a click on the switch moves to: always the opposite of the one shown. */
+export function oppositeTheme(theme: Theme): Theme {
+  return theme === 'dark' ? 'light' : 'dark'
+}
+
 export function applyTheme(el: Element, theme: Theme): void {
   el.classList.remove(THEME_CLASS.light, THEME_CLASS.dark)
   el.classList.add(THEME_CLASS[theme])
@@ -47,8 +52,20 @@ export function startTheme(): void {
   })
 }
 
-export function useTheme(): { preference: Ref<ThemePreference>; theme: Readonly<Ref<Theme>> } {
-  return { preference, theme }
+/**
+ * Switches to the opposite of the theme shown and saves it. With no saved choice the theme follows
+ * the system until this first runs; afterwards the choice is explicit (issue 241).
+ */
+export function toggleTheme(): void {
+  preference.value = oppositeTheme(theme.value)
+}
+
+export function useTheme(): {
+  preference: Ref<ThemePreference>
+  theme: Readonly<Ref<Theme>>
+  toggle: () => void
+} {
+  return { preference, theme, toggle: toggleTheme }
 }
 
 function readStored(): string | null {

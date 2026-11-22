@@ -134,7 +134,7 @@ describe('AppShell', () => {
   it('has the brand linking home and a theme control', async () => {
     const html = await render(AppShell)
     expect(html).toMatch(/<a [^>]*href="\/"[^>]*>[\s\S]*16bit\.info/)
-    expect(html).toContain('<select')
+    expect(html).toMatch(/<button type="button" aria-label="Switch to (dark|light) theme"/)
   })
 })
 
