@@ -123,6 +123,22 @@ test("a create or delete in the root moves only the root's count, live", async (
   await owner.createItem(backlog.id, {})
   await expect(folder).toHaveAccessibleName('Backlog 3 items')
   await expect(root).toHaveAccessibleName(`Items in ${hub.name} 1 item`)
+
+  // A burst of creates and deletes in the root, faster than the sidebar reads counts, ends on
+  // the API's numbers: no change is lost between reads.
+  const burst = await Promise.all([1, 2, 3, 4, 5].map(() => owner.createItem(hub.id, {})))
+  const [first, second] = burst
+  for (const gone of [first, second]) {
+    if (!gone) throw new Error('burst not created')
+    await expectStatus(await owner.delete(`/items/${gone.id}?version=${String(gone.version)}`), 204)
+  }
+  const res = await owner.get(`/hubs/${hub.id}`)
+  await expectStatus(res, 200)
+  const d = hubDescriptionSchema.parse(await res.json())
+  expect(d.hub.itemCount - d.folders.reduce((sum, f) => sum + f.itemCount, 0)).toBe(4)
+  await expect(root).toHaveAccessibleName(`Items in ${hub.name} 4 items`)
+  await expect(page.locator('[data-count]')).toHaveText('4 items')
+  await expect(folder).toHaveAccessibleName('Backlog 3 items')
 })
 
 // Folder actions in the sidebar (issue 233): the same menu as Hub settings → Folders, for those
