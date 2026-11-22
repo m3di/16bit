@@ -27,4 +27,26 @@ describe('useHubDirectory', () => {
     await settle()
     expect(api.calls).toHaveLength(3)
   })
+
+  it('settles a refresh only once its answer is applied', async () => {
+    let answer: (r: Response) => void = () => undefined
+    const fetchFn = () =>
+      new Promise<Response>((resolve) => {
+        answer = resolve
+      })
+    const d = useHubDirectory('w', fetchFn)
+    d.seed(description)
+    let done = false
+    const read = d.refresh('bld').then(() => {
+      done = true
+    })
+    await settle()
+    expect(done).toBe(false)
+    const renamed = { ...description, hub: { ...description.hub, name: 'Renamed' } }
+    answer(json(renamed))
+    await read
+    expect(d.lookup('bld')).toMatchObject({ hub: { name: 'Renamed' } })
+    // An unknown hub has nothing to read again.
+    await expect(d.refresh('unknown')).resolves.toBeUndefined()
+  })
 })

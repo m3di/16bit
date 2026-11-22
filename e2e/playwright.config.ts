@@ -17,6 +17,13 @@ const webPort = process.env['E2E_WEB_PORT'] ?? '5173'
 const webUrl = `http://localhost:${webPort}`
 /** Specs that measure time on the page's main thread (the `budgets` project below). */
 const BUDGETS = /-budgets\.spec\.ts$/
+/**
+ * Specs that must also pass on the production build (issue 233: a template ref that named an
+ * import broke the sidebar menus only there, since the dev server compiles templates apart).
+ */
+const PRODUCTION = /-production\.spec\.ts$/
+/** Every spec that runs against the production build instead of the dev server. */
+const ON_BUILT = /-(?:budgets|production)\.spec\.ts$/
 // The budgets measure the app as people get it: the production build of the web app, served by
 // the API from the same port, as in the container image (D34, D61). The maintainer decided this
 // for issue 218; the dev server's unminified Vue and module loading are not what users run.
@@ -49,7 +56,18 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'], storageState: OWNER_STATE },
       dependencies: ['setup'],
-      testIgnore: BUDGETS,
+      testIgnore: ON_BUILT,
+    },
+    // Functional specs on the production build, served by the API as in the container image.
+    {
+      name: 'production',
+      testMatch: PRODUCTION,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: OWNER_STATE,
+        baseURL: externalBuiltUrl ?? builtUrl,
+      },
+      dependencies: ['setup'],
     },
     // D61's timing budgets (issue 178). They measure the page's main thread, so they run after
     // every other spec, one at a time, on an otherwise idle machine: next to other workers the
@@ -64,7 +82,8 @@ export default defineConfig({
         // Same host as the dev server, so the signed-in session cookie applies here too.
         baseURL: externalBuiltUrl ?? builtUrl,
       },
-      dependencies: ['chromium'],
+      // After the production specs too, which use the same build next to them.
+      dependencies: ['chromium', 'production'],
       workers: 1,
     },
   ],

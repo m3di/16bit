@@ -91,7 +91,11 @@ Links are `--ink` text with a 1px `--line2` bottom border instead of an underlin
 
 Material Symbols, outlined, light weight, 18px. The package is added with the first component that needs an icon. The mockups use coloured squares in place of icons; replace those with icons only where an icon adds meaning.
 
-Until the first real icon lands, two glyphs are inline pixel SVGs in `currentColor`, not Material Symbols: "more" on RowActionsMenu (three 2px squares) and "close" on BaseDialog (a thin X). The Material Symbols package arrives with the first component that needs any other icon.
+Until the first real icon lands, these glyphs are inline pixel SVGs in `currentColor`, not Material Symbols: "more" on RowActionsMenu (three 2px squares), "close" on BaseDialog (a thin X), and the moon and sun on ThemeSwitch (`ThemeGlyph`, a 12 by 12 pixel grid). The Material Symbols package arrives with the first component that needs any other icon.
+
+### Theme switch
+
+One 28px quiet icon button in the brand bar (AppShell, AuthLayout, SettingsLayout, the kit). It shows where a click goes: a moon in light mode and a sun in dark mode, `--ink3` turning `--ink` on hover, and it is named "Switch to dark theme" or "Switch to light theme" (no `aria-pressed`: the name changes instead). A click saves the opposite of the theme shown under `16bit.theme`. With nothing saved the app follows the system theme; the first click makes the choice explicit, and there is no way back to "follow the system" from the interface (issue 241).
 
 ## Accessibility
 
@@ -115,7 +119,7 @@ Until the first real icon lands, two glyphs are inline pixel SVGs in `currentCol
 | Table | Hairline rows, 36 to 38px, no outer box. A sortable column's header is a button with a visible cue at rest: two hairline chevrons (up and down) after the label, in `--ink3` like the label. In a right-aligned column (numbers) the cue goes before the label instead, so the label lines up with the values' right edge. The sorted column shows one chevron for its direction, centred, and its label and chevron are `--ink` at weight 500. The header has `aria-sort`, and the caption says that header buttons sort. The cue keeps its width, so labels do not move when the sort changes. Columns that cannot be sorted show no cue. A click on a row selects it; for rows that hold their own controls, see the static mode under M2. |
 | ItemPanel | Side panel with fields, version, and history |
 | StateBlock | Loading skeleton, empty, error, no permission, not found (see below) |
-| AppShell | Top bar on the main dashboard; light sidebar with folders inside a hub |
+| AppShell | Top bar on the main dashboard; light sidebar with folders inside a hub. In the sidebar the hub's root folder shows just the hub's name and its own count (the hub's total less its folders'), and every other folder is nested under it along a `--line` hairline guide. Screen readers hear the root as the hub's own items ("Product, items in the hub itself, 300 items"). |
 
 ## Components for M1
 

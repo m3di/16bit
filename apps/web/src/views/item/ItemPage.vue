@@ -53,8 +53,10 @@ const live = useLiveHub(
   items.store,
   () => hubId.value,
   (id) => {
-    directory.refresh(id)
+    void directory.refresh(id)
   },
+  // Item changes move the sidebar's folder counts. The read is awaited: one at a time.
+  (id) => directory.refresh(id),
 )
 const principals = usePrincipals(
   workspaceId,

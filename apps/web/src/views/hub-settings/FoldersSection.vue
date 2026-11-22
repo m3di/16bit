@@ -1,19 +1,16 @@
 <script setup lang="ts">
-import type { Folder, FolderAttributesResult, HubDescription } from '@16bit/core'
-import { computed, ref } from 'vue'
+import type { Folder, HubDescription } from '@16bit/core'
+import { computed, useTemplateRef } from 'vue'
 import {
   BaseButton,
-  ConfirmDialog,
   DataTable,
   RowActionsMenu,
   SettingsSection,
   paletteVar,
-  type RowAction,
   type TableColumn,
 } from '../../ui/index.ts'
-import FolderAttributesDialog from './FolderAttributesDialog.vue'
-import FolderDialog from './FolderDialog.vue'
-import { attributeCount, deleteBlockedReason, requiredEmptyText, settingsTree } from './schema.ts'
+import FolderActions from './FolderActions.vue'
+import { attributeCount, folderActions, settingsTree, type FolderActionKey } from './schema.ts'
 import type { HubSettings } from './useHubSettings.ts'
 
 const { description, manages, model } = defineProps<{
@@ -38,87 +35,7 @@ const columns = computed((): TableColumn[] => [
     : []),
 ])
 
-// Dialogs, each opened for one folder by ID.
-const editOpen = ref(false)
-const editId = ref<string | null>(null)
-const newParent = ref<string | null>(null)
-const attrsOpen = ref(false)
-const attrsId = ref(description.hub.id)
-const deleteOpen = ref(false)
-const deleteTarget = ref<Folder | null>(null)
-const deleteBusy = ref(false)
-const deleteError = ref('')
-
-function actionsFor(folder: Folder): RowAction[] {
-  if (isHub(folder)) {
-    return [
-      { key: 'attributes', label: 'Attributes' },
-      { key: 'new', label: 'New folder inside' },
-    ]
-  }
-  const blocked = deleteBlockedReason(description, folder)
-  return [
-    { key: 'edit', label: 'Rename, recolour or move' },
-    { key: 'attributes', label: 'Attributes' },
-    { key: 'new', label: 'New folder inside' },
-    { key: 'delete', label: 'Delete folder', danger: true, disabled: !!blocked, reason: blocked },
-  ]
-}
-
-function onAction(folder: Folder, key: string) {
-  if (key === 'edit') {
-    editId.value = folder.id
-    editOpen.value = true
-  } else if (key === 'new') {
-    startCreate(folder.id)
-  } else if (key === 'attributes') {
-    attrsId.value = folder.id
-    attrsOpen.value = true
-  } else if (key === 'delete') {
-    deleteTarget.value = folder
-    deleteError.value = ''
-    deleteOpen.value = true
-  }
-}
-
-function startCreate(parentId: string | null = null) {
-  editId.value = null
-  newParent.value = parentId
-  editOpen.value = true
-}
-
-function onSaved(folder: Folder, created: boolean) {
-  emit('status', created ? `Created ${folder.name}.` : `Saved ${folder.name}.`, false)
-}
-
-function onAttributesSaved(result: FolderAttributesResult) {
-  const names = new Map(description.attributes.map((a) => [a.id, a.name]))
-  const empties = result.requiredEmpty
-    .filter((e) => e.items > 0)
-    .map((e) =>
-      requiredEmptyText(names.get(e.attributeId) ?? 'An attribute', result.folder.name, e.items),
-    )
-  emit('status', [`Saved the attributes of ${result.folder.name}.`, ...empties].join(' '), false)
-}
-
-async function confirmDelete() {
-  const target = description.folders.find((f) => f.id === deleteTarget.value?.id)
-  if (!target) {
-    deleteOpen.value = false
-    return
-  }
-  deleteBusy.value = true
-  deleteError.value = ''
-  const result = await model.deleteFolder(target)
-  deleteBusy.value = false
-  if (result.ok) {
-    deleteOpen.value = false
-    // The row is gone, so focus goes to the status line that says so.
-    emit('status', `Deleted ${target.name}.`, true)
-    return
-  }
-  deleteError.value = result.message
-}
+const actions = useTemplateRef<InstanceType<typeof FolderActions>>('actions')
 </script>
 
 <template>
@@ -127,7 +44,7 @@ async function confirmDelete() {
     description="Folders hold items. A folder can be deleted once it holds no items and no folders."
   >
     <template v-if="manages" #actions>
-      <BaseButton data-new-folder @click="startCreate()">New folder</BaseButton>
+      <BaseButton data-new-folder @click="actions?.run(null, 'new')">New folder</BaseButton>
     </template>
 
     <DataTable
@@ -154,15 +71,19 @@ async function confirmDelete() {
             >Items directly in the hub</span
           >
         </span>
-        <template v-else-if="column.key === 'items'">{{ entry.folder.itemCount }}</template>
+        <template v-else-if="column.key === 'items'">
+          <template v-if="entry.ownCount !== null">{{ entry.ownCount }}</template>
+          <!-- The folder list was cut short, so the hub's own count cannot be told. -->
+          <span v-else class="text-ink3" data-count-unknown>Unknown</span>
+        </template>
         <template v-else-if="column.key === 'attributes'">{{
           attributeCount(description, entry.folder.id)
         }}</template>
         <RowActionsMenu
           v-else-if="column.key === 'actions'"
           :label="`Actions for ${entry.folder.name}`"
-          :items="actionsFor(entry.folder)"
-          @select="onAction(entry.folder, $event)"
+          :items="folderActions(description, entry.folder)"
+          @select="actions?.run(entry.folder, $event as FolderActionKey)"
         />
       </template>
     </DataTable>
@@ -170,29 +91,11 @@ async function confirmDelete() {
       This hub has no folders yet. Items sit directly in the hub until you add one.
     </p>
 
-    <FolderDialog
-      v-model:open="editOpen"
+    <FolderActions
+      ref="actions"
       :description="description"
-      :folder-id="editId"
-      :parent-id="newParent"
       :model="model"
-      @saved="onSaved"
-    />
-    <FolderAttributesDialog
-      v-model:open="attrsOpen"
-      :description="description"
-      :folder-id="attrsId"
-      :model="model"
-      @saved="onAttributesSaved"
-    />
-    <ConfirmDialog
-      v-model:open="deleteOpen"
-      :title="`Delete ${deleteTarget?.name ?? 'this folder'}?`"
-      message="It holds no items and no folders. Its list of attributes goes with it; the hub's attributes stay."
-      confirm-label="Delete folder"
-      :busy="deleteBusy"
-      :error="deleteError"
-      @confirm="confirmDelete"
+      @status="(text, focus) => emit('status', text, focus)"
     />
   </SettingsSection>
 </template>

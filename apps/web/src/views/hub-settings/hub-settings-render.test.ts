@@ -112,6 +112,15 @@ describe('HubSettingsPage, folders', () => {
     expect(html).not.toContain('data-new-folder')
   })
 
+  it("says Unknown for the hub's own count when the folder list was cut short", async () => {
+    const full = description()
+    const cut = { ...full, truncated: { ...full.truncated, folders: true } }
+    const html = await renderPage({ data: cut })
+    expect(html.match(/data-count-unknown/g)).toHaveLength(1)
+    expect(html).toMatch(/data-count-unknown[^>]*>Unknown</)
+    expect(await renderPage()).not.toContain('data-count-unknown')
+  })
+
   it('says when the hub has no folders yet', async () => {
     const data = { ...description(), folders: [] }
     const html = await renderPage({ data })

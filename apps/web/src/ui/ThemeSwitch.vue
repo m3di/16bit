@@ -1,27 +1,23 @@
 <script setup lang="ts">
-import { useTheme, type ThemePreference } from '../theme/theme.ts'
-import BaseSelect, { type SelectOption } from './BaseSelect.vue'
+import { computed } from 'vue'
+import { oppositeTheme, useTheme } from '../theme/theme.ts'
+import ThemeGlyph from './ThemeGlyph.vue'
 
-const { preference } = useTheme()
+const { theme, toggle } = useTheme()
 
-const options: SelectOption[] = [
-  { value: 'system', label: 'System theme' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-]
-
-function onUpdate(value: string) {
-  preference.value = value as ThemePreference
-}
+// The icon and the name say where a click goes: a moon in light mode, a sun in dark mode.
+const target = computed(() => oppositeTheme(theme.value))
+const label = computed(() => `Switch to ${target.value} theme`)
 </script>
 
 <template>
-  <BaseSelect
-    label="Theme"
-    label-hidden
-    size="sm"
-    :options="options"
-    :model-value="preference"
-    @update:model-value="onUpdate"
-  />
+  <button
+    type="button"
+    :aria-label="label"
+    :title="label"
+    class="inline-flex size-7 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent text-ink3 hover:bg-selected hover:text-ink"
+    @click="toggle"
+  >
+    <ThemeGlyph :name="target === 'dark' ? 'moon' : 'sun'" />
+  </button>
 </template>

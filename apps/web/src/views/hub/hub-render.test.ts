@@ -1,4 +1,4 @@
-import type { Item } from '@16bit/core'
+import type { Folder, Item } from '@16bit/core'
 import { createSSRApp, h, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { renderToString } from 'vue/server-renderer'
@@ -14,6 +14,7 @@ import ItemDetails from './ItemDetails.vue'
 import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
+import { folderActions } from '../hub-settings/schema.ts'
 import { folderColumns, folderTree } from './useHub.ts'
 import type { ItemList, SortKey } from './useItems.ts'
 
@@ -193,6 +194,83 @@ describe('FolderSidebar', () => {
     const current = /<a [^>]*aria-current="page"[^>]*>/.exec(html)?.[0] ?? ''
     expect(current).toContain('href="/w/w/hubs/bld/a"')
     expect(html).toContain('padding-left:20px')
+  })
+
+  it('shows the root as the hub, read as its own items, with its own count, and nests the folders', async () => {
+    const product = {
+      ...description,
+      hub: { ...description.hub, itemCount: 1200 },
+      folders: description.folders.map((f) => ({ ...f, itemCount: 300 })),
+    }
+    const html = await render(FolderSidebar, {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(product) },
+      folderId: 'bld',
+    })
+    const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
+    expect(root).toContain('href="/w/w/hubs/bld"')
+    expect(root).toContain('aria-current="page"')
+    expect(root).toContain('aria-label="Build, items in the hub itself, 300 items"')
+    expect(root).not.toContain('Items in')
+    expect(root).toMatch(/>Build</)
+    expect(root).toMatch(/aria-label="300 items"[^>]*>300</)
+    // Every other folder is in a list inside the root's entry, under a hairline guide.
+    const nested = /data-folder-root[^>]*>.*?<\/a>.*?<ul [^>]*border-l[^>]*>(.*?)<\/ul>/s.exec(
+      html,
+    )?.[1]
+    expect(nested?.match(/data-folder-link/g)).toHaveLength(3)
+    expect(html.match(/aria-label="300 items"/g)).toHaveLength(4)
+  })
+
+  it('offers a folder menu beside each link only when given actions', async () => {
+    const props = {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(description) },
+      folderId: 'bld',
+    }
+    const without = await render(FolderSidebar, props)
+    expect(without).not.toContain('aria-haspopup="menu"')
+    expect(without).not.toContain('data-folder-actions')
+
+    const html = await render(FolderSidebar, {
+      ...props,
+      actionsFor: (f: Folder) => folderActions(description, f),
+    })
+    for (const name of ['Build', 'Bugs', 'Archive', 'Old']) {
+      expect(html).toContain(`aria-label="Actions for ${name}"`)
+    }
+    expect(html.match(/aria-haspopup="menu"/g)).toHaveLength(4)
+    // Outside the link, so opening the menu never navigates.
+    for (const link of html.match(/<a [^>]*>.*?<\/a>/gs) ?? []) {
+      expect(link).not.toContain('<button')
+    }
+    // Shown on hover and focus, and always on touch screens and at phone width.
+    const wrapper = /<span [^>]*data-folder-actions[^>]*>/.exec(html)?.[0] ?? ''
+    for (const cls of [
+      'opacity-0',
+      'group-hover:opacity-100',
+      'group-focus-within:opacity-100',
+      'pointer-coarse:opacity-100',
+      'max-sm:opacity-100',
+    ]) {
+      expect(wrapper.split(/[\s"]/)).toContain(cls)
+    }
+  })
+
+  it('leaves the root count out when it cannot be told', async () => {
+    const cut = { ...description, truncated: { ...description.truncated, folders: true } }
+    const html = await render(FolderSidebar, {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(cut) },
+      folderId: 'bld',
+    })
+    const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
+    expect(root).toContain('aria-label="Build, items in the hub itself"')
+    expect(root).not.toContain('data-folder-count')
+    expect(html.match(/data-folder-count/g)).toHaveLength(3)
   })
 
   it('has a loading state', async () => {
