@@ -12,27 +12,27 @@ The initial plan for M4. Each entry becomes a GitHub issue during planning; afte
 
 **Changes after the second review:** `opens_on_folder_id` is a column on the hub's folder row, guarded by `folder_guard` and the folder UPDATE grant and built like `title_attribute_id` (M4-02); the `view` grants include `SELECT`; the per-principal limit is 4 in flight per API process, and the client queues and retries a 429 silently (Q9). Optional points taken: a trigger keeps views-only folders empty; a designed "No view yet" state; "New item" presets only top-level `AND` equality conditions; M4-08 is a hand-written SVG burndown, so no chart dependency is added.
 
-## Open questions for the maintainer
+## Decisions (were open questions)
 
-Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `docs/DECISIONS.md`. The **Decide** lines are choices the plan cannot make alone; the rest follows from them.
+**Decided by the maintainer on 2026-11-22, all as proposed** (PR #247), and recorded as D76 to D83 in `docs/DECISIONS.md`. The **Decided** lines were the choices the plan could not make alone; the alternatives were not taken.
 
-**Q1. How a root view is stored, and views-only folders (D76).**
+**Q1. How a root view is stored, and views-only folders (D76).** **Decided** as proposed.
 
 - One root view per folder (the hub root included), or none. No stored view means the folder opens on a default view, `page > table(this folder)`, which looks exactly like today's folder screen. A views-only folder has no items, so its default is a designed "No view yet" state, with "Compose" for hub admins.
 - Migration `view (workspace_id, id, hub_id, folder_id, tree jsonb, version, updated_at, updated_by)`, unique per folder, composite FK `(workspace_id, hub_id, folder_id) REFERENCES folder (workspace_id, hub_id, id) ON DELETE CASCADE` (so `delete_hub` takes the views), a 128 KiB size check, RLS (Q4).
 - Writes replace the whole tree with an expected `version`: 409 `conflict`, 422 `invalid_view` with `errors: [{ path, message }]`. Reset is `DELETE ?version=` with the same 409. Two first-time PUTs at `version: 0` that hit the unique constraint answer 409 `conflict`, never 500.
 - `tree` is `{ schemaVersion: 1, root }`; core's `parseViewTree` upgrades older versions on read, so block config changes need no data migrations.
 - No view history in M4. A view write sends the existing `hub` NOTIFY; clients already reload on it.
-- **Decide: views-only folders and "Opens on".** Proposed: adopt `HubSettings.dc.html`. `folder.views_only` (set at creation, never updated) marks a folder that holds no items: item create and move into it answer 422 `views_only` (a trigger on `item` holds this underneath, as `hub_id_check` does for D3), the sidebar (#231) shows "Views only" instead of a count, and the folder menu (#233) offers no "New item". `opens_on_folder_id` on the hub's folder row (null is the hub root; a hub admin's setting, like the title attribute) picks the folder a hub opens on. Home and My work are views-only folders; the hub opens on Home. Both columns ride in M4-02. The alternative is Home as the hub root's view and My work as an ordinary empty folder, with both differences listed in Q8.
-- **Decide: deleting a folder that has a stored view.** Proposed: refuse with 409 `has_view`; the admin resets the view first, so a composed view is never lost in one click (D52). The alternative is to cascade, with the confirm dialog naming the view. Either way `delete_hub` cascades.
+- **Decided: views-only folders and "Opens on".** Adopt `HubSettings.dc.html`. `folder.views_only` (set at creation, never updated) marks a folder that holds no items: item create and move into it answer 422 `views_only` (a trigger on `item` holds this underneath, as `hub_id_check` does for D3), the sidebar (#231) shows "Views only" instead of a count, and the folder menu (#233) offers no "New item". `opens_on_folder_id` on the hub's folder row (null is the hub root; a hub admin's setting, like the title attribute) picks the folder a hub opens on. Home and My work are views-only folders; the hub opens on Home. Both columns ride in M4-02.
+- **Decided: deleting a folder that has a stored view.** Refused with 409 `has_view`; the admin resets the view first, so a composed view is never lost in one click (D52). Either way `delete_hub` cascades.
 
-**Q2. Amending recorded decisions.** **Decide**, proposed yes to all three; recorded in D76 and D77:
+**Q2. Amending recorded decisions.** **Decided:** all three approved; recorded in D76, D77 and the amended rows:
 
 - D15: 6 of the 17 block types (`tabs`, `divider`, `image`, `document`, `comments`, `activity`) wait for later milestones; `image` needs file storage (D44).
 - D17: "patch by block ID" is deferred; writes replace the whole tree with a version (Q1).
 - D44: rollup is deferred; the exit doesn't need it (Q8, "3 of 5 subtasks").
 
-**Q3. Block contracts in core (D77).**
+**Q3. Block contracts in core (D77).** **Decided** as proposed.
 
 - A block is `{ id, type, config, children? }`; ids unique in the tree.
 - `BLOCK_TYPES` gives per type: category (layout, content, data), allowed child types (no loops, D14; `page` is root only), a Zod `configSchema`, and binding kind (`none`, `set`, `item`). Web components register against the type names, as attribute types do.
@@ -44,12 +44,12 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 - **Create** (`list`, `board`): creates in the set binding's `folderId`, shown only with `item.write` there; it presets the group's or column's value and the binding's top-level `AND` equality conditions (`attribute = value` or `= $me`), so the new item appears in the block. An `OR` presets nothing: on the Work board ("Owner or Reviewer is me") create sets only Stage. A views-only folder's "New item" therefore creates in Backlog.
 - **`$block` rules:** it may name only an item-bound block, and item-binding rules may not use `$block` (no chains or cycles). When the named block resolves to nothing (no current sprint, or the sprint is hidden), dependent blocks get the status `unresolved` and render a designed empty state, not an error.
 
-**Q4. Who can edit views (D78; gated change to `docs/ROLES.md`).**
+**Q4. Who can edit views (D78; gated change to `docs/ROLES.md`).** **Decided** as proposed.
 
 - Editing a root view needs `hub.manageSchema` (hub admin), so `can()` gains no action; ROLES.md gains the row "Edit root views", hub admin only. Agent keys are never hub admin (D28), so agents can't edit views. Reading needs `hub.read`.
 - RLS on `view` mirrors `attribute`: read with any hub grant, write as hub admin, insert and update `WITH CHECK` including `updated_by = rls_principal()`. Hidden hub or folder is 404 (D45).
 
-**Q5. How bindings read data (D79).**
+**Q5. How bindings read data (D79).** **Decided** as proposed.
 
 - **Set binding** `{ folderId, where?, sort?, limit }` with `POST /query`'s rules (indexed attributes, 20 conditions, 3 levels, 3 sort keys). The folder must be in the view's own hub (no cross-hub bindings in M4). Lists up to 100 rows; boards up to 20 columns of 25 cards with "+N more".
 - **Item binding:** a fixed item, or a rule (`{ folderId, where, sort }`, first match). Binding to another block's selection is deferred.
@@ -57,7 +57,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 - A block that refers to a removed or non-indexed attribute or a missing folder stays stored and renders a designed "invalid" state. PUT validates against the current schema, holding the hub's schema lock (D55) shared; GET never rewrites.
 - Every read runs as the caller under RLS, in one read-only snapshot with the workspace `seq` (D58).
 
-**Q6. Aggregates (D80).**
+**Q6. Aggregates (D80).** **Decided** as proposed.
 
 - `POST /v1/workspaces/:w/aggregate` with `{ from: folderId, where?, groupBy?, measures }`.
 - One `groupBy` dimension on an indexed select, multi-select, actor, relation or boolean, or a date with a `day`/`week`/`month` bucket in the request's time zone (Q7). Multi-valued attributes count an item in each of its groups, so group counts can sum past the total.
@@ -66,12 +66,12 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 - **What a group reveals:** actor groups return principal IDs only; the client resolves names and kinds from the member list the caller can already read, so an agent sees no other principal's name or kind (ROLES.md). Relation groups return a target's ID and label only when the reader can see it; every hidden target folds into one `no_access` group, so neither their IDs nor their number is revealed (this matters for cross-hub targets, D11).
 - Budget: under 200 ms on a 2,000-item hub (D75), under 2 s on the 50,000-item folder in CI, 3 s statement timeout answering 503 `timeout`. The M4-00 spike measures this before the gate batch opens, so any index or policy change rides in M4-02.
 
-**Q7. Time: zone and working days (D81).**
+**Q7. Time: zone and working days (D81).** **Decided** as proposed.
 
-- **Decide: where the time zone comes from.** Proposed: the reader's browser zone, sent as `tz` on every view-data and aggregate request; UTC when absent (agents). It sets "today", the current sprint (`start <= $now <= end` on date-only values), date buckets and day counts. A zone not in `pg_timezone_names` answers 422 `invalid_time_zone`, never a 500 from `AT TIME ZONE`. The alternative is a hub setting, the same for every reader.
-- **Decide: weekdays or calendar days.** Proposed: weekdays (Monday to Friday, no holiday calendar), as the mockup's numbers need: Nov 9 to Nov 20, 2026 is 10 weekdays and Nov 16 is day 6, where calendar days would read "8 of 12". `number` and `chart` configs get `days: "weekdays" | "calendar"`, default `"weekdays"`; the burndown x-axis steps over the same days. The alternative is calendar days only, with the difference listed in Q8.
+- **Decided: where the time zone comes from.** The reader's browser zone, sent as `tz` on every view-data and aggregate request; UTC when absent (agents). It sets "today", the current sprint (`start <= $now <= end` on date-only values), date buckets and day counts. A zone not in `pg_timezone_names` answers 422 `invalid_time_zone`, never a 500 from `AT TIME ZONE`.
+- **Decided: weekdays or calendar days.** Weekdays (Monday to Friday, no holiday calendar), as the mockup's numbers need: Nov 9 to Nov 20, 2026 is 10 weekdays and Nov 16 is day 6, where calendar days would read "8 of 12". `number` and `chart` configs get `days: "weekdays" | "calendar"`, default `"weekdays"`; the burndown x-axis steps over the same days.
 
-**Q8. Mockup parts the data model doesn't have yet (D82).**
+**Q8. Mockup parts the data model doesn't have yet (D82).** **Decided** as proposed.
 
 | Mockup element | Proposal |
 | --- | --- |
@@ -85,19 +85,19 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 | "Sprint 24 runs Nov 9 to Nov 20" | A `fields` block bound by rule to the current sprint. |
 | "Live" dot | The shell's existing connection state. |
 
-**Q9. View data and live refresh (D83).**
+**Q9. View data and live refresh (D83).** **Decided** as proposed.
 
 - `GET /v1/workspaces/:w/folders/:folderId/view/data?version=N[&blocks=a,b][&tz=]` answers the folder's view, stored or default (version 0), so the route needs no view ID. If the stored tree has moved past `version`, it answers 409 `stale` and the client reloads the view.
 - Every data block in one snapshot with one `seq`, with a status per block (`ok`, `invalid`, `not_found`, `unresolved`, `error`), at most 1,000 items per response. Item bindings resolve first, then `$block`.
 - **Budget:** one 5 s deadline for the whole request; blocks that haven't run by then get `error: timeout`. Up to 4 view-data or aggregate requests in flight per principal per API process; a fifth answers 429. It is a guard, not a global quota (D34 scales API pods). The client queues a 429 and retries it after its own in-flight requests finish, with no error state, so two tabs, the composer's preview and overlapping refetches all render.
 - The client subscribes to the hub from that `seq`; items already shown update in place through the M3 store. A block refetches when anything changes in its bound folder, in the folder of an item binding it uses through `$block` (editing the sprint's dates refetches the burndown and every "this sprint" block), or in a relation's target folder it shows labels from (an epic rename). Refetches are debounced 300 ms and at most once a second per view. Blocks using `$now` also refetch at midnight in the request's zone. No caching across readers (`$me`).
 
-**Q10. Composer scope.** In hub settings, "Root views", hub admin only: an outline of the tree (add from allowed types, remove, move up and down), a form per block type generated from the registry (folder, attribute, sort and limit pickers), filters as a one-level condition list plus "Edit as JSON" for nested trees, a live preview, Save with version (409 with Reload), Reset to default. No drag and drop. The composer has no mockup (M4-07 flags it). Hub settings also gain "Opens on" and the views-only option on New folder (Q1).
+**Q10. Composer scope.** **Decided** as proposed. In hub settings, "Root views", hub admin only: an outline of the tree (add from allowed types, remove, move up and down), a form per block type generated from the registry (folder, attribute, sort and limit pickers), filters as a one-level condition list plus "Edit as JSON" for nested trees, a live preview, Save with version (409 with Reload), Reset to default. No drag and drop. The composer has no mockup (M4-07 flags it). Hub settings also gain "Opens on" and the views-only option on New folder (Q1).
 
-**Q11. Gating of #228 and #229.**
+**Q11. Gating of #228 and #229.** **Decided** as proposed.
 
-- #229 changes the sign-in rate limit, which is authentication, so it is labelled `needs-human`. Proposed: make the limit configurable through the environment, raised only for the e2e servers; production defaults unchanged.
-- **Decide: is #228 gated?** It changes which web build the CI e2e job uses. Proposed: not gated (no secrets, deployment or workflow permissions change); it waits for your answer before it lands.
+- #229 changes the sign-in rate limit, which is authentication, so it is labelled `needs-human`. **Decided:** make the limit configurable through the environment, raised only for the e2e servers; production defaults unchanged.
+- **Decided: #228 is not gated.** It changes which web build the CI e2e job uses, but no secrets, deployment or workflow permissions.
 
 ## Issues
 
@@ -197,7 +197,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 | #185 long sort cursors | backend | – | in progress (gated) |
 | #238 item panel scroll | design-system | – | in progress |
 | #244 feed test flake | backend | – | wave 1, while the gate batch waits |
-| #229 sign-in limit | backend | Q11 (gated, `needs-human`) | wave 1, while the gate batch waits |
+| #229 sign-in limit | backend | Q11 (approved) | wave 1, while the gate batch waits |
 | #223 rich text draft | frontend | – | wave 1 |
 | #200 external keys, #203 preconditions | backend | #199 | wave 2 |
 | #221, #222 API parts, #224 | backend | the gate batch | wave 2 |
@@ -207,7 +207,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 
 ## Sequence (3 agents at a time)
 
-- **Wave 0:** this plan reviewed; the maintainer answers Q1 to Q11, including the D15, D17 and D44 amendments (Q2); D76 to D83 recorded.
+- **Wave 0:** this plan reviewed; the maintainer answers Q1 to Q11, including the D15, D17 and D44 amendments (Q2); D76 to D83 recorded. Done 2026-11-22.
 - **Wave 1:** backend runs the M4-00 spike, opens the blocks gate batch (M4-01, M4-02, on #199's branch if it hasn't merged), then #244 and #229 while it waits; design-system #238, then M4-07, then M4-08; frontend #223, then M4-09 against the batch branch's shapes.
 - **Wave 2 (batch merged):** backend M4-03, M4-06, M4-04, then M4-05; a second backend slot (when design-system frees one) on #200, #203, #221/#222 API parts, #224; frontend finishes M4-09 on real data, then M4-10.
 - **Wave 3:** backend #202; frontend M4-11 and #204.
