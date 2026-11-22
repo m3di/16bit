@@ -56,7 +56,7 @@ export function startTheme(): void {
  * Switches to the opposite of the theme shown and saves it. With no saved choice the theme follows
  * the system until this first runs; afterwards the choice is explicit (issue 241).
  */
-export function toggleTheme(): void {
+function toggleTheme(): void {
   preference.value = oppositeTheme(theme.value)
 }
 

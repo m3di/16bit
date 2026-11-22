@@ -167,11 +167,11 @@ describe('startTheme', () => {
 
   it('toggle saves the opposite of the system theme on the first click', async () => {
     const b = fakeBrowser({ dark: true })
-    const { startTheme, toggleTheme, useTheme } = await freshTheme()
+    const { startTheme, useTheme } = await freshTheme()
     startTheme()
     expect(b.store.has(THEME_STORAGE_KEY)).toBe(false)
 
-    toggleTheme()
+    useTheme().toggle()
     await nextTick()
     expect(useTheme().preference.value).toBe('light')
     expect(b.store.get(THEME_STORAGE_KEY)).toBe('light')
