@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import type { HubListEntry, Subject } from '@16bit/core'
 import { computed } from 'vue'
-import { BaseButton, FormNotice, HubCard, StateBlock } from '../../ui/index.ts'
+import { useRouter } from 'vue-router'
+import { BaseButton, FormNotice, HubCard, RowActionsMenu, StateBlock } from '../../ui/index.ts'
+import { hubActionRoute, hubActions, type HubActionKey } from './hubActions.ts'
 import { selfGrantKey, type SelfGrant, type WorkspaceEntry } from './useDashboard.ts'
 
 const {
@@ -8,6 +11,8 @@ const {
   canSelfGrant,
   canCreateHub,
   selfGrants = new Map<string, SelfGrant>(),
+  viewer = null,
+  actionsState = 'ready',
 } = defineProps<{
   entry: WorkspaceEntry
   /** The reader is an owner or admin here, so may grant themselves access (D45). */
@@ -15,8 +20,12 @@ const {
   /** `hub.create`: owners and admins. */
   canCreateHub?: boolean
   selfGrants?: ReadonlyMap<string, SelfGrant>
+  /** The reader in this workspace, for the hub menus' `can()` checks. */
+  viewer?: Subject | null
+  /** `loading` while the reader's roles load, `error` when they could not. */
+  actionsState?: 'ready' | 'loading' | 'error'
 }>()
-defineEmits<{
+const emit = defineEmits<{
   retry: []
   grantSelf: [hubId: string]
   dismissSelfGrant: [hubId: string]
@@ -24,6 +33,19 @@ defineEmits<{
 }>()
 
 const ask = (hubId: string) => selfGrants.get(selfGrantKey(entry.workspace.id, hubId))
+
+// Each hub's actions menu (issue 234). It sits beside the card, not inside its link, so opening
+// it never opens the hub.
+const router = useRouter()
+const actionsOf = (hub: HubListEntry) => hubActions(viewer, hub, ask(hub.id))
+function onAction(hub: HubListEntry, key: string) {
+  if (key === 'grant-self') {
+    emit('grantSelf', hub.id)
+    return
+  }
+  const to = hubActionRoute(key as HubActionKey, hub)
+  if (to) void router.push(to)
+}
 
 const headingId = computed(() => `workspace-${entry.workspace.id}`)
 
@@ -100,18 +122,18 @@ const offersNewHub = computed(
       </template>
     </StateBlock>
     <ul v-else class="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 p-0">
-      <li v-for="hub in entry.hubs.data" :key="hub.id" class="flex min-w-0 flex-col">
+      <li v-for="hub in entry.hubs.data" :key="hub.id" class="relative flex min-w-0 flex-col">
         <HubCard
           v-if="hub.access === 'granted'"
           :name="hub.name"
           :color="hub.color"
           :count="hub.itemCount"
           :to="{ name: 'hub', params: { workspaceId: hub.workspaceId, hubId: hub.id } }"
-          class="flex-1"
+          class="flex-1 pr-11"
         />
         <!-- Owners and admins without a grant: name only, and a way to grant themselves access. -->
         <template v-else>
-          <HubCard :name="hub.name" :color="hub.color" no-access class="flex-1" />
+          <HubCard :name="hub.name" :color="hub.color" no-access class="flex-1 pr-11" />
           <div v-if="canSelfGrant" class="flex flex-col gap-1 pt-1.5" data-self-grant>
             <!-- Access was given, but the list could not be read again to open the hub. -->
             <FormNotice v-if="ask(hub.id)?.state === 'stale'" data-self-grant-stale>
@@ -143,6 +165,16 @@ const offersNewHub = computed(
             </FormNotice>
           </div>
         </template>
+        <!-- Over the card's top right, centred on its name row, and outside its link. One menu
+             per hub, so focus stays on it when a self-grant turns the card into a link. -->
+        <span class="absolute top-2.5 right-2 inline-flex" data-hub-actions>
+          <RowActionsMenu
+            :label="`Actions for ${hub.name}`"
+            :items="actionsOf(hub)"
+            :state="actionsState"
+            @select="onAction(hub, $event)"
+          />
+        </span>
       </li>
     </ul>
   </section>

@@ -169,8 +169,11 @@ describe('WorkspaceSection', () => {
     expect(html).toContain('Finance')
     expect(html).toContain('No access')
     expect(html).not.toContain('/hubs/fin')
-    // No grant offer in M1: self-granting is API-only (docs/ROLES.md).
-    expect(html).not.toContain('<button')
+    // Without a reader who may self-grant, the "no access" card offers nothing: the only button
+    // is the granted hub's actions menu.
+    expect(html.match(/<button/g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Actions for Engineering"')
+    expect(html).not.toContain('Actions for Finance')
   })
 
   const states: [string, WorkspaceEntry['hubs'], string][] = [
@@ -260,6 +263,49 @@ describe('WorkspaceSection self-grant', () => {
     expect(html).toContain('role="alert"')
     // Granting again would change nothing: the offer waits for the list.
     expect(html).not.toContain('Give myself access')
+  })
+})
+
+describe('WorkspaceSection hub actions (issue 234)', () => {
+  const owner = { id: 'p', kind: 'user', workspaceRole: 'owner' } as const
+  const menuButton = (name: string) =>
+    new RegExp(`<button [^>]*aria-label="Actions for ${name}"[^>]*aria-haspopup="menu"`)
+
+  it('puts a menu on every card the reader can act on, outside the card link', async () => {
+    const html = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hub, hidden] }),
+      canSelfGrant: true,
+      viewer: owner,
+    })
+    expect(html).toMatch(menuButton('Engineering'))
+    expect(html).toMatch(menuButton('Finance'))
+    // A button inside the link would open the hub; the link closes before the menu starts.
+    const link = /<a [^>]*href="\/w\/w\/hubs\/eng"[\s\S]*?<\/a>/.exec(html)?.[0] ?? ''
+    expect(link).not.toContain('<button')
+    expect(html.match(/data-hub-actions/g)).toHaveLength(2)
+  })
+
+  it('waits while the reader’s roles load, and says so when they could not', async () => {
+    const loading = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hub] }),
+      actionsState: 'loading',
+    })
+    expect(loading).toMatch(/<button [^>]*aria-label="Actions for Engineering"[^>]*disabled/)
+    expect(loading).toContain('aria-busy="true"')
+    const failed = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hub] }),
+      actionsState: 'error',
+    })
+    expect(failed).toMatch(menuButton('Engineering'))
+    expect(failed).not.toContain('aria-busy')
+  })
+
+  it('renders no menu for a "no access" hub the reader cannot act on', async () => {
+    const html = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [hidden] }),
+      viewer: { ...owner, workspaceRole: 'member' },
+    })
+    expect(html).not.toContain('Actions for Finance')
   })
 })
 

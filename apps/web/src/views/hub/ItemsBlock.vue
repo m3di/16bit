@@ -5,6 +5,7 @@ import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import type { RowWindows } from '../../ui/data-table.ts'
 import { BaseButton, DataTable, StateBlock, type TableColumn } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
+import { useFillHeight } from './fill-height.ts'
 import { WINDOW_SIZE } from './folder-rows.ts'
 import {
   canSort,
@@ -104,6 +105,18 @@ watch(
   },
 )
 
+// The items area reaches down to the bottom of the viewport, whatever is above it (issue 232),
+// and the table scrolls inside it. Until it is measured, a fixed guess keeps the virtual table's
+// box bounded: a box as tall as its rows would render every row.
+const MIN_HEIGHT = 320
+const area = ref<HTMLElement | null>(null)
+const measured = useFillHeight(area, MIN_HEIGHT)
+const areaHeight = computed(() =>
+  measured.value === null
+    ? `max(${String(MIN_HEIGHT)}px, calc(100dvh - 260px))`
+    : `${String(measured.value)}px`,
+)
+
 /** Rows `from` to `to` (1-based) of the windows that failed, for the message. */
 const failedRanges = computed(() => {
   if (list.state !== 'ready') return ''
@@ -119,82 +132,100 @@ const failedRanges = computed(() => {
 </script>
 
 <template>
-  <StateBlock v-if="list.state === 'loading'" state="loading" title="Loading items" :rows="6" />
-  <StateBlock
-    v-else-if="list.state === 'error' && list.error.isNoPermission"
-    state="no-permission"
-    title="You do not have access to this folder's items"
-  />
-  <StateBlock
-    v-else-if="list.state === 'error' && list.error.isNotFound"
-    state="not-found"
-    title="This folder is not available"
-    message="It may have been deleted, or it may not be shared with you."
-  />
-  <StateBlock
-    v-else-if="list.state === 'error'"
-    state="error"
-    title="The items could not be loaded"
-    :message="list.error.message"
+  <div
+    ref="area"
+    class="flex min-w-0 shrink-0 flex-col"
+    :style="{ height: areaHeight }"
+    data-items-area
   >
-    <template #action>
-      <BaseButton size="sm" @click="emit('retry')">Try again</BaseButton>
-    </template>
-  </StateBlock>
-  <StateBlock
-    v-else-if="list.data.total === 0"
-    state="empty"
-    :title="list.data.where ? 'No items match this filter' : 'No items in this folder yet'"
-    :message="readOnly || list.data.where ? '' : 'Items you add here show up in this table.'"
-  >
-    <template v-if="!readOnly && !list.data.where" #action>
-      <BaseButton size="sm" @click="emit('create')">New item</BaseButton>
-    </template>
-  </StateBlock>
-  <div v-else class="flex min-w-0 flex-col gap-3">
-    <!-- A large folder is read in windows of 200 rows; only the rows in view are rendered. -->
-    <DataTable
-      ref="table"
-      mode="virtual"
-      :caption="`Items in ${folderName}`"
-      :columns="tableColumns"
-      :rows="[]"
-      :row-at="rowAt"
-      :index-of="indexOf"
-      :row-count="list.data.total"
-      height="max(320px, calc(100vh - 260px))"
-      :min-width="minWidth"
-      :selected-id="selectedId"
-      :busy="list.data.sorting"
-      @select="select"
-      @sort="emit('sort', nextSort(sort, $event))"
-      @windows="emit('windows', $event)"
+    <StateBlock v-if="list.state === 'loading'" state="loading" title="Loading items" :rows="6" />
+    <StateBlock
+      v-else-if="list.state === 'error' && list.error.isNoPermission"
+      state="no-permission"
+      title="You do not have access to this folder's items"
+    />
+    <StateBlock
+      v-else-if="list.state === 'error' && list.error.isNotFound"
+      state="not-found"
+      title="This folder is not available"
+      message="It may have been deleted, or it may not be shared with you."
+    />
+    <StateBlock
+      v-else-if="list.state === 'error'"
+      state="error"
+      title="The items could not be loaded"
+      :message="list.error.message"
     >
-      <template #cell="{ row, column }">
-        <template v-if="column.key === '#id'">
-          <span v-if="isCreating(row.id)" class="font-mono text-secondary text-ink3">Saving…</span>
-          <RouterLink
-            v-else
-            :to="itemLink(row)"
-            class="font-mono text-secondary text-ink no-underline hover:underline"
-            data-item-link
-            >{{ idPrefix }}-{{ row.seqId }}</RouterLink
-          >
-        </template>
-        <ValueCell v-else :attribute="attributes.get(column.key)" :value="row.values[column.key]" />
+      <template #action>
+        <BaseButton size="sm" @click="emit('retry')">Try again</BaseButton>
       </template>
-    </DataTable>
-
-    <div class="flex flex-wrap items-center gap-3">
-      <span v-if="list.data.sorting" role="status" class="text-secondary text-ink3" data-sorting
-        >Sorting…</span
+    </StateBlock>
+    <StateBlock
+      v-else-if="list.data.total === 0"
+      state="empty"
+      :title="list.data.where ? 'No items match this filter' : 'No items in this folder yet'"
+      :message="readOnly || list.data.where ? '' : 'Items you add here show up in this table.'"
+    >
+      <template v-if="!readOnly && !list.data.where" #action>
+        <BaseButton size="sm" @click="emit('create')">New item</BaseButton>
+      </template>
+    </StateBlock>
+    <div v-else class="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <!-- A large folder is read in windows of 200 rows; only the rows in view are rendered. -->
+      <DataTable
+        ref="table"
+        mode="virtual"
+        :caption="`Items in ${folderName}`"
+        :columns="tableColumns"
+        :rows="[]"
+        :row-at="rowAt"
+        :index-of="indexOf"
+        :row-count="list.data.total"
+        height="100%"
+        class="min-h-0 flex-1"
+        :min-width="minWidth"
+        :selected-id="selectedId"
+        :busy="list.data.sorting"
+        @select="select"
+        @sort="emit('sort', nextSort(sort, $event))"
+        @windows="emit('windows', $event)"
       >
-      <template v-if="list.data.failed.length > 0">
-        <span role="alert" class="text-secondary text-danger" data-window-error
-          >Rows {{ failedRanges }} could not be loaded. {{ list.data.failure?.message }}</span
+        <template #cell="{ row, column }">
+          <template v-if="column.key === '#id'">
+            <span v-if="isCreating(row.id)" class="font-mono text-secondary text-ink3"
+              >Saving…</span
+            >
+            <RouterLink
+              v-else
+              :to="itemLink(row)"
+              class="font-mono text-secondary text-ink no-underline hover:underline"
+              data-item-link
+              >{{ idPrefix }}-{{ row.seqId }}</RouterLink
+            >
+          </template>
+          <ValueCell
+            v-else
+            :attribute="attributes.get(column.key)"
+            :value="row.values[column.key]"
+          />
+        </template>
+      </DataTable>
+
+      <!-- Only when there is something to say, so the table reaches the bottom otherwise. -->
+      <div
+        v-if="list.data.sorting || list.data.failed.length > 0"
+        class="flex flex-wrap items-center gap-3"
+      >
+        <span v-if="list.data.sorting" role="status" class="text-secondary text-ink3" data-sorting
+          >Sorting…</span
         >
-        <BaseButton size="sm" @click="emit('retryWindows')">Try again</BaseButton>
-      </template>
+        <template v-if="list.data.failed.length > 0">
+          <span role="alert" class="text-secondary text-danger" data-window-error
+            >Rows {{ failedRanges }} could not be loaded. {{ list.data.failure?.message }}</span
+          >
+          <BaseButton size="sm" @click="emit('retryWindows')">Try again</BaseButton>
+        </template>
+      </div>
     </div>
   </div>
 </template>
