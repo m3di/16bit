@@ -230,7 +230,9 @@ for (const [creator, granter] of [
     await expectStatus(await me.get(`/hubs/${hub.id}`), 200)
 
     await page.reload()
-    await hubCard(page, name).getByRole('link').click()
+    await hubCard(page, name)
+      .getByRole('link', { name: new RegExp(`^${name}\\b`) })
+      .click()
     await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
   })
 }
