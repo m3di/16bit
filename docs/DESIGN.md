@@ -91,7 +91,7 @@ Links are `--ink` text with a 1px `--line2` bottom border instead of an underlin
 
 Material Symbols, outlined, light weight, 18px. The package is added with the first component that needs an icon. The mockups use coloured squares in place of icons; replace those with icons only where an icon adds meaning.
 
-Until the first real icon lands, these glyphs are inline pixel SVGs in `currentColor`, not Material Symbols: "more" on RowActionsMenu (three 2px squares), "close" on BaseDialog (a thin X), and the moon and sun on ThemeSwitch (`ThemeGlyph`, a 12 by 12 pixel grid). The Material Symbols package arrives with the first component that needs any other icon.
+Until the first real icon lands, these glyphs are inline pixel SVGs in `currentColor`, not Material Symbols: "more" on RowActionsMenu (three 2px squares), "close" on BaseDialog (a thin X), the moon and sun on ThemeSwitch (`ThemeGlyph`, a 12 by 12 pixel grid), and the gear on the dashboard hub card's settings link (an 8 by 8 gear around a square hole, `crispEdges`). The Material Symbols package arrives with the first component that needs any other icon.
 
 ### Theme switch
 
@@ -115,7 +115,7 @@ One 28px quiet icon button in the brand bar (AppShell, AuthLayout, SettingsLayou
 | StatusDot | 6px dot plus label |
 | Avatar | 5 by 5 pixel sprite generated deterministically from the principal ID, in a palette tint |
 | SizeMeter | Four 6px squares. 0 items fills none, 1 to 9 fills one, under 100 two, under 1,000 three, and 1,000 or more four |
-| HubCard | Colour square, name, status line, size meter, count, last active. No-access variant (the reader sees the hub's name but has no grant): colour square, name, and "No access" beside a dashed `--line3` square; no count, no size meter, never a link. The props are a union, so a card with access must pass `count` and a no-access card cannot pass `count` or `to`. |
+| HubCard | Colour square, name, status line, size meter, count, last active. No-access variant (the reader sees the hub's name but has no grant): colour square, name, and "No access" beside a dashed `--line3` square; no count, no size meter, never a link. The props are a union, so a card with access must pass `count` and a no-access card cannot pass `count` or `to`. On the dashboard, a card the reader may manage carries a 28px quiet icon link at its top right, outside the card's own link: the pixel gear, `aria-label` "Settings for Engineering", leading to the hub's General settings. It shows only when the hub page's "Hub settings" link would. |
 | Table | Hairline rows, 36 to 38px, no outer box. A sortable column's header is a button with a visible cue at rest: two hairline chevrons (up and down) after the label, in `--ink3` like the label. In a right-aligned column (numbers) the cue goes before the label instead, so the label lines up with the values' right edge. The sorted column shows one chevron for its direction, centred, and its label and chevron are `--ink` at weight 500. The header has `aria-sort`, and the caption says that header buttons sort. The cue keeps its width, so labels do not move when the sort changes. Columns that cannot be sorted show no cue. A click on a row selects it; for rows that hold their own controls, see the static mode under M2. |
 | ItemPanel | Side panel with fields, version, and history |
 | StateBlock | Loading skeleton, empty, error, no permission, not found (see below) |

@@ -28,6 +28,7 @@ import NewItemForm from './NewItemForm.vue'
 import { provideValueContext } from './context.ts'
 import { folderColumns, ownItemCount, truncatedNote, useHub } from './useHub.ts'
 import { useHubDirectory } from './useHubDirectory.ts'
+import { opensHubSettings } from '../home/hubSettings.ts'
 import { canWriteItems } from './newItem.ts'
 import { canSort, inHub, useItems, valueErrors } from './useItems.ts'
 import { usePrincipals } from './usePrincipals.ts'
@@ -170,11 +171,11 @@ async function onSidebarStatus(text: string, focus: boolean) {
   sidebarStatusEl.value?.focus()
 }
 
-// Owners and admins also manage access, agent keys and deletion there (docs/ROLES.md).
+// The same rule as the dashboard's settings gear (docs/ROLES.md).
 const opensSettings = computed(() => {
   const me = session.me.value
-  const role = me.state === 'ready' ? viewerOf(me.data, workspaceId)?.workspaceRole : undefined
-  return managesSchema.value || role === 'owner' || role === 'admin'
+  const viewer = me.state === 'ready' ? viewerOf(me.data, workspaceId) : null
+  return opensHubSettings(viewer, description.value?.hubRole ?? null)
 })
 
 const openFolderId = computed(() => folderId ?? hubId)

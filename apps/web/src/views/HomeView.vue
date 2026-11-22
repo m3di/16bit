@@ -20,11 +20,8 @@ const { workspaces, totals, selfGrants, load, reloadHubs, grantSelf, dismissSelf
 const session = useSession()
 const meOrNull = () => (session.me.value.state === 'ready' ? session.me.value.data : null)
 const selfGrantIn = (workspaceId: string) => selfGranter(meOrNull(), workspaceId) !== null
-// The hub menus follow `can()` for the reader's role in each workspace (issue 234).
+// Each hub's settings link follows the reader's role in its workspace (issue 240).
 const viewerIn = (workspaceId: string) => viewerOf(meOrNull(), workspaceId)
-const actionsState = computed(() =>
-  session.me.value.state === 'ready' ? 'ready' : session.me.value.state,
-)
 function onGrantSelf(workspaceId: string, hubId: string) {
   const viewer = selfGranter(meOrNull(), workspaceId)
   if (viewer) void grantSelf(workspaceId, hubId, viewer.id)
@@ -91,7 +88,6 @@ const summary = computed(() =>
         :create-hub-in="createHubIn"
         :self-grants="selfGrants"
         :viewer-in="viewerIn"
-        :actions-state="actionsState"
         @retry="load()"
         @retry-hubs="reloadHubs"
         @grant-self="onGrantSelf"

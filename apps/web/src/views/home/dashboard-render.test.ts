@@ -25,6 +25,11 @@ const router = () =>
         name: 'workspace-members',
         component: { render: () => null },
       },
+      {
+        path: '/w/:workspaceId/hubs/:hubId/settings/general',
+        name: 'hub-settings-general',
+        component: { render: () => null },
+      },
     ],
   })
 
@@ -169,11 +174,9 @@ describe('WorkspaceSection', () => {
     expect(html).toContain('Finance')
     expect(html).toContain('No access')
     expect(html).not.toContain('/hubs/fin')
-    // Without a reader who may self-grant, the "no access" card offers nothing: the only button
-    // is the granted hub's actions menu.
-    expect(html.match(/<button/g)).toHaveLength(1)
-    expect(html).toContain('aria-label="Actions for Engineering"')
-    expect(html).not.toContain('Actions for Finance')
+    // Without a reader who may self-grant or manage, the cards offer nothing else.
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('data-hub-settings')
   })
 
   const states: [string, WorkspaceEntry['hubs'], string][] = [
@@ -266,46 +269,51 @@ describe('WorkspaceSection self-grant', () => {
   })
 })
 
-describe('WorkspaceSection hub actions (issue 234)', () => {
-  const owner = { id: 'p', kind: 'user', workspaceRole: 'owner' } as const
-  const menuButton = (name: string) =>
-    new RegExp(`<button [^>]*aria-label="Actions for ${name}"[^>]*aria-haspopup="menu"`)
+describe('WorkspaceSection hub settings link (issue 240)', () => {
+  const as = (workspaceRole: 'owner' | 'admin' | 'member' | 'viewer') =>
+    ({ id: 'p', kind: 'user', workspaceRole }) as const
+  const settingsLink = (hubId: string, name: string) =>
+    new RegExp(
+      `<a [^>]*href="/w/w/hubs/${hubId}/settings/general"[^>]*aria-label="Settings for ${name}"`,
+    )
 
-  it('puts a menu on every card the reader can act on, outside the card link', async () => {
+  it('links owners to a hub’s General settings, outside the card link', async () => {
     const html = await render(WorkspaceSection, {
       entry: entry({ state: 'ready', data: [hub, hidden] }),
       canSelfGrant: true,
-      viewer: owner,
+      viewer: as('owner'),
     })
-    expect(html).toMatch(menuButton('Engineering'))
-    expect(html).toMatch(menuButton('Finance'))
-    // A button inside the link would open the hub; the link closes before the menu starts.
-    const link = /<a [^>]*href="\/w\/w\/hubs\/eng"[\s\S]*?<\/a>/.exec(html)?.[0] ?? ''
-    expect(link).not.toContain('<button')
-    expect(html.match(/data-hub-actions/g)).toHaveLength(2)
+    expect(html).toMatch(settingsLink('eng', 'Engineering'))
+    // One link per hub the reader may manage; a hub without a grant has no settings to open.
+    expect(html.match(/data-hub-settings/g)).toHaveLength(1)
+    expect(html).not.toContain('Settings for Finance')
+    // A link inside the card's link would be invalid; the card closes before the gear starts.
+    const card = /<a [^>]*href="\/w\/w\/hubs\/eng"[\s\S]*?<\/a>/.exec(html)?.[0] ?? ''
+    expect(card).not.toContain('settings')
+    // The gear is decoration; the link's name says what it does.
+    expect(html).toMatch(/<svg aria-hidden="true"/)
+    // No menu any more.
+    expect(html).not.toContain('aria-haspopup')
   })
 
-  it('waits while the reader’s roles load, and says so when they could not', async () => {
-    const loading = await render(WorkspaceSection, {
-      entry: entry({ state: 'ready', data: [hub] }),
-      actionsState: 'loading',
+  it('links a hub admin who is a member, but not an editor or a viewer', async () => {
+    const adminOf = await render(WorkspaceSection, {
+      entry: entry({ state: 'ready', data: [{ ...hub, hubRole: 'hub_admin' }] }),
+      viewer: as('member'),
     })
-    expect(loading).toMatch(/<button [^>]*aria-label="Actions for Engineering"[^>]*disabled/)
-    expect(loading).toContain('aria-busy="true"')
-    const failed = await render(WorkspaceSection, {
-      entry: entry({ state: 'ready', data: [hub] }),
-      actionsState: 'error',
-    })
-    expect(failed).toMatch(menuButton('Engineering'))
-    expect(failed).not.toContain('aria-busy')
+    expect(adminOf).toMatch(settingsLink('eng', 'Engineering'))
+    for (const viewer of [as('member'), as('viewer')]) {
+      const html = await render(WorkspaceSection, {
+        entry: entry({ state: 'ready', data: [hub] }),
+        viewer,
+      })
+      expect(html, viewer.workspaceRole).not.toContain('data-hub-settings')
+    }
   })
 
-  it('renders no menu for a "no access" hub the reader cannot act on', async () => {
-    const html = await render(WorkspaceSection, {
-      entry: entry({ state: 'ready', data: [hidden] }),
-      viewer: { ...owner, workspaceRole: 'member' },
-    })
-    expect(html).not.toContain('Actions for Finance')
+  it('shows no link while the reader’s roles are unknown', async () => {
+    const html = await render(WorkspaceSection, { entry: entry({ state: 'ready', data: [hub] }) })
+    expect(html).not.toContain('data-hub-settings')
   })
 })
 
