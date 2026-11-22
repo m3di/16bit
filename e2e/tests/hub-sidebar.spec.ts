@@ -376,3 +376,64 @@ test('a rename made while the sidebar dialog is open is a conflict, not overwrit
     'Theirs',
   )
 })
+
+test("at phone width a hub admin sets the root's attributes and recolours a folder", async ({
+  as,
+  pageAs,
+}) => {
+  const owner = as('owner')
+  const hub = await newHub(owner, 'sidebar phone')
+  const noteRes = await owner.post(`/hubs/${hub.id}/attributes`, {
+    name: 'Note',
+    type: 'text',
+    config: {},
+  })
+  await expectStatus(noteRes, 201)
+  const note = attributeSchema.parse(await noteRes.json())
+  const folderRes = await owner.post(`/hubs/${hub.id}/folders`, {
+    parentId: hub.id,
+    name: 'Backlog',
+    color: 'blue',
+  })
+  await expectStatus(folderRes, 201)
+  const backlog = folderSchema.parse(await folderRes.json())
+  await owner.createItem(hub.id, {})
+
+  const page = await pageAs('owner', PHONE)
+  await page.goto(hubPath(hub.id))
+  // The root's Attributes: the hub's own items get the column, as from its row in settings.
+  await sidebarMenu(page, hub.name, 'Attributes')
+  let dialog = page.getByRole('dialog', { name: `Attributes in ${hub.name}` })
+  await dialog.getByLabel('Add an attribute').selectOption({ label: 'Note (Text)' })
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Save attributes' }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.locator('[data-sidebar-status]')).toHaveText(
+    `Saved the attributes of ${hub.name}.`,
+  )
+  let d = await describeHub(owner, hub.id)
+  expect(
+    d.folderAttributes.filter((fa) => fa.folderId === hub.id).map((fa) => fa.attributeId),
+  ).toEqual([note.id])
+  await expect(
+    page
+      .getByRole('table', { name: `Items in ${hub.name}` })
+      .getByRole('columnheader', { name: /^Note/ }),
+  ).toBeVisible()
+
+  // Recolour a folder that is not open, without renaming or moving it.
+  await sidebarMenu(page, 'Backlog', 'Rename, recolour or move')
+  dialog = page.getByRole('dialog', { name: 'Edit Backlog' })
+  await dialog.getByRole('radio', { name: 'Violet' }).check()
+  await dialog.getByRole('button', { name: 'Save folder' }).click()
+  await expect(dialog).toBeHidden()
+  d = await describeHub(owner, hub.id)
+  expect(d.folders.find((f) => f.id === backlog.id)).toMatchObject({
+    name: 'Backlog',
+    parentId: hub.id,
+    color: 'violet',
+    version: backlog.version + 1,
+  })
+  await expect(page).toHaveURL(new RegExp(`${hubPath(hub.id)}$`))
+  await page.close()
+})
