@@ -10,18 +10,20 @@ The initial plan for M4. Each entry becomes a GitHub issue during planning; afte
 
 **Changes after review (#247):** the questions are renumbered Q1 to Q11 and each new choice is marked **Decide**. New: views-only folders, "Opens on" and folder delete with a view (Q1); the D15, D17 and D44 amendments in one place (Q2); board columns, row fields, two group measures, create target and `$block` rules (Q3); `view.edit` dropped for `hub.manageSchema` (Q4); actor IDs only and one `no_access` group (Q6); time zone and working days (Q7); Backlog instead of Tasks, Type, the release line and Team in Q8; a request deadline, a per-principal limit, a total condition cap, a folder-keyed data route with the tree version and fuller refresh rules (Q9); #228's gate (Q11). Issues: M4-00 aggregate spike in wave 1; M4-02 spells out FK, RLS and grants; M4-03 versioned reset, unique-violation 409, schema lock and ARCHITECTURE.md; M4-06 moves to wave 2 with a 2,000-task fixture and a generated agent key; #199 owns `$now`; #229 is labelled `needs-human`; M4-08 names the chart library. From the optional points: 24, 26, 27, 28 and 29 are taken; 25 (Team as items) is not, see Q8.
 
+**Changes after the second review:** `opens_on_folder_id` is a column on the hub's folder row, guarded by `folder_guard` and the folder UPDATE grant and built like `title_attribute_id` (M4-02); the `view` grants include `SELECT`; the per-principal limit is 4 in flight per API process, and the client queues and retries a 429 silently (Q9). Optional points taken: a trigger keeps views-only folders empty; a designed "No view yet" state; "New item" presets only top-level `AND` equality conditions; M4-08 is a hand-written SVG burndown, so no chart dependency is added.
+
 ## Open questions for the maintainer
 
 Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `docs/DECISIONS.md`. The **Decide** lines are choices the plan cannot make alone; the rest follows from them.
 
 **Q1. How a root view is stored, and views-only folders (D76).**
 
-- One root view per folder (the hub root included), or none. No stored view means the folder opens on a default view, `page > table(this folder)`, which looks exactly like today's folder screen.
+- One root view per folder (the hub root included), or none. No stored view means the folder opens on a default view, `page > table(this folder)`, which looks exactly like today's folder screen. A views-only folder has no items, so its default is a designed "No view yet" state, with "Compose" for hub admins.
 - Migration `view (workspace_id, id, hub_id, folder_id, tree jsonb, version, updated_at, updated_by)`, unique per folder, composite FK `(workspace_id, hub_id, folder_id) REFERENCES folder (workspace_id, hub_id, id) ON DELETE CASCADE` (so `delete_hub` takes the views), a 128 KiB size check, RLS (Q4).
 - Writes replace the whole tree with an expected `version`: 409 `conflict`, 422 `invalid_view` with `errors: [{ path, message }]`. Reset is `DELETE ?version=` with the same 409. Two first-time PUTs at `version: 0` that hit the unique constraint answer 409 `conflict`, never 500.
 - `tree` is `{ schemaVersion: 1, root }`; core's `parseViewTree` upgrades older versions on read, so block config changes need no data migrations.
 - No view history in M4. A view write sends the existing `hub` NOTIFY; clients already reload on it.
-- **Decide: views-only folders and "Opens on".** Proposed: adopt `HubSettings.dc.html`. `folder.views_only` (set at creation, never updated) marks a folder that holds no items: item create and move into it answer 422 `views_only`, the sidebar (#231) shows "Views only" instead of a count, and the folder menu (#233) offers no "New item". `hub.opens_on_folder_id` (null is the hub root, `ON DELETE SET NULL (opens_on_folder_id)`) picks the folder a hub opens on. Home and My work are views-only folders; the hub opens on Home. Both columns ride in M4-02. The alternative is Home as the hub root's view and My work as an ordinary empty folder, with both differences listed in Q8.
+- **Decide: views-only folders and "Opens on".** Proposed: adopt `HubSettings.dc.html`. `folder.views_only` (set at creation, never updated) marks a folder that holds no items: item create and move into it answer 422 `views_only` (a trigger on `item` holds this underneath, as `hub_id_check` does for D3), the sidebar (#231) shows "Views only" instead of a count, and the folder menu (#233) offers no "New item". `opens_on_folder_id` on the hub's folder row (null is the hub root; a hub admin's setting, like the title attribute) picks the folder a hub opens on. Home and My work are views-only folders; the hub opens on Home. Both columns ride in M4-02. The alternative is Home as the hub root's view and My work as an ordinary empty folder, with both differences listed in Q8.
 - **Decide: deleting a folder that has a stored view.** Proposed: refuse with 409 `has_view`; the admin resets the view first, so a composed view is never lost in one click (D52). The alternative is to cascade, with the confirm dialog naming the view. Either way `delete_hub` cascades.
 
 **Q2. Amending recorded decisions.** **Decide**, proposed yes to all three; recorded in D76 and D77:
@@ -39,7 +41,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 - **`list` and `board` rows and cards:** a `fields` list of up to 4 attribute IDs after the title (backlog: ID, Type, Epic, Points; current work: Stage, Owner; cards: ID, Points), each with an optional `emptyText` ("No epic", "?"); a select shows its option colour as a dot.
 - **`list` groups:** group by one attribute, with up to 2 group measures ("Next up 19 points", "Later 1 not estimated" is `sum` plus `count_empty`).
 - **`board` columns:** an ordered subset of the select's options (up to 20; the Work board hides Done), empty columns always shown with an `emptyText` per column or a board default ("Nothing of yours is in review.").
-- **Create** (`list`, `board`): creates in the set binding's `folderId`, shown only with `item.write` there; it presets the group's or column's value and any `attribute = $me` condition of the binding, so the new item appears in the block. A views-only folder's "New item" therefore creates in Backlog.
+- **Create** (`list`, `board`): creates in the set binding's `folderId`, shown only with `item.write` there; it presets the group's or column's value and the binding's top-level `AND` equality conditions (`attribute = value` or `= $me`), so the new item appears in the block. An `OR` presets nothing: on the Work board ("Owner or Reviewer is me") create sets only Stage. A views-only folder's "New item" therefore creates in Backlog.
 - **`$block` rules:** it may name only an item-bound block, and item-binding rules may not use `$block` (no chains or cycles). When the named block resolves to nothing (no current sprint, or the sprint is hidden), dependent blocks get the status `unresolved` and render a designed empty state, not an error.
 
 **Q4. Who can edit views (D78; gated change to `docs/ROLES.md`).**
@@ -87,7 +89,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 
 - `GET /v1/workspaces/:w/folders/:folderId/view/data?version=N[&blocks=a,b][&tz=]` answers the folder's view, stored or default (version 0), so the route needs no view ID. If the stored tree has moved past `version`, it answers 409 `stale` and the client reloads the view.
 - Every data block in one snapshot with one `seq`, with a status per block (`ok`, `invalid`, `not_found`, `unresolved`, `error`), at most 1,000 items per response. Item bindings resolve first, then `$block`.
-- **Budget:** one 5 s deadline for the whole request; blocks that haven't run by then get `error: timeout`. One in-flight view-data or aggregate request per principal; a second answers 429.
+- **Budget:** one 5 s deadline for the whole request; blocks that haven't run by then get `error: timeout`. Up to 4 view-data or aggregate requests in flight per principal per API process; a fifth answers 429. It is a guard, not a global quota (D34 scales API pods). The client queues a 429 and retries it after its own in-flight requests finish, with no error state, so two tabs, the composer's preview and overlapping refetches all render.
 - The client subscribes to the hub from that `seq`; items already shown update in place through the M3 store. A block refetches when anything changes in its bound folder, in the folder of an item binding it uses through `$block` (editing the sprint's dates refetches the burndown and every "this sprint" block), or in a relation's target folder it shows labels from (an epic rename). Refetches are debounced 300 ms and at most once a second per view. Blocks using `$now` also refetch at midnight in the request's zone. No caching across readers (`$me`).
 
 **Q10. Composer scope.** In hub settings, "Root views", hub admin only: an outline of the tree (add from allowed types, remove, move up and down), a form per block type generated from the registry (folder, attribute, sort and limit pickers), filters as a one-level condition list plus "Edit as JSON" for nested trees, a live preview, Save with version (409 with Reload), Reset to default. No drag and drop. The composer has no mockup (M4-07 flags it). Hub settings also gain "Opens on" and the views-only option on New folder (Q1).
@@ -116,7 +118,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 ## M4-02 Migration: the view table, views-only folders, "Opens on"
 
 - **Role:** backend · **Depends on:** nothing (alongside M4-01; numbered after #199's), M4-00 for any index · **Gate:** needs-human (migration, RLS)
-- **Acceptance:** `view` as in Q1, its FK `(workspace_id, hub_id, folder_id) REFERENCES folder (workspace_id, hub_id, id)`; RLS read with any hub grant, insert and update as hub admin with `WITH CHECK` including `updated_by = rls_principal()`; grants `INSERT, DELETE` plus `UPDATE (tree, version, updated_at, updated_by)`, never `workspace_id`, `hub_id` or `folder_id` (as 0009). `folder.views_only` (not in the folder UPDATE grant) and `hub.opens_on_folder_id` as Q1 says. Tests: up, down and up again; an editor's write refused by RLS; an agent refused; a `hub_id` that doesn't match the folder refused by the FK; `delete_hub` (`SECURITY DEFINER`) succeeds on a hub with views and removes them; deleting the opens-on folder clears `opens_on_folder_id`.
+- **Acceptance:** `view` as in Q1, its FK `(workspace_id, hub_id, folder_id) REFERENCES folder (workspace_id, hub_id, id)`; RLS read with any hub grant, insert and update as hub admin with `WITH CHECK` including `updated_by = rls_principal()`; grants `SELECT, INSERT, DELETE` plus `UPDATE (tree, version, updated_at, updated_by)`, never `workspace_id`, `hub_id` or `folder_id` (`view` is a new table, so it needs its own `SELECT`). `folder.views_only`, not in the folder UPDATE grant, with a `BEFORE INSERT OR UPDATE OF folder_id` trigger on `item` refusing a views-only folder. `folder.opens_on_folder_id` copies `title_attribute_id` exactly: `CHECK (opens_on_folder_id IS NULL OR parent_id IS NULL)` (hub rows only), the same-hub FK `(workspace_id, hub_id, opens_on_folder_id) REFERENCES folder (workspace_id, hub_id, id) ON DELETE SET NULL (opens_on_folder_id)`, a partial index `WHERE opens_on_folder_id IS NOT NULL` for the SET NULL lookup, added to the folder UPDATE column grant and to `folder_guard`'s column list (replaced by the new migration, 0009 stays as merged), so editors, whom `folder_update` admits for the counters, can't write it. Tests: up, down and up again; an editor's write refused by RLS; an agent refused; a `hub_id` that doesn't match the folder refused by the FK; an editor's UPDATE of `opens_on_folder_id` refused with 42501; a folder from another hub refused by the FK; the column refused on a non-hub row; an item insert or move into a views-only folder refused by the trigger; `delete_hub` (`SECURITY DEFINER`) succeeds on a hub with views and removes them; deleting the opens-on folder clears `opens_on_folder_id`.
 
 ### Backend
 
@@ -133,7 +135,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 ## M4-05 View data endpoint
 
 - **Role:** backend · **Depends on:** M4-03, M4-04, M4-06
-- **Acceptance:** Q9 with per-block statuses, one snapshot and `seq`, caps, the 5 s deadline and the per-principal 429. Tests: the seeded views return the expected numbers; two readers get different "my work"; removing an attribute makes only its blocks `invalid`; no current sprint makes its dependents `unresolved`; a `?blocks=` subset; a stale `version` answers 409; the default view of a folder with none stored; a second concurrent request answers 429.
+- **Acceptance:** Q9 with per-block statuses, one snapshot and `seq`, caps, the 5 s deadline and the per-process limit of 4. Tests: the seeded views return the expected numbers; two readers get different "my work"; removing an attribute makes only its blocks `invalid`; no current sprint makes its dependents `unresolved`; a `?blocks=` subset; a stale `version` answers 409; the default view of a folder with none stored; a fifth concurrent request from one principal answers 429.
 
 ## M4-06 Project hub seed
 
@@ -145,19 +147,19 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 ## M4-07 Block presentation components
 
 - **Role:** design-system · **Depends on:** nothing
-- **Acceptance:** from the two mockups, in both themes: PageHeader (with the live dot), Section, Columns, NumberStat, GroupedList (up to 4 row fields, two group measures), BoardColumn (with empty text) and BoardCard, BarRows, FieldsInline. Each with D18's states plus "invalid" and "unresolved". On the kit page and in DESIGN.md. Screens without a mockup (empty, invalid and unresolved states, and the composer) flagged for the maintainer.
+- **Acceptance:** from the two mockups, in both themes: PageHeader (with the live dot), Section, Columns, NumberStat, GroupedList (up to 4 row fields, two group measures), BoardColumn (with empty text) and BoardCard, BarRows, FieldsInline. Each with D18's states plus "invalid" and "unresolved", and a "No view yet" state (with "Compose" for hub admins). On the kit page and in DESIGN.md. Screens without a mockup (empty, invalid, unresolved and "No view yet" states, and the composer) flagged for the maintainer.
 
-## M4-08 Chart component
+## M4-08 Burndown chart
 
 - **Role:** design-system · **Depends on:** nothing
-- **Acceptance:** Chart.js (MIT, compatible with Apache-2.0) at its current stable release, read from its current documentation; the issue names the version and licence. Lazy-loaded out of the main bundle; burndown (actual, dashed ideal, "Today") and horizontal bars; colours from tokens, follows the theme; a hidden data table for screen readers; no task over 50 ms while rendering on a production build.
+- **Acceptance:** a small hand-written SVG component like the mockup's, no chart dependency (BarRows in M4-07 covers the bars): burndown with actual, dashed ideal and "Today", stepping over the days Q7 decides; colours from CSS tokens, so it follows the theme (D39) without a rebuild; a hidden data table for screen readers; no task over 50 ms while rendering on a production build.
 
 ### Frontend
 
 ## M4-09 View renderer, layout and content blocks
 
 - **Role:** frontend · **Depends on:** M4-01 (branch shapes), M4-07; M4-05 for real data
-- **Acceptance:** the web block registry; HubPage opens on the hub's "Opens on" folder and renders the folder's root view or the default (identical to today); loads view and data with `version` and the browser's `tz`, subscribes from `seq`, refreshes per block (Q9, including the midnight refetch), reloads on a `hub` event or a 409 `stale`; `page`, `section`, `columns`, `heading`, `text`; one broken block never breaks the page. The sidebar (#231) shows "Views only" and the folder menu (#233) hides "New item" for views-only folders.
+- **Acceptance:** the web block registry; HubPage opens on the hub's "Opens on" folder and renders the folder's root view or the default (identical to today); loads view and data with `version` and the browser's `tz`, subscribes from `seq`, refreshes per block (Q9, including the midnight refetch), reloads on a `hub` event or a 409 `stale`; `page`, `section`, `columns`, `heading`, `text`; one broken block never breaks the page. The sidebar (#231) shows "Views only" and the folder menu (#233) hides "New item" for views-only folders. A queued 429 retries silently. Test: two tabs of the same person both render home with no error state.
 
 ## M4-10 Data blocks
 
@@ -176,7 +178,7 @@ Every answer below is a **proposal**. Once confirmed they become D76 to D83 in `
 - **Role:** qa · **Depends on:** M4-05, M4-06, M4-10, M4-11, #228
 - **Acceptance:**
   1. After `pnpm seed`, project home and my work: every number, chart series, board count, group summary and field is checked against `/aggregate` and `/query` for the same binding, and a few against literal values computed from the seed data (for example "16 of 34", "day 6 of 10").
-  2. Two people see different "my work"; a viewer sees the views without "New item"; "New item" in My work creates in Backlog and appears in the view; an agent key's create through the API in a views-only folder is refused.
+  2. Two people see different "my work"; a viewer sees the views without "New item"; "New item" in My work creates in Backlog and appears in the view; an agent key's create through the API in a views-only folder is refused; "New item" on the Work board sets only Stage; two tabs of the same person both render home with no error state.
   3. An agent key patches a task over HTTP; within 2 s both browsers show the card's new column, the updated numbers, burndown and team row. Creates and deletes appear and disappear. Editing the sprint's dates refetches the burndown.
   4. A hub admin builds "my work" in the composer from the default view, saves, and it renders; a stale tab gets the 409; editor and viewer see no composer.
   5. Removing an attribute a block uses breaks only that block.
