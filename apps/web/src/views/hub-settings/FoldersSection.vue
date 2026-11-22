@@ -154,7 +154,11 @@ async function confirmDelete() {
             >Items directly in the hub</span
           >
         </span>
-        <template v-else-if="column.key === 'items'">{{ entry.ownCount ?? '' }}</template>
+        <template v-else-if="column.key === 'items'">
+          <template v-if="entry.ownCount !== null">{{ entry.ownCount }}</template>
+          <!-- The folder list was cut short, so the hub's own count cannot be told. -->
+          <span v-else class="text-ink3" data-count-unknown>Unknown</span>
+        </template>
         <template v-else-if="column.key === 'attributes'">{{
           attributeCount(description, entry.folder.id)
         }}</template>
