@@ -12,7 +12,8 @@ describe('playwright config', () => {
     const projects = config.projects ?? []
     const budgets = projects.find((p) => p.name === 'budgets')
     const chromium = projects.find((p) => p.name === 'chromium')
-    expect(budgets).toMatchObject({ dependencies: ['chromium'], workers: 1 })
+    // Never next to another spec, the production specs included.
+    expect(budgets).toMatchObject({ dependencies: ['chromium', 'production'], workers: 1 })
     const match = budgets?.testMatch as RegExp
     const ignore = chromium?.testIgnore as RegExp
     expect(match.test('large-folder-budgets.spec.ts')).toBe(true)

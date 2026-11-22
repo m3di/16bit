@@ -82,7 +82,8 @@ export default defineConfig({
         // Same host as the dev server, so the signed-in session cookie applies here too.
         baseURL: externalBuiltUrl ?? builtUrl,
       },
-      dependencies: ['chromium'],
+      // After the production specs too, which use the same build next to them.
+      dependencies: ['chromium', 'production'],
       workers: 1,
     },
   ],

@@ -4,8 +4,13 @@ import { describe, expect, it } from 'vitest'
 // a function, or a value such as `ref('')`. In the production build, templates are compiled
 // inline with `<script setup>`, so `ref="name"` beside `import { name }` becomes a function ref
 // that calls the import on every render, and beside `const name = ref('')` overwrites the value
-// with the element. The dev server compiles templates apart and never shows it (issue 233: the sidebar's folder menus
-// did nothing in the built app, and threw inside `folderActions`).
+// with the element. The dev server compiles templates apart and never shows it (issue 233: the
+// sidebar's folder menus did nothing in the built app, and threw inside `folderActions`).
+//
+// A text check, not a compiler: it reads top-level `import { a, b as c }`, default imports,
+// `function` declarations and `const`/`let name =`, and static `ref="name"`. Known gaps: it
+// misses destructured bindings (`const { a } = ...`), namespace imports (`import * as a`), and
+// bound refs (`:ref="..."`).
 const sources = import.meta.glob<string>('../**/*.vue', {
   query: '?raw',
   import: 'default',
@@ -31,7 +36,7 @@ function callableBindings(source: string): Set<string> {
   }
   for (const [, name = ''] of script.matchAll(/^(?:async\s+)?function\s+(\w+)/gm)) names.add(name)
   // Any other top-level binding too, unless it is meant to hold the element: `useTemplateRef`, or
-  // a `ref(null)` / `shallowRef(null)`. A `ref('')` named like a template ref gets the element.
+  // a `ref()` / `ref(null)` / `shallowRef()` / `shallowRef(null)`. A `ref('')` named like a template ref gets the element.
   const declarations = script.split(/\n(?=(?:const|let|function|async function)\s)/)
   for (const declaration of declarations) {
     const code = declaration
@@ -43,7 +48,8 @@ function callableBindings(source: string): Set<string> {
     if (!m) continue
     const [, name = '', init = ''] = m
     const holdsElement =
-      init.startsWith('useTemplateRef') || /^(?:shallowRef|ref)(?:<[\s\S]*?>)?\(null\)/.test(init)
+      init.startsWith('useTemplateRef') ||
+      /^(?:shallowRef|ref)(?:<[\s\S]*?>)?\((?:null)?\)/.test(init)
     if (!holdsElement) names.add(name)
   }
   return names
@@ -64,10 +70,11 @@ import { a as b } from 'x'
 function run() {}
 const box = useTemplateRef('box')
 const area = ref<HTMLElement | null>(null)
+const plain = shallowRef<HTMLElement>()
 // a comment
 const status = ref('')
 </script>
-<template><FolderActions ref="folderActions" /><div ref="box" /><div ref="area" /><p ref="status" /></template>`
+<template><FolderActions ref="folderActions" /><div ref="box" /><div ref="area" /><i ref="plain" /><p ref="status" /></template>`
     expect([...callableBindings(sfc)].sort()).toEqual([
       'FolderActions',
       'b',
@@ -75,7 +82,7 @@ const status = ref('')
       'run',
       'status',
     ])
-    expect(templateRefs(sfc)).toEqual(['folderActions', 'box', 'area', 'status'])
+    expect(templateRefs(sfc)).toEqual(['folderActions', 'box', 'area', 'plain', 'status'])
   })
 
   it('found the components', () => {

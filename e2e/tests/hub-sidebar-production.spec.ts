@@ -65,6 +65,17 @@ test('the sidebar menu entries open their dialogs and save on the production bui
   await page.keyboard.press('Escape')
   await expect(attributes).toBeHidden()
 
+  // A delete: the status line says so and takes focus, as the row is gone.
+  await sidebar(page).getByRole('button', { name: 'Actions for Queue', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Delete folder' }).click()
+  const confirm = page.getByRole('dialog', { name: 'Delete Queue?' })
+  await confirm.getByRole('button', { name: 'Delete folder' }).click()
+  await expect(confirm).toBeHidden()
+  const status = page.locator('[data-sidebar-status]')
+  await expect(status).toHaveText('Deleted Queue.')
+  await expect(status).toBeFocused()
+  await expect(sidebar(page).getByRole('link', { name: /^Queue/ })).toHaveCount(0)
+
   // And the root's Hub settings entry leads to the hub's settings.
   await sidebar(page)
     .getByRole('button', { name: `Actions for ${hub.name}`, exact: true })
