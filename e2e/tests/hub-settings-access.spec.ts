@@ -304,7 +304,7 @@ test('an owner gives themselves access from the dashboard’s "no access" card',
   await expect(card).toContainText('No access')
   await page.getByRole('button', { name: `Give myself access to ${hub.name}` }).click()
   // The card becomes a link into the hub.
-  await expect(page.getByRole('link', { name: new RegExp(hub.name) })).toBeVisible()
+  await expect(page.getByRole('link', { name: new RegExp(`^${hub.name}\\b`) })).toBeVisible()
   const mine = (await grantsOf(owner, hub.id)).find((g) => g.principalId === people.owner.id)
   expect(mine?.hubRole).toBe('hub_admin')
 })
@@ -338,6 +338,6 @@ test('a self-grant whose hub list fails to reload says so, and loads it again (#
 
   await page.unroute(hubList)
   await notice.getByRole('button', { name: 'Load hubs again' }).click()
-  await expect(page.getByRole('link', { name: new RegExp(hub.name) })).toBeVisible()
+  await expect(page.getByRole('link', { name: new RegExp(`^${hub.name}\\b`) })).toBeVisible()
   await expect(notice).toHaveCount(0)
 })

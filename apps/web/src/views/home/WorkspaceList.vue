@@ -9,7 +9,6 @@ const {
   createHubIn = () => false,
   selfGrants = new Map<string, SelfGrant>(),
   viewerIn = () => null,
-  actionsState = 'ready',
 } = defineProps<{
   workspaces: Load<WorkspaceEntry[]>
   /** Whether the reader may grant themselves access to hubs in a workspace. */
@@ -17,10 +16,8 @@ const {
   /** Whether the reader may create hubs in a workspace (`hub.create`). */
   createHubIn?: (workspaceId: string) => boolean
   selfGrants?: ReadonlyMap<string, SelfGrant>
-  /** The reader in a workspace, for the hub menus' `can()` checks. */
+  /** The reader in a workspace, for the hub settings links. */
   viewerIn?: (workspaceId: string) => Subject | null
-  /** Whether the reader's roles, which the hub menus follow, have loaded. */
-  actionsState?: 'ready' | 'loading' | 'error'
 }>()
 defineEmits<{
   retry: []
@@ -68,7 +65,6 @@ defineEmits<{
       :can-create-hub="createHubIn(entry.workspace.id)"
       :self-grants="selfGrants"
       :viewer="viewerIn(entry.workspace.id)"
-      :actions-state="actionsState"
       @retry="$emit('retryHubs', entry.workspace.id)"
       @grant-self="$emit('grantSelf', entry.workspace.id, $event)"
       @dismiss-self-grant="$emit('dismissSelfGrant', entry.workspace.id, $event)"

@@ -338,100 +338,91 @@ test('a hub admin grants on their hub, but not on their own grant or an owner or
   )
 })
 
-// The actions menu on each dashboard hub card (issue 234): its entries follow `can()`.
-const menuEntries = (page: Page, name: string) =>
-  page.getByRole('menu', { name: `Actions for ${name}` }).getByRole('menuitem')
+// The settings link on each dashboard hub card (issue 240): a gear for people who may open the
+// hub's settings, the same rule as the hub page's "Hub settings" link.
+const settingsLink = (page: Page, name: string) =>
+  hubCard(page, name).getByRole('link', { name: `Settings for ${name}`, exact: true })
 
-test('the hub menu lists what a hub admin may do, opens without opening the hub, and leads to the settings', async ({
+test('the gear leads an owner to the hub’s General settings, by keyboard, without opening the hub', async ({
   pageAs,
 }) => {
   const page = await pageAs('owner')
   await page.goto('/')
-  const button = hubCard(page, 'Product').getByRole('button', { name: 'Actions for Product' })
-  await button.click()
-  await expect(menuEntries(page, 'Product')).toHaveText([
-    'Open',
-    'Settings',
-    'Folders',
-    'Attributes',
-    'Access',
-    'Agent keys',
-    'Delete hub…',
-  ])
-  await expect(page).toHaveURL(/\/$/)
-  // Keyboard, as for the settings row menus: Escape closes back to the button.
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('menu')).toHaveCount(0)
-  await expect(button).toBeFocused()
-  await page.keyboard.press('ArrowDown')
-  await expect(menuEntries(page, 'Product').first()).toBeFocused()
-  await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('ArrowDown')
-  await expect(menuEntries(page, 'Product').nth(2)).toBeFocused()
+  for (const name of SEEDED) await expect(settingsLink(page, name)).toBeVisible()
+  // Tab from the card's own link reaches the gear next; Enter follows it.
+  await hubCard(page, 'Product')
+    .getByRole('link', { name: /^Product\b/ })
+    .focus()
+  await page.keyboard.press('Tab')
+  await expect(settingsLink(page, 'Product')).toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(new RegExp(`${hubPath('product')}/settings/folders$`))
-  await expect(page.getByRole('heading', { level: 2, name: 'Folders' })).toBeVisible()
+  await expect(page).toHaveURL(new RegExp(`${hubPath('product')}/settings/general$`))
+  await expect(page.getByRole('region', { name: 'General' })).toBeVisible()
+})
+
+test('an admin sees the gear only on the hubs they hold a grant on', async ({ pageAs }) => {
+  const page = await pageAs('mina')
+  await page.goto('/')
+  // Admins manage every hub they can open, an editor grant included (docs/ROLES.md).
+  for (const name of ['Launch', 'Product', 'Support']) {
+    await expect(settingsLink(page, name)).toBeVisible()
+  }
+  for (const name of ['Design', 'Hiring', 'Archive']) {
+    await expect(hubCard(page, name)).toContainText('No access')
+    await expect(hubCard(page, name).getByRole('link')).toHaveCount(0)
+  }
 })
 
 for (const [label, viewport] of [
   ['desktop', undefined],
   ['phone', PHONE],
 ] as const) {
-  test(`a viewer's hub menu offers only Open (${label})`, async ({ pageAs }) => {
-    const page = await pageAs('ivy', viewport)
-    await page.goto('/')
-    const card = hubCard(page, 'Product')
-    const button = card.getByRole('button', { name: 'Actions for Product' })
-    await expect(button).toBeVisible()
-    // The button sits inside the card, on screen.
-    const cardBox = await card.boundingBox()
-    const buttonBox = await button.boundingBox()
-    expect(cardBox && buttonBox).toBeTruthy()
-    if (cardBox && buttonBox) {
-      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width)
-      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(
-        page.viewportSize()?.width ?? Infinity,
-      )
+  test(`a member who is not hub admin, and a viewer, see no gear (${label})`, async ({
+    pageAs,
+  }) => {
+    for (const who of ['leo', 'ivy'] as const) {
+      const page = await pageAs(who, viewport)
+      await page.goto('/')
+      await expect(hubCard(page, 'Product').getByRole('link', { name: /^Product\b/ })).toBeVisible()
+      await expect(
+        workspaceSection(page).getByRole('link', { name: /^Settings for / }),
+      ).toHaveCount(0)
     }
-    await button.click()
-    await expect(menuEntries(page, 'Product')).toHaveText(['Open'])
-    await menuEntries(page, 'Product').click()
-    await expect(page).toHaveURL(new RegExp(`${hubPath('product')}$`))
-    await expect(page.getByRole('heading', { level: 1, name: 'Product' })).toBeVisible()
   })
 }
 
-test('an admin gives themselves access from the hub menu, and the menu then offers the hub', async ({
-  as,
-  pageAs,
-}) => {
-  const name = uniqueHubName('menu self-grant')
+test('the gear sits inside the card and on screen on a phone', async ({ pageAs }) => {
+  const page = await pageAs('owner', PHONE)
+  await page.goto('/')
+  const card = hubCard(page, 'Product')
+  const gear = settingsLink(page, 'Product')
+  await expect(gear).toBeVisible()
+  const cardBox = await card.boundingBox()
+  const gearBox = await gear.boundingBox()
+  expect(cardBox && gearBox).toBeTruthy()
+  if (cardBox && gearBox) {
+    expect(gearBox.x + gearBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width)
+    expect(gearBox.x + gearBox.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? Infinity)
+  }
+})
+
+test('after an admin gives themselves access, the hub gets its gear', async ({ as, pageAs }) => {
+  const name = uniqueHubName('gear self-grant')
   const created = await as('owner').post('/hubs', {
     name,
     color: 'cyan',
     idPrefix: uniquePrefix(),
   })
   await expectStatus(created, 201)
-  const hub = hubListEntrySchema.parse(await created.json())
 
   const page = await pageAs('mina')
   await page.goto('/')
   const card = hubCard(page, name)
   await expect(card).toContainText('No access')
-  const button = card.getByRole('button', { name: `Actions for ${name}` })
-  await button.click()
-  await expect(menuEntries(page, name)).toHaveText(['Give myself access'])
-  await menuEntries(page, name).click()
-
-  // The existing self-grant: the card turns into a link, and focus stays on the menu button.
+  await expect(settingsLink(page, name)).toHaveCount(0)
+  await card.getByRole('button', { name: `Give myself access to ${name}` }).click()
   await expect(card.getByRole('link', { name: new RegExp(`^${name}\\b`) })).toBeVisible()
-  await expect(card).not.toContainText('No access')
-  await expect(button).toBeFocused()
-  expect((await hubList(as('mina'))).find((h) => h.id === hub.id)).toMatchObject({
-    access: 'granted',
-    hubRole: 'hub_admin',
-  })
-  await page.keyboard.press('Enter')
-  await expect(menuEntries(page, name).first()).toHaveText('Open')
-  await expect(menuEntries(page, name).last()).toHaveText('Delete hub…')
+  await settingsLink(page, name).click()
+  await expect(page).toHaveURL(/\/settings\/general$/)
+  await expect(page.getByRole('region', { name: 'General' })).toBeVisible()
 })

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import type { HubListEntry, Subject } from '@16bit/core'
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { BaseButton, FormNotice, HubCard, RowActionsMenu, StateBlock } from '../../ui/index.ts'
-import { hubActionRoute, hubActions, type HubActionKey } from './hubActions.ts'
+import { BaseButton, FormNotice, HubCard, StateBlock } from '../../ui/index.ts'
+import { hubSettingsRoute } from './hubSettings.ts'
 import { selfGrantKey, type SelfGrant, type WorkspaceEntry } from './useDashboard.ts'
 
 const {
@@ -12,7 +11,6 @@ const {
   canCreateHub,
   selfGrants = new Map<string, SelfGrant>(),
   viewer = null,
-  actionsState = 'ready',
 } = defineProps<{
   entry: WorkspaceEntry
   /** The reader is an owner or admin here, so may grant themselves access (D45). */
@@ -20,12 +18,10 @@ const {
   /** `hub.create`: owners and admins. */
   canCreateHub?: boolean
   selfGrants?: ReadonlyMap<string, SelfGrant>
-  /** The reader in this workspace, for the hub menus' `can()` checks. */
+  /** The reader in this workspace, for the hub settings links (`null` until their roles load). */
   viewer?: Subject | null
-  /** `loading` while the reader's roles load, `error` when they could not. */
-  actionsState?: 'ready' | 'loading' | 'error'
 }>()
-const emit = defineEmits<{
+defineEmits<{
   retry: []
   grantSelf: [hubId: string]
   dismissSelfGrant: [hubId: string]
@@ -34,18 +30,8 @@ const emit = defineEmits<{
 
 const ask = (hubId: string) => selfGrants.get(selfGrantKey(entry.workspace.id, hubId))
 
-// Each hub's actions menu (issue 234). It sits beside the card, not inside its link, so opening
-// it never opens the hub.
-const router = useRouter()
-const actionsOf = (hub: HubListEntry) => hubActions(viewer, hub, ask(hub.id))
-function onAction(hub: HubListEntry, key: string) {
-  if (key === 'grant-self') {
-    emit('grantSelf', hub.id)
-    return
-  }
-  const to = hubActionRoute(key as HubActionKey, hub)
-  if (to) void router.push(to)
-}
+// Each hub's settings link (issue 240). It sits beside the card, not inside its link.
+const settingsOf = (hub: HubListEntry) => hubSettingsRoute(viewer, hub)
 
 const headingId = computed(() => `workspace-${entry.workspace.id}`)
 
@@ -129,11 +115,11 @@ const offersNewHub = computed(
           :color="hub.color"
           :count="hub.itemCount"
           :to="{ name: 'hub', params: { workspaceId: hub.workspaceId, hubId: hub.id } }"
-          class="flex-1 pr-11"
+          :class="['flex-1', settingsOf(hub) && 'pr-11']"
         />
         <!-- Owners and admins without a grant: name only, and a way to grant themselves access. -->
         <template v-else>
-          <HubCard :name="hub.name" :color="hub.color" no-access class="flex-1 pr-11" />
+          <HubCard :name="hub.name" :color="hub.color" no-access class="flex-1" />
           <div v-if="canSelfGrant" class="flex flex-col gap-1 pt-1.5" data-self-grant>
             <!-- Access was given, but the list could not be read again to open the hub. -->
             <FormNotice v-if="ask(hub.id)?.state === 'stale'" data-self-grant-stale>
@@ -165,16 +151,29 @@ const offersNewHub = computed(
             </FormNotice>
           </div>
         </template>
-        <!-- Over the card's top right, centred on its name row, and outside its link. One menu
-             per hub, so focus stays on it when a self-grant turns the card into a link. -->
-        <span class="absolute top-2.5 right-2 inline-flex" data-hub-actions>
-          <RowActionsMenu
-            :label="`Actions for ${hub.name}`"
-            :items="actionsOf(hub)"
-            :state="actionsState"
-            @select="onAction(hub, $event)"
-          />
-        </span>
+        <!-- Over the card's top right, centred on its name row, and outside its link. -->
+        <RouterLink
+          v-if="settingsOf(hub)"
+          :to="settingsOf(hub)!"
+          :aria-label="`Settings for ${hub.name}`"
+          class="absolute top-2.5 right-2 inline-flex size-7 items-center justify-center rounded-control text-ink3 no-underline hover:bg-selected hover:text-ink"
+          data-hub-settings
+        >
+          <!-- A pixel gear around a square hole, in the style of the "more" and "close" glyphs. -->
+          <svg
+            aria-hidden="true"
+            focusable="false"
+            viewBox="0 0 8 8"
+            shape-rendering="crispEdges"
+            class="size-4"
+          >
+            <path
+              fill="currentColor"
+              fill-rule="evenodd"
+              d="M3 0h2v1h2v2h1v2h-1v2h-2v1h-2v-1h-2v-2h-1v-2h1v-2h2zM3 3v2h2v-2z"
+            />
+          </svg>
+        </RouterLink>
       </li>
     </ul>
   </section>

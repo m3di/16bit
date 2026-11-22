@@ -487,7 +487,7 @@ test('an invited person joins with the link, is granted a hub, and as its editor
     await joiner.getByLabel('Password').fill(person.password)
     await joiner.getByRole('button', { name: 'Sign in' }).click()
     await workspaceSection(joiner)
-      .getByRole('link', { name: new RegExp(hub.name) })
+      .getByRole('link', { name: new RegExp(`^${hub.name}\\b`) })
       .click()
     await expect(joiner).toHaveURL(new RegExp(`${hubPath(hub.id)}$`))
     await expect(joiner.getByRole('heading', { level: 1, name: hub.name })).toBeVisible()
