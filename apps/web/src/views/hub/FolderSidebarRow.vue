@@ -12,6 +12,8 @@ const props = defineProps<{
   label: string
   color: PaletteColor
   count: number | null
+  /** A views-only folder (D76) holds no items: "Views only" in place of the count. */
+  viewsOnly?: boolean
   /** `aria-current` for the open folder. */
   current?: 'page' | 'location'
   /** Left padding of the link, in px. */
@@ -53,8 +55,11 @@ const rootLabel = () =>
     >
       <span aria-hidden="true" class="size-2 shrink-0" :style="{ background: paletteVar(color) }" />
       <span class="min-w-0 flex-1 truncate">{{ label }}</span>
+      <span v-if="viewsOnly" class="shrink-0 text-caption text-ink3" data-folder-views-only
+        >Views only</span
+      >
       <span
-        v-if="count !== null"
+        v-else-if="count !== null"
         class="text-caption text-ink3 tabular-nums"
         :aria-label="countLabel(count)"
         data-folder-count

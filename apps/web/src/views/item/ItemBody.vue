@@ -118,7 +118,7 @@ function commit(attributeId: string, value: ItemValues[string], basedOn: number 
             <li v-if="folder && folder.id !== hub.hub.id" class="flex items-baseline gap-x-1.5">
               <span aria-hidden="true">/</span>
               <RouterLink
-                :to="folderLink(workspaceId, item)"
+                :to="folderLink(workspaceId, item, hub.hub.opensOnFolderId)"
                 class="text-ink3 no-underline hover:text-ink"
                 >{{ folder.name }}</RouterLink
               >
