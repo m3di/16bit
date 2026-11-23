@@ -4,7 +4,6 @@ import {
   aggregateResultSchema,
   attributeTypes,
   hubDescriptionSchema,
-  itemPageSchema,
   memberPageSchema,
   viewSchema,
   type AggregateGroup,
@@ -135,7 +134,7 @@ export async function query(
 ): Promise<Item[]> {
   const res = await client.post('/query', body)
   await expectStatus(res, 200)
-  return itemPageSchema.parse(await res.json()).items
+  return ((await res.json()) as { items: Item[] }).items
 }
 
 export async function aggregate(
