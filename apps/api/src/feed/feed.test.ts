@@ -7,6 +7,7 @@ import {
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   type FeedServerMessage,
   type HubRole,
+  type ItemCause,
   MAX_MISSED_CHANGES,
 } from '@16bit/core'
 import { randomUUID } from 'node:crypto'
@@ -299,6 +300,71 @@ async function createKey(hub: string, hubRole: 'viewer' | 'editor' = 'viewer') {
   return createdAgentKeySchema.parse(res.json())
 }
 
+/**
+ * `n` items in `hub`, each with a create revision by `actor` carrying `cause`, written directly
+ * as the owner in one transaction: what `n` creates through the API store, without the round
+ * trips. Returns the item IDs in creation order.
+ */
+async function seedCreates(
+  actor: string,
+  hub: string,
+  attribute: string,
+  n: number,
+  cause: ItemCause,
+): Promise<string[]> {
+  return db.transaction().execute(async (trx) => {
+    const { next } = await trx
+      .updateTable('workspace')
+      .set({ next_revision_seq: sql`next_revision_seq + ${n}` })
+      .where('id', '=', WS)
+      .returning('next_revision_seq as next')
+      .executeTakeFirstOrThrow()
+    const { next_seq } = await trx
+      .updateTable('folder')
+      .set({ next_seq: sql`next_seq + ${n}`, item_count: sql`item_count + ${n}` })
+      .where('workspace_id', '=', WS)
+      .where('id', '=', hub)
+      .returning('next_seq')
+      .executeTakeFirstOrThrow()
+    const items = Array.from({ length: n }, (_, i) => ({
+      id: `seeded-${String(i).padStart(4, '0')}`,
+      seq: next - n + i,
+      seqId: next_seq - n + i,
+      values: { [attribute]: `item ${String(i)}` },
+    }))
+    await trx
+      .insertInto('item')
+      .values(
+        items.map((it) => ({
+          workspace_id: WS,
+          id: it.id,
+          hub_id: hub,
+          folder_id: hub,
+          seq_id: it.seqId,
+          values: JSON.stringify(it.values),
+          updated_by: actor,
+        })),
+      )
+      .execute()
+    await trx
+      .insertInto('revision')
+      .values(
+        items.map((it) => ({
+          workspace_id: WS,
+          seq: it.seq,
+          item_id: it.id,
+          hub_id: hub,
+          version: 1,
+          patch: JSON.stringify({ op: 'create', folderId: hub, values: it.values }),
+          actor,
+          cause: JSON.stringify(cause),
+        })),
+      )
+      .execute()
+    return items.map((it) => it.id)
+  })
+}
+
 /** Waits for the next `changes` message, skipping none. */
 async function changes(client: Client, ms?: number) {
   const message = await client.next(ms)
@@ -525,9 +591,10 @@ describe('subscriptions (D57, D58)', () => {
     await app.close()
     const sendLimit = 600 * 1024
     await start({ maxMissedChanges: MAX_MISSED_CHANGES, maxBufferedBytes: sendLimit })
-    const ids = new Set<string>()
-    for (let i = 0; i < 200; i++)
-      ids.add((await create('ed', 'h1', `item ${String(i)}`, { cause })).id)
+    // Seeded as the owner in one transaction, as 200 creates through the API would write them:
+    // 200 sequential HTTP creates of about 21 KB each could outrun the test's timeout on a
+    // loaded runner (#244). The feed reads only `item` and `revision`, so it can't tell.
+    const ids = new Set(await seedCreates('ed', 'h1', 't1', 200, cause))
     const total = await counter()
 
     const ed = await person('ed')
