@@ -133,7 +133,11 @@ async function seed(): Promise<void> {
     .execute()
 }
 
-function request(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) {
+function request(
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+  url: string,
+  payload?: object,
+) {
   return app.inject({
     method,
     url,
@@ -537,26 +541,18 @@ describe('patch item', () => {
     expect(missing.statusCode).toBe(404)
   })
 
-  // #199 puts externalKey (D64) and condition (D66) in the contracts; #200 and #203 serve them.
-  it('refuses externalKey and condition until they are served, and writes nothing', async () => {
+  // #199 puts condition (D66) in the contracts; #203 serves it. externalKey is served (#200).
+  it('refuses condition until it is served, and writes nothing', async () => {
     const item = await create({ title: 'x' })
     const before = await workspaceSnapshot(db, 'w1')
     const refused = [
-      await request('POST', '/v1/workspaces/w1/items', {
-        folderId: 'build',
-        externalKey: 'src/app.ts',
+      await request('PATCH', `/v1/workspaces/w1/items/${item.id}`, {
+        version: 1,
         values: { title: 'y' },
+        condition: { attribute: 'title', op: 'eq', value: 'x' },
       }),
-      await request('PATCH', `/v1/workspaces/w1/items/${item.id}`, {
-        version: 1,
-        externalKey: 'src/app.ts',
-      }),
-      await request('PATCH', `/v1/workspaces/w1/items/${item.id}`, {
-        version: 1,
-        externalKey: null,
-      }),
-      await request('PATCH', `/v1/workspaces/w1/items/${item.id}`, {
-        version: 1,
+      await request('PUT', '/v1/workspaces/w1/hubs/build/items/by-key/k', {
+        folderId: 'build',
         values: { title: 'y' },
         condition: { attribute: 'title', op: 'eq', value: 'x' },
       }),

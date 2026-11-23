@@ -11,12 +11,15 @@ import {
   createItemSchema,
   deleteItemBodySchema,
   deleteItemQuerySchema,
+  EXTERNAL_KEY_MAX_LENGTH,
+  externalKeySchema,
   getItemQuerySchema,
   idSchema,
   itemQuerySchema,
   pageQuerySchema,
   patchItemSchema,
   setFolderAttributesSchema,
+  upsertItemSchema,
   setHubGrantSchema,
   updateAttributeSchema,
   updateFolderSchema,
@@ -59,8 +62,11 @@ import {
   deleteItem,
   expandItem,
   getItem,
+  itemByKey,
+  KeyRace,
   patchItem,
   queryItems,
+  upsertItem,
 } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
 import { idempotentWrite, type KnownMutation } from './mutations.ts'
@@ -128,13 +134,31 @@ const memberParams = z.object({ workspaceId: idSchema, principalId: idSchema })
 const grantParams = z.object({ workspaceId: idSchema, hubId: idSchema, principalId: idSchema })
 const folderParams = z.object({ workspaceId: idSchema, folderId: idSchema })
 const attributeParams = z.object({ workspaceId: idSchema, attributeId: idSchema })
+const keyedItemParams = z.object({ workspaceId: idSchema, hubId: idSchema, key: externalKeySchema })
+
+/**
+ * Runs of an upsert by key that lose a race on the key (`KeyRace`) before it gives up with 409
+ * `key_taken`. One rerun settles a race between two upserts; more means the key keeps changing
+ * hands, which only deliberate churn on one key would do.
+ */
+const UPSERT_ATTEMPTS = 3
+
+/** See `routerOptions` in `buildApp`. */
+const MAX_PATH_PARAM_LENGTH = EXTERNAL_KEY_MAX_LENGTH * 4
 
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
   const { maxLinkedItems, maxHiddenBacklinks } = options
-  const app = Fastify({ logger: false })
+  const app = Fastify({
+    logger: false,
+    // A path parameter's longest decoded form, in UTF-16 code units. A valid external key
+    // (D64) is up to 400 of them (200 code points); find-my-way's default, 100, would refuse it
+    // before the route. Some room past that, so a key a little too long is a 400 from
+    // `externalKeySchema`, not a 404 from the router.
+    routerOptions: { maxParamLength: MAX_PATH_PARAM_LENGTH },
+  })
   const auth = {
     db,
     session: options.session ?? DEFAULT_SESSION_POLICY,
@@ -456,14 +480,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // With a `clientMutationId`, a retry answers as the first attempt did and writes
           // nothing (D59, mutations.ts). A write's `seq` is read in its own transaction, which
           // still holds the workspace row: it is the write's own revision.
-          // The contracts have `externalKey` (D64) and `condition` (D66) from #199; the routes
-          // serve them from #200 and #203. Until then they are refused, never ignored: a
-          // write that skipped its condition would be silently unsafe.
-          const refuseUnserved = (body: { externalKey?: unknown; condition?: unknown }) => {
-            for (const field of ['externalKey', 'condition'] as const) {
-              if (body[field] !== undefined) {
-                throw new HttpError('invalid_request', `${field}: not supported yet`)
-              }
+          // The contracts have `condition` (D66) from #199; the routes serve it from #203.
+          // Until then it is refused, never ignored: a write that skipped its condition would
+          // be silently unsafe.
+          const refuseUnserved = (body: { condition?: unknown }) => {
+            if (body.condition !== undefined) {
+              throw new HttpError('invalid_request', 'condition: not supported yet')
             }
           }
 
@@ -475,7 +497,6 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createItemSchema, request.body)
-            refuseUnserved(body)
             const actor = request.principal.id
             const item = await idempotentWrite(
               run(request),
@@ -574,6 +595,73 @@ export function buildApp(options: AppOptions): FastifyInstance {
               () => Promise.resolve(),
             )
             return reply.status(204).send()
+          })
+
+          // By external key (D64). The key is the last path segment, URL-encoded, so it may hold
+          // `/`, `?`, `#` and `%`. A hub the caller can't read is 404, as is a key no item of
+          // it holds.
+          ws.get('/hubs/:hubId/items/by-key/:key', async (request): Promise<ItemRead> => {
+            const { workspaceId, hubId, key } = parse(keyedItemParams, request.params)
+            const { expand } = parse(getItemQuerySchema, request.query)
+            return snapshot(request, async (trx) => {
+              await checkHub(trx, workspaceId, request.principal, hubId, 'hub.read', 'Item')
+              const item = await itemByKey(trx, workspaceId, hubId, key)
+              if (!item) throw notFound('Item')
+              const seq = await workspaceSeq(trx, workspaceId)
+              if (expand.length === 0) return { ...item, seq }
+              const read = await expandItem(trx, workspaceId, request.principal, item, expand, {
+                maxLinkedItems,
+              })
+              return { ...read, seq }
+            })
+          })
+
+          // Creates (201) or patches (200) the item holding the key. Two upserts racing on a
+          // new key both miss it; the one whose insert loses to the unique index reruns, finds
+          // the winner's item and patches it. A retry with a known `clientMutationId` answers
+          // as its first attempt did, whichever of the two that was (D59).
+          ws.put('/hubs/:hubId/items/by-key/:key', async (request, reply) => {
+            const { workspaceId, hubId, key } = parse(keyedItemParams, request.params)
+            const body = parse(upsertItemSchema, request.body)
+            refuseUnserved(body)
+            const actor = request.principal.id
+            const attempt = () =>
+              idempotentWrite(
+                run(request),
+                { workspaceId, actor, clientMutationId: body.clientMutationId },
+                { op: 'upsert', hubId, externalKey: key, folderId: body.folderId },
+                async (trx) => {
+                  await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Hub')
+                  const { item, created } = await upsertItem(
+                    trx,
+                    workspaceId,
+                    actor,
+                    hubId,
+                    key,
+                    body,
+                  )
+                  const result: ItemWriteResult = {
+                    ...item,
+                    seq: await workspaceSeq(trx, workspaceId),
+                  }
+                  return { created, result }
+                },
+                async (trx, first) => ({
+                  created: first.op === 'create',
+                  result: await currentItem(trx, workspaceId, first),
+                }),
+              )
+            for (let i = 1; ; i++) {
+              try {
+                const { created, result } = await attempt()
+                return await reply.status(created ? 201 : 200).send(result)
+              } catch (error) {
+                if (!(error instanceof KeyRace)) throw error
+                if (i === UPSERT_ATTEMPTS) {
+                  throw new HttpError('key_taken', 'The externalKey kept changing hands; retry')
+                }
+              }
+            }
           })
 
           ws.post('/hubs/:hubId/agent-keys', async (request, reply) => {
