@@ -59,3 +59,32 @@ export {
   optionErrors,
   type SettingsState,
 } from './settings.ts'
+// M4: root view blocks.
+export { default as BarRows } from './BarRows.vue'
+export { default as BlockColumns } from './BlockColumns.vue'
+export { default as BlockSection } from './BlockSection.vue'
+export { default as BlockStatus } from './BlockStatus.vue'
+export { default as BoardCard } from './BoardCard.vue'
+export { default as BoardColumn } from './BoardColumn.vue'
+export { default as BoardView } from './BoardView.vue'
+export { default as FieldsInline } from './FieldsInline.vue'
+export { default as FieldText } from './FieldText.vue'
+export { default as GroupedList } from './GroupedList.vue'
+export { default as NoViewYet } from './NoViewYet.vue'
+export { default as NumberStat } from './NumberStat.vue'
+export { default as PageHeader } from './PageHeader.vue'
+export {
+  MAX_GROUP_MEASURES,
+  MAX_ROW_FIELDS,
+  barPercent,
+  type BarRow,
+  type BoardCardData,
+  type BoardColumnData,
+  type DataBlockState,
+  type FieldValue,
+  type InlineField,
+  type ListField,
+  type ListGroup,
+  type ListRow,
+  type LiveStatus,
+} from './blocks.ts'
