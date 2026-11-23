@@ -51,7 +51,7 @@ const shown = computed(() => {
     return {
       state: 'ready' as const,
       value: formatNumber(d.day),
-      of: `of ${formatNumber(d.of)}`,
+      of: formatNumber(d.of),
       stateText: '',
     }
   }
@@ -63,7 +63,7 @@ const shown = computed(() => {
   const value = text(values[0], c.value.attribute)
   if (value === '') return { state: 'empty' as const, value: '', of: '', stateText: '' }
   const total = c.total ? text(values[1], c.total.attribute) : ''
-  return { state: 'ready' as const, value, of: total ? `of ${total}` : '', stateText: '' }
+  return { state: 'ready' as const, value, of: total, stateText: '' }
 })
 </script>
 

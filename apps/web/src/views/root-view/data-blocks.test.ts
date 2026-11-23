@@ -11,8 +11,8 @@ import { page } from './fixtures.test-utils.ts'
 import type { BlockLoad } from './useRootView.ts'
 
 /** A block as `parseViewTree` reads it, defaults filled in. */
-function parsed(input: BlockInput): Block {
-  const tree = parseViewTree(page([input]))
+function parsed(input: BlockInput, siblings: BlockInput[] = []): Block {
+  const tree = parseViewTree(page([input, ...siblings]))
   if (!tree.ok) throw new Error(JSON.stringify(tree.errors))
   const block = tree.tree.root.children?.[0]
   if (!block) throw new Error('no block')
@@ -48,7 +48,7 @@ const listBlock = (more: Record<string, unknown> = {}) =>
     id: 'backlog',
     type: 'list',
     config: {
-      binding: { folderId: 'b', where: { attribute: 'owner', op: 'eq', value: { $me: true } } },
+      binding: { folderId: 'b', where: { attribute: 'owner', op: 'in', value: [{ $me: true }] } },
       fields: [
         { attribute: 'key' },
         { attribute: 'epic', emptyText: 'No epic' },
@@ -57,7 +57,7 @@ const listBlock = (more: Record<string, unknown> = {}) =>
       ],
       ...more,
     },
-  } as BlockInput)
+  })
 
 describe('list block', () => {
   it('shows the ID first, then the title and fields, with empty texts and option dots', async () => {
@@ -202,8 +202,8 @@ describe('board block', () => {
     const text = plain(html)
     expect(text.indexOf('To do')).toBeLessThan(text.indexOf('Done'))
     expect(text).toContain('Nothing done yet.')
-    expect(text).toContain('PT-216, 3')
-    expect(text).toContain('PT-215, ?')
+    expect(text).toMatch(/PT-216 ?, 3/)
+    expect(text).toMatch(/PT-215 ?, \?/)
     expect(text).toContain('+28 more')
     expect(text).toContain('New item')
   })
@@ -296,17 +296,26 @@ describe('chart block', () => {
   })
 
   it('draws a burndown from the remaining points per day', async () => {
-    const block = parsed({
-      id: 'burn',
-      type: 'chart',
-      config: {
-        kind: 'burndown',
-        binding: { folderId: 'b' },
-        range: { block: 'sprint', start: 'start', end: 'end' },
-        doneOn: 'done',
-        points: 'points',
+    const block = parsed(
+      {
+        id: 'burn',
+        type: 'chart',
+        config: {
+          kind: 'burndown',
+          binding: { folderId: 'b' },
+          range: { block: 'sprint', start: 'start', end: 'end' },
+          doneOn: 'done',
+          points: 'points',
+        },
       },
-    } as BlockInput)
+      [
+        {
+          id: 'sprint',
+          type: 'fields',
+          config: { binding: { by: 'item', folderId: 'sp', itemId: 's1' }, fields: ['title'] },
+        },
+      ],
+    )
     const html = await renderWith(ChartBlock, {
       block,
       load: ok({

@@ -121,7 +121,7 @@ describe('"New item" presets (D77)', () => {
   it('presets the group and the top-level AND equalities, `$me` as the reader', () => {
     const where = {
       and: [
-        { attribute: 'owner', op: 'eq' as const, value: { $me: true as const } },
+        { attribute: 'owner', op: 'in' as const, value: [{ $me: true as const }] },
         { attribute: 'points', op: 'gt' as const, value: 1 },
       ],
     }
@@ -139,12 +139,12 @@ describe('"New item" presets (D77)', () => {
   it('presets nothing from an OR, and no `$me` without a known reader', () => {
     const or = {
       or: [
-        { attribute: 'owner', op: 'eq' as const, value: { $me: true as const } },
+        { attribute: 'owner', op: 'in' as const, value: [{ $me: true as const }] },
         { attribute: 'stage', op: 'eq' as const, value: 'todo' },
       ],
     }
     expect(newItemPresets(dataDescription, 'b', or, 'p-sara')).toEqual({})
-    const me = { attribute: 'owner', op: 'eq' as const, value: { $me: true as const } }
+    const me = { attribute: 'owner', op: 'in' as const, value: [{ $me: true as const }] }
     expect(newItemPresets(dataDescription, 'b', me, null)).toEqual({})
   })
 

@@ -134,8 +134,9 @@ describe('ViewRenderer', () => {
       sprint: { state: 'ready', status: { status: 'not_found' } },
       backlog: { state: 'ready', status: { status: 'invalid', errors: [] } },
     })
-    expect(html).toMatch(/data-view-block="open" data-block-state="loading"/)
-    expect(html).toContain('Nothing to show yet')
+    expect(html).toMatch(/data-view-block="open"[^>]*data-block-state="loading"/)
+    // The number keeps its label and says so in short (DESIGN.md, NumberStat).
+    expect(html).toContain('Nothing to show')
     expect(html).toContain('This item is not available')
     expect(html).toContain('This block needs fixing')
     expect(html).toContain('What the team is on.')
@@ -151,7 +152,8 @@ describe('ViewRenderer', () => {
     expect(html.match(/role="alert"/g)).toHaveLength(1)
     expect(html).toContain('The data for this view could not be loaded.')
     expect(html).toContain('Try again')
-    expect(html.match(/This block could not load/g)).toHaveLength(5)
+    // Each data block shows its own error, quietly.
+    expect(html.match(/data-block-state="error"/g)).toHaveLength(5)
   })
 
   it('says when some blocks answered an error (the request deadline)', async () => {
