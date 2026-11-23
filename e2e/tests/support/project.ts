@@ -69,12 +69,6 @@ export const SCALE = projectHub('large', 'scale')
 export const parcelPath = (folderId?: string, hub: ProjectHub = PARCEL) =>
   `/w/${hub.workspaceId}/hubs/${hub.hubId}${folderId ? `/${folderId}` : ''}`
 
-/** The project's people (PROJECT_PEOPLE in project-seed.ts), all editors of the hub. */
-export const PARCEL_PEOPLE = {
-  sara: 'Sara Lind',
-  tomas: 'Tomas Berg',
-} as const
-
 /**
  * The secret of the hub's editor key, `qa-agent`, which `pnpm seed` writes to the gitignored
  * `e2e/.auth/parcel-agent-key.json` on the run that creates it (never to the repository).

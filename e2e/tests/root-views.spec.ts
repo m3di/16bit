@@ -368,6 +368,9 @@ test('an agent key’s writes over HTTP reach both browsers within 2 s', async (
       expectViewMatches(sara, as('sara'), F.work, { timeout: LIVE_MS, since }),
     ])
     measured.push(`${what} ${ms.map((n) => n.toFixed(0)).join('/')} ms`)
+    // The checks allow one look after the budget; the budget itself is this.
+    for (const n of ms)
+      expect(n, `${what}: both browsers within ${String(LIVE_MS)} ms`).toBeLessThanOrEqual(LIVE_MS)
   }
   const patch = async (item: Item, values: Record<string, unknown>) => {
     const res = await agent.patch(`/items/${item.id}`, { version: item.version, values })
@@ -430,7 +433,8 @@ test('an agent key’s writes over HTTP reach both browsers within 2 s', async (
     await bothAgree('sprint dates', Date.now())
     expect(await numberValue(page, 'sprint-day')).toMatch(/ of 11$/)
     const burndown = await readBlock(page, 'burndown')
-    if (burndown && 'burndown' in burndown) expect(burndown.burndown.left).toHaveLength(11)
+    if (!burndown || !('burndown' in burndown)) throw new Error('No burndown')
+    expect(burndown.burndown.left).toHaveLength(11)
   } finally {
     test.info().annotations.push({
       type: 'Home and My work agreed with the API after',
@@ -485,6 +489,12 @@ test('a hub admin builds My work in the composer from the default view; a stale 
   test.setTimeout(120_000)
   const owner = as('owner')
   const seeded = await getView(owner, F.work)
+  // What the folder goes back to at the end: the seed's own My work (project-seed.ts), not
+  // whatever was read, which an earlier run that died may have left composed. Loaded at run
+  // time, so the e2e typecheck does not take in the API's sources.
+  const seedModule = '../../apps/api/src/project-seed.ts'
+  const { workTree } = (await import(seedModule)) as { workTree: (hubId: string) => unknown }
+  const seedTree = workTree(PARCEL.hubId)
   const me = [{ $me: true }]
   try {
     // From the default: the seeded view is reset, and the folder has none.
@@ -579,7 +589,7 @@ test('a hub admin builds My work in the composer from the default view; a stale 
       await expectStatus(
         await as(person).put(`/folders/${F.work}/view`, {
           version: current.version,
-          tree: seeded.tree,
+          tree: seedTree,
         }),
         403,
       )
@@ -590,7 +600,7 @@ test('a hub admin builds My work in the composer from the default view; a stale 
     await expectStatus(
       await owner.put(`/folders/${F.work}/view`, {
         version: now.stored ? now.version : 0,
-        tree: seeded.tree,
+        tree: seedTree,
       }),
       200,
     )
