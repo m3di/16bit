@@ -9,17 +9,20 @@ const {
   columns,
   busy,
   serverErrors = {},
+  initial = {},
 } = defineProps<{
   columns: readonly FolderAttributeDefinition[]
   /** The create request is running. */
   busy?: boolean
   /** Per-attribute errors from an `invalid_values` response. */
   serverErrors?: Record<string, string>
+  /** Values filled in to start with, such as a view block's presets (D77). */
+  initial?: ItemValues
 }>()
 
 const emit = defineEmits<{ submit: [values: ItemValues]; cancel: [] }>()
 
-const values = ref<ItemValues>({})
+const values = ref<ItemValues>({ ...initial })
 const errors = ref<Record<string, string>>({})
 
 function set(attributeId: string, value: ItemValues[string]) {

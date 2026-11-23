@@ -985,8 +985,13 @@ export function useItems(
    * identity when the server confirms it. On failure the row is removed. In an attribute order
    * or with a filter the rows in view are read again once it is created (D61).
    */
-  async function create(values: ItemValues): Promise<CreateResult> {
-    const folder = folderId.value
+  /**
+   * Creates an item in the open folder, or in `inFolder` (a root view's block creates in its
+   * binding's folder, D77). Only a create in the open folder takes a row in its table.
+   */
+  async function create(values: ItemValues, inFolder?: string): Promise<CreateResult> {
+    const folder = inFolder ?? folderId.value
+    const listed = folder === folderId.value
     if (!folder) {
       return { ok: false, error: new ApiRequestError('invalid_request', 'No folder is open.') }
     }
@@ -1005,7 +1010,7 @@ export function useItems(
     }
     store.addPending(id, { kind: 'create', mutationId, item: Object.freeze(placeholder) })
     const gen = generation
-    if (list.value.state === 'ready') {
+    if (listed && list.value.state === 'ready') {
       positions.insertAt(0, id)
       rowsShifted()
     }
@@ -1020,11 +1025,11 @@ export function useItems(
       )
       const item = confirmed(response) ?? withoutSeq(response)
       if (item.folderId === folderId.value) see(item.seqId)
-      if (list.value.state === 'ready' && reorders(list.value.data)) scheduleRefetch()
+      if (listed && list.value.state === 'ready' && reorders(list.value.data)) scheduleRefetch()
       return { ok: true, item }
     } catch (thrown) {
       const error = asRequestError(thrown)
-      if (gen === generation && list.value.state === 'ready') {
+      if (listed && gen === generation && list.value.state === 'ready') {
         positions.removeAt(positions.indexOf(id))
         rowsShifted()
       }

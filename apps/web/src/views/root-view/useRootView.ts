@@ -50,6 +50,8 @@ export interface RootViewOptions {
   /** The open folder; `null` until the hub is read. */
   folderId: () => string | null
   description: () => HubDescription | null
+  /** A linked item a block shows a relation to, for the page's relation labels. */
+  onLinked?: (item: Item) => void
   queue?: RequestQueue
   timeZone?: string | undefined
   now?: () => number
@@ -237,6 +239,7 @@ export function useRootView(options: RootViewOptions) {
     blocks.value = next
     requestFailed.value = false
     for (const item of answeredItems(answer)) store.apply(item)
+    if (options.onLinked) for (const item of linkedItems(answer)) options.onLinked(item)
     store.noteRead(options.hubId(), answer.seq)
     schedule()
   }
@@ -376,6 +379,17 @@ export function useRootView(options: RootViewOptions) {
     },
     dispose,
   }
+}
+
+/** Linked items a view-data answer carries that the reader can read. */
+function linkedItems(answer: ViewData): Item[] {
+  const out: Item[] = []
+  for (const status of Object.values(answer.blocks)) {
+    if (status.status !== 'ok' || !('linked' in status.data)) continue
+    for (const l of Object.values(status.data.linked ?? {}))
+      if (l.access === 'read') out.push(l.item)
+  }
+  return out
 }
 
 /** Items a view-data answer carries, for the store (D60): rows update in place from the feed. */

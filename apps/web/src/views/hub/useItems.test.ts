@@ -719,6 +719,21 @@ describe('useItems: creating', () => {
     expect(rowsOf(s).map((r) => r.seqId)).toEqual([2, 1])
   })
 
+  it('creates in another folder for a view block, without a row in the open table', async () => {
+    const { s, calls } = await opened(
+      (call) => {
+        const body = call.body as { id: string; values: Item['values'] }
+        return json(withSeq({ ...item(body.id, 3, body.values), folderId: 'b' }), 201)
+      },
+      [item('i1', 1)],
+    )
+    const created = s.create({ title: 'In Bugs' }, 'b')
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
+    expect((calls.at(-1)?.body as { folderId: string }).folderId).toBe('b')
+    expect(await created).toMatchObject({ ok: true, item: { folderId: 'b' } })
+    expect(rowsOf(s).map((r) => r.id)).toEqual(['i1'])
+  })
+
   it('removes the row and reports field errors when the server refuses', async () => {
     const { s } = await opened(
       () =>
