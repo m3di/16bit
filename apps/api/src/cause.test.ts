@@ -448,7 +448,9 @@ describe('GET /items/:itemId/revisions', () => {
   it('marks a stored patch that no longer parses unreadable and serves the rest (#222)', async () => {
     let item: Item = await create('ed', 'h1', 'v1')
     for (let v = 2; v <= 4; v++) item = await patch('ed', item, `v${String(v)}`)
-    // As an older version might have left them: an unknown key, an unknown op, not an object.
+    // As an older version might have left them: no op at all (the first version falls back to
+    // create), an unknown op (later versions fall back to update), and a known op with an unknown
+    // key (its own op stays).
     const corrupt = (version: number, value: string) =>
       db
         .updateTable('revision')
@@ -457,14 +459,14 @@ describe('GET /items/:itemId/revisions', () => {
         .where('item_id', '=', item.id)
         .where('version', '=', version)
         .execute()
-    await corrupt(1, JSON.stringify({ op: 'create', folderId: 'h1', values: {}, legacy: 1 }))
+    await corrupt(1, '"just text"')
     await corrupt(2, JSON.stringify({ op: 'move', to: 'elsewhere' }))
-    await corrupt(3, '"just text"')
+    await corrupt(3, JSON.stringify({ op: 'delete', legacy: 1 }))
 
     const page = await history('ed', item.id)
     expect(page.items.map((r) => [r.version, r.op, r.patch === null])).toEqual([
       [4, 'update', false],
-      [3, 'update', true],
+      [3, 'delete', true],
       [2, 'update', true],
       [1, 'create', true],
     ])

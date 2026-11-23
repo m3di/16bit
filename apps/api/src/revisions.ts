@@ -60,7 +60,8 @@ export async function itemRevisions(
     const parsed = revisionPatchSchema.safeParse(row.patch)
     if (parsed.success) return { ...base, op: parsed.data.op, patch: parsed.data }
     console.error(
-      `revision ${String(row.seq)} of item ${itemId} has a patch that does not parse: ` +
+      `revision ${String(row.seq)} of item ${itemId} in workspace ${workspaceId} has a patch ` +
+        'that does not parse: ' +
         (parsed.error.issues[0]?.message ?? ''),
     )
     return { ...base, op: storedOp(row.patch, row.version), patch: null, unreadable: true }
