@@ -33,7 +33,7 @@ import { z } from 'zod'
 import { allReadableHubs, loadSubject, readableHubs } from './access.ts'
 import type { Database } from './db/database.ts'
 import { inTransaction, isScoped } from './db/scope.ts'
-import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
+import { conflict, decodeCursor, encodeCursor, HttpError, notFound, sqlState } from './http.ts'
 import { toAttribute, toItem } from './mappers.ts'
 import {
   compileCondition,
@@ -95,12 +95,17 @@ const keyTaken = () =>
 const viewsOnly = () =>
   new HttpError('views_only', 'This folder only shows views and holds no items')
 
-/** Runs an item INSERT or UPDATE, answering a key another item holds with 409 `key_taken`. */
+/**
+ * Runs an item INSERT or UPDATE, answering a key another item holds with 409 `key_taken`, and an
+ * item in a views-only folder with 422 `views_only`.
+ */
 async function keyed<T>(write: Promise<T>): Promise<T> {
   try {
     return await write
   } catch (error) {
     if ((error as { constraint?: unknown }).constraint === EXTERNAL_KEY_KEY) throw keyTaken()
+    // item_views_only_check (0016), the backstop under the flag read before the insert.
+    if (sqlState(error) === '16B07') throw viewsOnly()
     throw error
   }
 }
@@ -810,7 +815,7 @@ export async function upsertItem(
   return inTransaction(db, async (trx) => {
     const folder = await trx
       .selectFrom('folder')
-      .select('id')
+      .select(['id', 'views_only'])
       .where('workspace_id', '=', workspaceId)
       .where('id', '=', input.folderId)
       .where('hub_id', '=', hubId)
@@ -830,6 +835,8 @@ export async function upsertItem(
       return { item, created: false }
     }
     if (version !== undefined) throw notFound('Item')
+    // Before the condition: the folder can never take the item, whatever the condition says.
+    if (folder.views_only) throw viewsOnly()
     // No item holds the key: the condition is evaluated against an item with no values, in the
     // folder it would be created in, so `is_empty` and the negative operators hold (#250).
     const now =

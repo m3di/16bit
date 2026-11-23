@@ -1,4 +1,5 @@
 import {
+  batchResponseSchema,
   createdAgentKeySchema,
   defaultViewTree,
   invalidViewErrorSchema,
@@ -267,6 +268,28 @@ describe('GET /folders/:folderId/view', () => {
     }
   })
 
+  it('serves the default tree for a stored view that no longer parses, at its version', async () => {
+    await stored()
+    // As a broken upgrade would leave it: a block type core no longer knows.
+    await db
+      .updateTable('view')
+      .set({
+        tree: JSON.stringify({
+          schemaVersion: 1,
+          root: { id: 'page', type: 'page', config: {}, children: [{ id: 'g', type: 'gone' }] },
+        }),
+      })
+      .where('folder_id', '=', 'f1')
+      .execute()
+    const res = await person('vw')('GET', '/folders/f1/view')
+    expect(res.statusCode, res.body).toBe(200)
+    const view = viewSchema.parse(res.json())
+    expect(view).toMatchObject({ stored: true, version: 1, updatedBy: 'ha' })
+    expect(view.tree).toEqual(defaultViewTree('f1', { viewsOnly: false }))
+    // A hub admin replaces it at that version.
+    expect((await put(ha, 'f1', 1, tableTree('f2'))).statusCode).toBe(200)
+  })
+
   it('hides a folder without a grant on its hub, even from owners and admins (D45)', async () => {
     for (const who of ['out', 'adm']) {
       const res = await person(who)('GET', '/folders/f1/view')
@@ -509,6 +532,14 @@ describe('folders with views (D76)', () => {
     const byKey = await ed('PUT', '/hubs/h1/items/by-key/k1', { folderId: 'home', values: {} })
     expect(byKey.statusCode, byKey.body).toBe(422)
     expect(byKey.json()).toMatchObject({ error: 'views_only' })
+    // A failing condition doesn't hide the real reason (422, not 412).
+    const conditioned = await ed('PUT', '/hubs/h1/items/by-key/k3', {
+      folderId: 'home',
+      values: {},
+      condition: { attribute: 'title', op: 'eq', value: 'never' },
+    })
+    expect(conditioned.statusCode, conditioned.body).toBe(422)
+    expect(conditioned.json()).toMatchObject({ error: 'views_only' })
     const bot = await agent('editor')
     expect((await bot('POST', '/items', { folderId: 'home', values: {} })).statusCode).toBe(422)
     const count = await db
@@ -517,6 +548,28 @@ describe('folders with views (D76)', () => {
       .where('folder_id', '=', 'home')
       .executeTakeFirstOrThrow()
     expect(count.n).toBe(0)
+  })
+
+  it('refuses batch creates and upserts into a views-only folder, per operation (D65)', async () => {
+    const res = await person('ed')('POST', '/items/batch', {
+      operations: [
+        { op: 'create', folderId: 'home', values: {} },
+        { op: 'upsert', hubId: 'h1', key: 'k2', folderId: 'home', values: {} },
+        { op: 'create', id: 'ok1', folderId: 'f1', values: { title: 'Fine' } },
+      ],
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    const { results } = batchResponseSchema.parse(res.json())
+    expect(results.map((r) => r.status)).toEqual([422, 422, 201])
+    for (const r of results.slice(0, 2)) {
+      expect(r).toMatchObject({ error: { error: 'views_only' } })
+    }
+    const inHome = await db
+      .selectFrom('item')
+      .select('id')
+      .where('folder_id', '=', 'home')
+      .execute()
+    expect(inHome).toEqual([])
   })
 
   it('removes the views of a deleted hub', async () => {

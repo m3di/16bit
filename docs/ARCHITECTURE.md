@@ -189,6 +189,7 @@ Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE
 - A PUT whose folder is deleted after it was read gets 404 (the insert's foreign key, 23503); a `view_tree_size` CHECK violation is 422 `invalid_view`. Deleting a folder with a stored view is 409 `has_view`: checked under the folder's lock, and again by `folder_view_check` (16B08) for a view inserted but not yet committed. Deleting a hub takes its views.
 - Every write sends the `hub` NOTIFY. There is no view history.
 - Views-only folders (D76): `POST /hubs/:hubId/folders` takes `viewsOnly`, and folder reads carry `viewsOnly: true` only on such a folder. An item create or upsert into one is 422 `views_only` (the folder's flag is read first; `item_views_only_check`, 16B07, is the backstop). `PATCH /hubs/:hubId` takes `opensOnFolderId`, a folder of the hub other than the hub itself (400 otherwise), or `null` for the root; hub reads carry it only when set.
+- A views-only folder may hold subfolders; those are ordinary folders unless created views-only themselves. A stored tree that no longer parses (a broken upgrade) is logged and GET serves the default tree at the stored row's version, so a PUT at that version or a reset replaces it, rather than every read failing.
 
 **Changes, `seq` and mutation IDs (#170, D58, D59).**
 

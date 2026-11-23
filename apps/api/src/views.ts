@@ -170,12 +170,16 @@ async function readView(
       updatedBy: null,
     }
   }
-  // Every stored tree passed `parseViewTree`, which upgrades older schema versions on read.
-  const parsed = parseViewTree(row.tree)
+  // Every stored tree passed `parseViewTree`, which upgrades older schema versions on read. One
+  // that no longer parses (a broken upgrade) must not lock readers out of the folder: it is
+  // logged and the default tree is served, still at the stored row's version, so a hub admin's
+  // PUT at that version replaces it and a reset removes it.
+  let parsed = parseViewTree(row.tree)
   if (!parsed.ok) {
-    throw new Error(
+    console.error(
       `stored view of folder ${folder.id} does not parse: ${parsed.errors[0]?.message ?? ''}`,
     )
+    parsed = { ok: true, tree: defaultViewTree(folder.id, { viewsOnly: folder.views_only }) }
   }
   return {
     ...base,
