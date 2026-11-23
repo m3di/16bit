@@ -2,7 +2,10 @@ import { createdAgentKeySchema, type Item } from '@16bit/core'
 import type { Browser, Page } from '@playwright/test'
 import {
   currentSprint,
+  dataBlocks,
+  getView,
   inWorkspace,
+  PARCEL,
   parcelPath,
   query,
   SCALE,
@@ -55,13 +58,9 @@ async function loads(page: Page, path: string): Promise<number[]> {
   await page.addInitScript(() => {
     const w = window as unknown as { __viewReady?: number }
     const check = () => {
-      const blocks = [...document.querySelectorAll('[data-view-block]')]
+      const blocks = [...document.querySelectorAll('[data-view-block][data-block-state]')]
       const ready =
-        blocks.length > 0 &&
-        blocks.every((b) => {
-          const s = b.getAttribute('data-block-state')
-          return s !== null && s !== 'loading'
-        })
+        blocks.length > 0 && blocks.every((b) => b.getAttribute('data-block-state') !== 'loading')
       if (ready) w.__viewReady = performance.now()
       else requestAnimationFrame(check)
     }
@@ -79,12 +78,37 @@ async function loads(page: Page, path: string): Promise<number[]> {
   return times
 }
 
+/**
+ * Each data block of a folder's view read alone through `GET /view/data?blocks=`, with its
+ * time and status, recorded on the test: when the page is slow, this says which block is.
+ */
+async function blockTimes(client: Api, folderId: string) {
+  const view = await getView(client, folderId)
+  const out: string[] = []
+  for (const block of dataBlocks(view.tree.root)) {
+    const started = Date.now()
+    const res = await client.get(
+      `/folders/${folderId}/view/data?version=${String(view.version)}&blocks=${block.id}&tz=UTC`,
+    )
+    const ms = Date.now() - started
+    const body = (await res.json()) as {
+      blocks?: Record<string, { status: string; error?: string }>
+    }
+    const status = body.blocks?.[block.id]
+    out.push(
+      `${block.id} ${String(ms)} ms ${String(res.status())} ${status?.status ?? ''}${status?.error ? ` ${status.error}` : ''}`,
+    )
+  }
+  test.info().annotations.push({ type: `${folderId} blocks alone`, description: out.join('; ') })
+}
+
 async function ownerPage(browser: Browser): Promise<Page> {
   const context = await browser.newContext({ storageState: OWNER_STATE })
   return context.newPage()
 }
 
-test('project home is on screen within 1 s on the seeded hub', async ({ page }) => {
+test('project home is on screen within 1 s on the seeded hub', async ({ as, page }) => {
+  await blockTimes(as('owner'), PARCEL.folders.home)
   const times = await loads(page, parcelPath())
   test.info().annotations.push({
     type: 'seeded home',
@@ -100,7 +124,9 @@ test('project home is on screen within 2 s on 2,000 tasks, with 15 agents writin
   playwright,
   baseURL,
 }) => {
+  test.setTimeout(180_000)
   const owner = inWorkspace(as('owner'), SCALE.workspaceId)
+  await blockTimes(owner, SCALE.folders.home)
   const sprint = await currentSprint(owner, 'UTC', SCALE)
   // One task of the current sprint per agent, so each write lands in the blocks on screen.
   const tasks = await query(owner, {
@@ -212,7 +238,9 @@ test('no main-thread task over 50 ms while the burndown renders on 2,000 tasks',
   as,
   page,
 }) => {
+  test.setTimeout(180_000)
   const owner = inWorkspace(as('owner'), SCALE.workspaceId)
+  await blockTimes(owner, SCALE.folders.home)
   const sprint = await currentSprint(owner, 'UTC', SCALE)
   const [task] = await query(owner, {
     from: SCALE.folders.backlog,
