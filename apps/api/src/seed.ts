@@ -1,8 +1,9 @@
 // Entry point for `pnpm seed`: applies pending migrations, then loads the demo workspaces, their
 // people and one agent key, then the Parcel Tracker project hub in `demo` (project-seed.ts), whose
 // agent key's secret goes to a gitignored file for e2e (`PROJECT_AGENT_KEY_FILE`). Safe to run
-// again: existing rows are left alone and nothing is duplicated. DEVELOPMENT ONLY: every seeded account has the published password DEV_PASSWORD.
-import { mkdir, writeFile } from 'node:fs/promises'
+// again: existing rows are left alone and nothing is duplicated. DEVELOPMENT ONLY: every seeded
+// account has the published password DEV_PASSWORD.
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDb, migrateToLatest } from './db/database.ts'
@@ -68,6 +69,8 @@ try {
         await writeFile(PROJECT_AGENT_KEY_FILE, `${JSON.stringify(project.agentKey, null, 2)}\n`, {
           mode: 0o600,
         })
+        // `mode` applies only when the file is created; an older file keeps its own.
+        await chmod(PROJECT_AGENT_KEY_FILE, 0o600)
         console.log(`seed: ${PARCEL_HUB.name} agent key written to ${PROJECT_AGENT_KEY_FILE}`)
       } catch (error) {
         console.log(

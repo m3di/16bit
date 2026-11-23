@@ -5,6 +5,8 @@ import type { Database } from './db/database.ts'
 import { seedAgentKey } from './demo-seed.ts'
 import { DEV_OWNER, ensureDevAccounts, linkDevAccount, type DevPerson } from './dev-accounts.ts'
 import { createItem } from './items.ts'
+import { notifyHub } from './notify.ts'
+import { lockHubSchema } from './schema-lock.ts'
 import { seedHubTitle } from './seed-hub-title.ts'
 import { tombstoned } from './seed-tombstones.ts'
 import { validateViewTree } from './views.ts'
@@ -31,8 +33,9 @@ import { validateViewTree } from './views.ts'
 //
 // Idempotent, like demo-seed.ts: fixed IDs, ON CONFLICT DO NOTHING, items through `createItem`
 // and skipped once their ID is in `revision`. A view is only stored where the folder has none,
-// so a view a hub admin edited (or reset and stored again) is never overwritten; "Opens on" is
-// set only when the hub is created. A hub deleted through the API stays deleted, and attributes
+// so a view a hub admin edited is never overwritten, while one reset through the API (no row
+// left) is stored again on the next run (D76 keeps no history, so nothing is lost); "Opens on"
+// is set only when the hub is created. A hub deleted through the API stays deleted, and attributes
 // deleted through the API are neither brought back nor filled.
 //
 // `applyProjectSeed(db, { tasks })` builds the same shape with generated tasks instead of the
@@ -493,7 +496,10 @@ export function generatedTasks(count: number): TaskSeed[] {
       ...(i % 9 !== 0 && { points: [1, 2, 3, 5, 8][i % 5] ?? 1 }),
       ...(sprint !== undefined && { sprint }),
       ...(epic && { epic }),
-      ...(stage === 'done' && { doneDay: i % 10 }),
+      // Done on or before the seed day (day 6, index 5) in the current sprint.
+      ...(stage === 'done' && {
+        doneDay: sprint === CURRENT_SPRINT ? Math.min(i % 10, 5) : i % 10,
+      }),
       ...(sprint === undefined && { bucket: i % 2 ? 'later' : 'next-up', rank: i }),
     }
   })
@@ -789,7 +795,10 @@ export interface ProjectSeedResult {
   itemsCreated: number
   /** Folders whose view was stored this run. */
   viewsStored: string[]
-  /** Created this run; shown once, never stored. Null if the key exists already. */
+  /**
+   * Created this run, for `seed.ts` to write to the e2e key file (or show once). Only its hash is
+   * stored. Null if the key exists already.
+   */
   agentKey: { workspaceId: string; hubId: string; principalId: string; secret: string } | null
   /** Sign-in emails of the project's people. */
   accounts: string[]
@@ -801,8 +810,6 @@ export interface ProjectSeedOptions {
   tasks?: TaskSeed[]
   /** The seed day. Today by default. */
   today?: Date
-  /** Give the agent principal a key (only the demo hub has one). */
-  agentKey?: boolean
 }
 
 /**
@@ -957,7 +964,8 @@ export async function applyProjectSeed(
         .executeTakeFirst()
       if (exists) await seedHubGrant(trx, ws, { hubId, principalId, hubRole }, DEV_OWNER.id)
     }
-    if (options.agentKey ?? spec === PARCEL_HUB) {
+    // Only the demo hub has a key.
+    if (spec.workspaceId === PARCEL_HUB.workspaceId && spec.hubId === PARCEL_HUB.hubId) {
       const key = { principalId: PROJECT_AGENT.id, hubId, hubRole: 'editor' as const }
       const secret = await seedAgentKey(trx, ws, key, DEV_OWNER.id)
       if (secret !== null) result.agentKey = { workspaceId: ws, ...key, secret }
@@ -1004,6 +1012,9 @@ async function storeView(
       .where('id', '=', folderId)
       .executeTakeFirst()
     if (!folder) return false
+    // As PUT checks it (D79): under the hub's schema lock shared, so an attribute change made
+    // meanwhile through a running API waits or is seen.
+    await lockHubSchema(trx, workspaceId, hubId, 'shared')
     const checked = await validateViewTree(trx, workspaceId, hubId, tree)
     if (!checked.ok) {
       const deleted = await trx
@@ -1032,6 +1043,8 @@ async function storeView(
       .onConflict((oc) => oc.columns(['workspace_id', 'folder_id']).doNothing())
       .returning('id')
       .execute()
+    // As PUT does: open tabs of a running API reload the hub and pick the view up.
+    if (row.length > 0) await notifyHub(trx, workspaceId, hubId)
     return row.length > 0
   })
 }

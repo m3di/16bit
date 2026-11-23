@@ -305,6 +305,50 @@ describe('the Parcel Tracker hub (M4-06)', () => {
   })
 })
 
+describe('re-runs after hub admins changed views and attributes', () => {
+  it('stores a view reset through the API again on the next run', async () => {
+    const res = await as(DEV, 'DELETE', `/folders/${F.work}/view?version=2`)
+    expect(res.statusCode, res.body).toBe(204)
+    const again = await applyProjectSeed(db, { today: TODAY })
+    expect(again.viewsStored).toEqual([F.work])
+    const view = viewSchema.parse((await as('sara', 'GET', `/folders/${F.work}/view`)).json())
+    expect(view).toMatchObject({ stored: true, version: 1, updatedBy: DEV })
+  })
+
+  it('skips, without failing, a view whose attribute was deleted, and fills no deleted attribute', async () => {
+    // Bucket, which My work groups by.
+    const del = (confirm?: number) =>
+      as(
+        DEV,
+        'DELETE',
+        `/attributes/${A.bucket}?version=0${confirm === undefined ? '' : `&confirm=${String(confirm)}`}`,
+      )
+    let res = await del()
+    if (res.statusCode === 409) res = await del(res.json<{ affected: number }>().affected)
+    expect(res.statusCode, res.body).toBe(204)
+    const reset = await as(DEV, 'DELETE', `/folders/${F.work}/view?version=1`)
+    expect(reset.statusCode, reset.body).toBe(204)
+
+    const again = await applyProjectSeed(db, { today: TODAY })
+    expect(again.viewsStored).toEqual([])
+    const stored = await db
+      .selectFrom('view')
+      .select('id')
+      .where('workspace_id', '=', WS)
+      .where('folder_id', '=', F.work)
+      .executeTakeFirst()
+    expect(stored).toBeUndefined()
+    expect((await backlog()).filter((t) => A.bucket in t.values)).toEqual([])
+    const attribute = await db
+      .selectFrom('attribute')
+      .select('id')
+      .where('workspace_id', '=', WS)
+      .where('id', '=', A.bucket)
+      .executeTakeFirst()
+    expect(attribute).toBeUndefined()
+  })
+})
+
 describe('the 2,000-task fixture (seed:large --project)', () => {
   it(`builds the same shape with ${String(PROJECT_TASKS)} tasks and both views`, async () => {
     await seedProjectWorkspace(db, SCALE_HUB)
