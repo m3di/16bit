@@ -44,7 +44,8 @@ async function fixtures(): Promise<void> {
       ('w1', 'ed', 'user', 'Editor', 'member'),
       ('w1', 'vw', 'user', 'Viewer', 'member'),
       ('w1', 'ag', 'agent', 'Agent', 'member'),
-      ('w1', 'out', 'user', 'Outsider', 'member');
+      ('w1', 'out', 'user', 'Outsider', 'member'),
+      ('w1', 'ed2', 'user', 'Editor of h2', 'member');
     INSERT INTO folder (workspace_id, id, hub_id, parent_id, name, color, id_prefix) VALUES
       ('w1', 'h1', 'h1', NULL, 'Hub 1', 'blue', 'A'),
       ('w1', 'h2', 'h2', NULL, 'Hub 2', 'red', 'B'),
@@ -56,7 +57,8 @@ async function fixtures(): Promise<void> {
       VALUES ('w1', 'i1', 'h1', 'f1', 1, '{}', 'own');
     INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role) VALUES
       ('w1', 'h1', 'own', 'hub_admin'), ('w1', 'h3', 'own', 'hub_admin'),
-      ('w1', 'h1', 'ha', 'hub_admin'), ('w1', 'h1', 'ed', 'editor'), ('w1', 'h1', 'vw', 'viewer');
+      ('w1', 'h1', 'ha', 'hub_admin'), ('w1', 'h1', 'ed', 'editor'), ('w1', 'h1', 'vw', 'viewer'),
+      ('w1', 'h2', 'ed2', 'editor');
     INSERT INTO hub_grant (workspace_id, hub_id, principal_id, principal_kind, hub_role)
       VALUES ('w1', 'h1', 'ag', 'agent', 'editor');
   `.execute(db)
@@ -301,6 +303,26 @@ describe('0016_views on the latest schema', () => {
         ),
       ).toBe('16B07')
       expect(await code('ed', (trx) => item('i3', 3, 'f1').execute(trx))).toBe('ok')
+    })
+
+    it('tell an editor of another hub nothing: the policy refuses first (42501)', async () => {
+      // ed2 edits h2 only. Into h1's views-only folder, or an ordinary one, the answer is the same.
+      const into = (folder: string, seq: number) =>
+        code('ed2', (trx) =>
+          sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+              VALUES ('w1', ${`x${String(seq)}`}, 'h1', ${folder}, ${seq}, '{}', 'ed2')`.execute(
+            trx,
+          ),
+        )
+      expect(await into('home', 20)).toBe(DENIED)
+      expect(await into('f1', 21)).toBe(DENIED)
+      // Claiming its own hub with h1's folder is the foreign key's 23503, as for any folder.
+      expect(
+        await code('ed2', (trx) =>
+          sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+              VALUES ('w1', 'x22', 'h2', 'home', 22, '{}', 'ed2')`.execute(trx),
+        ),
+      ).toBe('23503')
     })
 
     it('stay views-only, and a hub row never is one', async () => {

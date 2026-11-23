@@ -16,7 +16,8 @@ import { sql, type Kysely } from 'kysely'
 //   creation (the folder_insert policy covers every column) and fixed after: not in the folder
 //   UPDATE grant, and `folder_views_only_fixed` refuses a change for every role. Hub rows are
 //   never views-only. `item_views_only_check` refuses an item created in, or moved into, such a
-//   folder, for every role, as `hub_id_check` holds D3 underneath the API.
+//   folder, for every role, as `hub_id_check` holds D3 underneath the API. It runs AFTER the
+//   row passed row-level security, so it never tells a caller about a hub it can't see.
 // - `folder_view_check`: a folder with a stored view can't be deleted (D76: reset the view
 //   first, so a composed view is never lost in one click). Subfolders only; a hub row goes
 //   through delete_hub, which takes its view with it.
@@ -128,9 +129,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     CREATE TRIGGER folder_views_only_fixed BEFORE UPDATE OF views_only ON folder
       FOR EACH ROW EXECUTE FUNCTION folder_views_only_fixed();
 
-    -- views_only never changes, so reading it without a lock is enough. Definer, so a folder
-    -- row hidden from the caller can't make the check pass; the item's own policy still decides
-    -- whether the caller may write it.
+    -- views_only never changes, so reading it without a lock is enough. An AFTER trigger, so it
+    -- runs only on rows that already passed the item policy's WITH CHECK (and the folder foreign
+    -- key, whose trigger sorts first): a caller writing into a hub it can't see gets the
+    -- policy's 42501, never 16B07, so this can't probe for hidden views-only folders (as
+    -- attribute_target_lock in 0009). Definer, so the folder row is read whatever the caller
+    -- sees; by then the caller can write that hub anyway.
     CREATE FUNCTION item_views_only_check() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
     AS $$
@@ -140,10 +144,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
                    AND f.views_only) THEN
         RAISE EXCEPTION 'a views-only folder holds no items' USING ERRCODE = '16B07';
       END IF;
-      RETURN NEW;
+      RETURN NULL;
     END
     $$;
-    CREATE TRIGGER item_views_only_check BEFORE INSERT OR UPDATE OF folder_id ON item
+    CREATE TRIGGER item_views_only_check AFTER INSERT OR UPDATE OF folder_id ON item
       FOR EACH ROW EXECUTE FUNCTION item_views_only_check();
 
     -- Runs once the folder row is locked for the delete, so a view inserted before that has
