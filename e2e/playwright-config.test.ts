@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import config from './playwright.config.ts'
+import config, { E2E_SIGN_IN_LIMIT_PER_IP } from './playwright.config.ts'
 
 describe('playwright config', () => {
   it('runs specs from tests/ in parallel so they can be sharded', () => {
@@ -46,6 +46,19 @@ describe('playwright config', () => {
     expect(built?.url).toMatch(new RegExp(`:${port}/health$`))
     if (!process.env['E2E_BASE_URL'] && !process.env['E2E_BUDGETS_BASE_URL'])
       expect(budgets?.use?.baseURL).toBe(`http://localhost:${port}`)
+  })
+
+  it('raises the sign-in limit per IP on the API servers it starts, and nothing else (issue 229)', () => {
+    const servers = Array.isArray(config.webServer) ? config.webServer : []
+    expect(Number(E2E_SIGN_IN_LIMIT_PER_IP)).toBeGreaterThan(100)
+    for (const name of ['api', 'built']) {
+      const env = servers.find((server) => server.name === name)?.env ?? {}
+      expect(env['SIGN_IN_LIMIT_PER_IP'], name).toBe(E2E_SIGN_IN_LIMIT_PER_IP)
+      expect(env, name).not.toHaveProperty('SIGN_IN_LIMIT_PER_EMAIL')
+    }
+    expect(servers.find((server) => server.name === 'web')?.env ?? {}).not.toHaveProperty(
+      'SIGN_IN_LIMIT_PER_IP',
+    )
   })
 
   it('starts the API without the owner URL, which .env may set (#44)', () => {

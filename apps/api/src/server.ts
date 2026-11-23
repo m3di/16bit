@@ -1,4 +1,5 @@
 import { buildApp } from './app.ts'
+import { signInLimitsFromEnv, type SignInLimits } from './auth/rate-limit.ts'
 import { createDb } from './db/database.ts'
 import { unsafeRoleReason } from './db/scope.ts'
 import { devPasswordRefused } from './dev-accounts.ts'
@@ -23,8 +24,27 @@ const refuseDevPassword = devPasswordRefused(process.env)
 if (process.env['NODE_ENV'] === 'production' && !refuseDevPassword) {
   console.warn("api: ALLOW_DEV_PASSWORD=1, the seeds' published password signs in. Local only.")
 }
+// Sign-in limits (#229): the defaults unless SIGN_IN_LIMIT_PER_* is set, which only the
+// end-to-end servers do.
+let signInLimits: SignInLimits
+try {
+  signInLimits = signInLimitsFromEnv(process.env)
+} catch (error) {
+  console.error(`api: ${(error as Error).message}`)
+  process.exit(1)
+}
+if (
+  process.env['NODE_ENV'] === 'production' &&
+  (process.env['SIGN_IN_LIMIT_PER_IP'] || process.env['SIGN_IN_LIMIT_PER_EMAIL'])
+) {
+  console.warn(
+    `api: sign-in limits set from the environment: ${String(signInLimits.loginPerIp.max)} per IP, ` +
+      `${String(signInLimits.loginPerEmail.max)} per email, per 15 minutes. Meant for tests only.`,
+  )
+}
 const app = buildApp({
   db,
+  ...signInLimits,
   webRoot,
   secureCookies,
   refuseDevPassword,

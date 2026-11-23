@@ -32,6 +32,13 @@ const builtUrl = `http://localhost:${builtPort}`
 const webRoot = fileURLToPath(new URL('../apps/web/dist', import.meta.url))
 /** An app already running elsewhere for the budgets, as `E2E_BASE_URL` is for the rest. */
 const externalBuiltUrl = process.env['E2E_BUDGETS_BASE_URL'] ?? externalBaseUrl
+/**
+ * The API servers the suite starts allow this many sign-ins and invite acceptances per IP per 15
+ * minutes, not the default 100 (issue 229): a run makes about 40 from one IP, so a few runs in a
+ * row against one server would hit the limit. Tests only; a deployment keeps the default. A
+ * reused `pnpm dev` keeps its own setting (see .env.example).
+ */
+export const E2E_SIGN_IN_LIMIT_PER_IP = '10000'
 
 // Specs live in tests/*.spec.ts. Each one sets up its own items through the API, so specs can run
 // in any order, in parallel, and across shards. The database must be migrated and seeded first
@@ -95,7 +102,7 @@ export default defineConfig({
           name: 'api',
           command: 'pnpm --filter @16bit/api start',
           // The API never holds the owner's URL (#44). .env, loaded above, has it locally.
-          env: { MIGRATION_DATABASE_URL: '' },
+          env: { MIGRATION_DATABASE_URL: '', SIGN_IN_LIMIT_PER_IP: E2E_SIGN_IN_LIMIT_PER_IP },
           // /health also checks the database, so the suite starts only once Postgres answers.
           url: `${apiUrl}/health`,
           reuseExistingServer: !ci,
@@ -112,7 +119,12 @@ export default defineConfig({
         {
           name: 'built',
           command: 'pnpm --filter @16bit/web build && pnpm --filter @16bit/api start',
-          env: { MIGRATION_DATABASE_URL: '', PORT: builtPort, WEB_ROOT: webRoot },
+          env: {
+            MIGRATION_DATABASE_URL: '',
+            PORT: builtPort,
+            WEB_ROOT: webRoot,
+            SIGN_IN_LIMIT_PER_IP: E2E_SIGN_IN_LIMIT_PER_IP,
+          },
           url: `http://${process.env['HOST'] ?? '127.0.0.1'}:${builtPort}/health`,
           reuseExistingServer: !ci,
           timeout: 180_000,

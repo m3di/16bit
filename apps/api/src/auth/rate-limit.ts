@@ -34,3 +34,42 @@ export class RateLimiter {
     for (const [key, entry] of this.hits) if (entry.resetAt <= now) this.hits.delete(key)
   }
 }
+
+/** The sign-in window: attempts are counted per 15 minutes. */
+export const SIGN_IN_WINDOW_SECONDS = 900
+/** Sign-in attempts per email per window, unless `SIGN_IN_LIMIT_PER_EMAIL` says otherwise. */
+export const DEFAULT_SIGN_IN_LIMIT_PER_EMAIL = 10
+/** Sign-in and invite acceptances per client IP per window, unless `SIGN_IN_LIMIT_PER_IP` says otherwise. */
+export const DEFAULT_SIGN_IN_LIMIT_PER_IP = 100
+const MAX_SIGN_IN_LIMIT = 1_000_000
+
+export interface SignInLimits {
+  loginPerEmail: RateLimitPolicy
+  loginPerIp: RateLimitPolicy
+}
+
+/**
+ * The sign-in limits from the environment (#229): `SIGN_IN_LIMIT_PER_EMAIL` and
+ * `SIGN_IN_LIMIT_PER_IP`, attempts per 15-minute window, a whole number from 1 to 1,000,000.
+ * Unset or empty keeps the default. Only the end-to-end servers raise them, since one test
+ * run signs in and accepts invites from one IP; a deployment keeps the defaults. Throws on
+ * anything else, so a typo can't silently remove the limit.
+ */
+export function signInLimitsFromEnv(env: NodeJS.ProcessEnv): SignInLimits {
+  const read = (name: string, fallback: number): RateLimitPolicy => {
+    const raw = env[name]
+    if (raw === undefined || raw === '')
+      return { max: fallback, windowSeconds: SIGN_IN_WINDOW_SECONDS }
+    const max = /^\d+$/.test(raw) ? Number(raw) : NaN
+    if (!Number.isSafeInteger(max) || max < 1 || max > MAX_SIGN_IN_LIMIT) {
+      throw new Error(
+        `${name} must be a whole number from 1 to ${String(MAX_SIGN_IN_LIMIT)}, not "${raw}"`,
+      )
+    }
+    return { max, windowSeconds: SIGN_IN_WINDOW_SECONDS }
+  }
+  return {
+    loginPerEmail: read('SIGN_IN_LIMIT_PER_EMAIL', DEFAULT_SIGN_IN_LIMIT_PER_EMAIL),
+    loginPerIp: read('SIGN_IN_LIMIT_PER_IP', DEFAULT_SIGN_IN_LIMIT_PER_IP),
+  }
+}

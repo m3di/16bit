@@ -93,6 +93,21 @@ describe('server', () => {
     expect(output).toContain(`api received ${signal}, closing`)
   })
 
+  it('refuses to start with an invalid sign-in limit, before it binds (#229)', async () => {
+    const child = spawn(process.execPath, [server], {
+      env: { ...process.env, PORT: '0', DATABASE_URL: appUrl, SIGN_IN_LIMIT_PER_IP: 'lots' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    const collect = (chunk: Buffer) => (out += chunk.toString())
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    const [code] = (await once(child, 'exit')) as [number | null]
+    expect(code).toBe(1)
+    expect(out).toContain('SIGN_IN_LIMIT_PER_IP must be a whole number')
+    expect(out).not.toContain('api listening')
+  })
+
   it('refuses to start without DATABASE_URL', async () => {
     const env: NodeJS.ProcessEnv = { ...process.env, PORT: '0' }
     delete env['DATABASE_URL']

@@ -50,7 +50,13 @@ import {
   resolvePrincipal,
   accountMemberships,
 } from './auth/auth.ts'
-import { RateLimiter, type RateLimitPolicy } from './auth/rate-limit.ts'
+import {
+  DEFAULT_SIGN_IN_LIMIT_PER_EMAIL,
+  DEFAULT_SIGN_IN_LIMIT_PER_IP,
+  RateLimiter,
+  SIGN_IN_WINDOW_SECONDS,
+  type RateLimitPolicy,
+} from './auth/rate-limit.ts'
 import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
 import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
@@ -164,8 +170,18 @@ export function buildApp(options: AppOptions): FastifyInstance {
     session: options.session ?? DEFAULT_SESSION_POLICY,
     secureCookies: options.secureCookies ?? true,
   }
-  const emailLimiter = new RateLimiter(options.loginPerEmail ?? { max: 10, windowSeconds: 900 })
-  const ipLimiter = new RateLimiter(options.loginPerIp ?? { max: 100, windowSeconds: 900 })
+  const emailLimiter = new RateLimiter(
+    options.loginPerEmail ?? {
+      max: DEFAULT_SIGN_IN_LIMIT_PER_EMAIL,
+      windowSeconds: SIGN_IN_WINDOW_SECONDS,
+    },
+  )
+  const ipLimiter = new RateLimiter(
+    options.loginPerIp ?? {
+      max: DEFAULT_SIGN_IN_LIMIT_PER_IP,
+      windowSeconds: SIGN_IN_WINDOW_SECONDS,
+    },
+  )
 
   // Before every route, so it can take over upgrades (its README). Frames past `maxPayload`
   // close the socket (1009); between `MAX_CLIENT_MESSAGE_BYTES` and it they answer
