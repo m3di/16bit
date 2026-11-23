@@ -195,8 +195,8 @@ describe('aggregates on the 50,000-item folder (D80, #251)', () => {
     return { result: result as AggregateResult, ms: best }
   }
 
-  /** Six conditions on the seed's indexed attributes; `k` varies the constants. */
-  const six = (k: number) => ({
+  /** Eight conditions on the seed's indexed attributes; `k` varies the constants. */
+  const eight = (k: number) => ({
     and: [
       { attribute: LARGE_ATTR.stage, op: 'in', value: ['shipped', 'planned'] },
       { attribute: LARGE_ATTR.effort, op: 'gte', value: k },
@@ -204,20 +204,22 @@ describe('aggregates on the 50,000-item folder (D80, #251)', () => {
       { attribute: LARGE_ATTR.tags, op: 'not_in', value: ['docs'] },
       { attribute: LARGE_ATTR.due, op: 'gt', value: `2026-0${String(k)}-01` },
       { attribute: LARGE_ATTR.title, op: 'is_not_empty' },
+      { attribute: LARGE_ATTR.effort, op: 'lte', value: 40 - k },
+      { attribute: LARGE_ATTR.due, op: 'is_not_empty' },
     ],
   })
 
-  it('answers a group and 5 measures with 30 measure conditions in under two seconds', async () => {
+  it('answers a group and 5 measures with 40 measure conditions, the cap, in under two seconds', async () => {
     // The spike's worst case: no top-level where, so every item reaches every measure's
     // conditions. As NOT EXISTS per condition this timed out at 3 s (#251).
     const { result, ms } = await timedAggregate({
       groupBy: { attribute: LARGE_ATTR.stage },
       measures: [
-        { fn: 'count', where: six(1) },
-        { fn: 'sum', attribute: LARGE_ATTR.effort, where: six(2) },
-        { fn: 'avg', attribute: LARGE_ATTR.effort, where: six(3) },
-        { fn: 'count_empty', attribute: LARGE_ATTR.due, where: six(4) },
-        { fn: 'max', attribute: LARGE_ATTR.effort, where: six(5) },
+        { fn: 'count', where: eight(1) },
+        { fn: 'sum', attribute: LARGE_ATTR.effort, where: eight(2) },
+        { fn: 'avg', attribute: LARGE_ATTR.effort, where: eight(3) },
+        { fn: 'count_empty', attribute: LARGE_ATTR.due, where: eight(4) },
+        { fn: 'max', attribute: LARGE_ATTR.effort, where: eight(5) },
       ],
     })
     console.info(`aggregate at the condition cap, 50,000 items: ${ms.toFixed(0)} ms`)

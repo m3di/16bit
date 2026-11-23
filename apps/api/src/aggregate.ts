@@ -43,7 +43,8 @@ import { checkTimeZone, resolveReadFilters } from './read-operands.ts'
 //
 // Sums and averages are computed in `numeric` from the stored doubles, so they don't drift with
 // the plan's summation order (#251), and rounded to the attribute's `decimals` when it has them;
-// averages without `decimals` to 10 places.
+// averages without `decimals` to 10 places, in SQL. Past 366 date buckets the latest are kept and
+// the oldest fold into `other`.
 
 type Trx = Transaction<Database>
 
@@ -122,13 +123,12 @@ class Pivot {
 type Shape = (raw: unknown) => MeasureValue
 
 const asCount: Shape = (raw) => Number(raw ?? 0)
-const asNumber =
-  (decimals: number | undefined): Shape =>
-  (raw) => {
-    if (raw === null || raw === undefined) return null
-    const n = Number(raw)
-    return decimals === undefined ? n : Number(n.toFixed(decimals))
-  }
+/** A `numeric` from Postgres (a decimal string), already rounded in SQL. */
+const asNumber: Shape = (raw) => (raw === null || raw === undefined ? null : Number(raw))
+
+/** `expr` rounded half away from zero to `decimals` places, exactly, in `numeric`. */
+const rounded = (expr: RawBuilder<unknown>, decimals: number | undefined) =>
+  decimals === undefined ? expr : sql`round(${expr}, ${sql.lit(decimals)})`
 const asDate =
   (includeTime: boolean): Shape =>
   (raw) => {
@@ -166,23 +166,29 @@ function measureSql(
       return count(sql`${pivot.first(id, 'num')} = 0`)
     case 'sum':
       return {
-        expr: sql`sum(${pivot.first(id, 'num')}::numeric) FILTER (WHERE ${where})`,
-        shape: asNumber(decimals),
+        expr: rounded(
+          sql`sum(${pivot.first(id, 'num')}::numeric) FILTER (WHERE ${where})`,
+          decimals,
+        ),
+        shape: asNumber,
       }
     case 'avg':
       return {
-        expr: sql`avg(${pivot.first(id, 'num')}::numeric) FILTER (WHERE ${where})`,
-        shape: asNumber(decimals ?? AVG_DEFAULT_DECIMALS),
+        expr: rounded(
+          sql`avg(${pivot.first(id, 'num')}::numeric) FILTER (WHERE ${where})`,
+          decimals ?? AVG_DEFAULT_DECIMALS,
+        ),
+        shape: asNumber,
       }
     case 'min':
       return {
         expr: sql`min(${pivot.first(id, 'num')}::numeric) FILTER (WHERE ${where})`,
-        shape: asNumber(undefined),
+        shape: asNumber,
       }
     case 'max':
       return {
         expr: sql`max(${pivot.first(id, 'num')}::numeric) FILTER (WHERE ${where})`,
-        shape: asNumber(undefined),
+        shape: asNumber,
       }
     case 'earliest':
     case 'latest': {
@@ -267,9 +273,12 @@ export async function aggregate(
     measures.map((m, i) => sql`${m.expr} AS ${sql.ref(`v${String(i)}`)}`),
   )
 
-  await sql`SELECT set_config('statement_timeout', ${String(options.timeoutMs ?? AGGREGATE_TIMEOUT_MS)}, true)`.execute(
-    trx,
-  )
+  // The aggregate's own timeout, for its statement only: the previous value (a role or database
+  // default, or the request's) comes back after it.
+  const { rows: previous } = await sql<{ timeout: string }>`
+    SELECT current_setting('statement_timeout') AS timeout,
+           set_config('statement_timeout', ${String(options.timeoutMs ?? AGGREGATE_TIMEOUT_MS)}, true)
+  `.execute(trx)
   try {
     if (!groupAttribute || !groupValues) {
       const { rows } = await sql<Record<string, unknown>>`
@@ -290,8 +299,11 @@ export async function aggregate(
     }
     throw error
   } finally {
-    // A failed statement aborts the transaction, so only a successful one resets this.
-    await sql`SELECT set_config('statement_timeout', '0', true)`.execute(trx).catch(() => undefined)
+    // A failed statement aborts the transaction, which ends the setting anyway.
+    const timeout = previous[0]?.timeout ?? '0'
+    await sql`SELECT set_config('statement_timeout', ${timeout}, true)`
+      .execute(trx)
+      .catch(() => undefined)
   }
 }
 
@@ -329,7 +341,11 @@ async function grouped(
       ? sql`array_position(${attribute.config.options.map((o) => o.id)}::text[], g.gk) NULLS LAST, g.gk`
       : attribute.type === 'actor' || isRelation
         ? sql`g.m0 DESC NULLS LAST, g.gk`
-        : sql`g.gk`
+        : isDate
+          ? // The latest buckets are kept and the oldest fold into `other`: a burndown or a
+            // trend cares about the recent end. They are shown ascending below.
+            sql`g.gk DESC`
+          : sql`g.gk`
 
   const { rows } = await sql<
     Record<string, unknown> & { kind: string; gk: string; r: number | null }
@@ -366,9 +382,9 @@ async function grouped(
   `.execute(trx)
 
   const KIND_ORDER: Record<string, number> = { value: 0, no_access: 1, empty: 2, other: 3 }
-  rows.sort(
-    (a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) || (a.r ?? 0) - (b.r ?? 0),
-  )
+  // Value groups by rank, but date buckets ascending (they are ranked latest first).
+  const rank = (r: { r: number | null }) => (isDate ? -(r.r ?? 0) : (r.r ?? 0))
+  rows.sort((a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) || rank(a) - rank(b))
   const labels = isRelation
     ? await relationLabels(
         trx,

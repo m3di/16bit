@@ -352,30 +352,89 @@ describe('POST /aggregate', () => {
 
   it('folds groups past 100 into one other group, each item once', async () => {
     // 104 items, each linking to the one before it (the first to i5) and to i0: 105 targets,
-    // i0 in every one of the 104, every other target in exactly one.
+    // i0 in every one of the 104, every other target in exactly one. Each has 1 point.
     let previous = 'i5'
     for (let n = 0; n < 104; n++) {
       const made = await create(
-        { title: `L${String(n)}`, rel: [previous, 'i0'] },
+        { title: `L${String(n)}`, pts: 1, rel: [previous, 'i0'] },
         `l${String(n).padStart(3, '0')}`,
       )
       previous = made.id
     }
-    const { groups, truncated } = await agg('ed', {
+    // Ranked by the first measure, which leaves out the item `Two` added below, so adding it
+    // changes no group's rank.
+    const body = {
       groupBy: { attribute: 'rel' },
+      measures: [
+        { fn: 'count', where: { attribute: 'title', op: 'neq', value: 'Two' } },
+        { fn: 'count' },
+        { fn: 'sum', attribute: 'pts' },
+      ],
+    }
+    const before = await agg('ed', body)
+    expect(before.truncated).toBe(true)
+    const values = before.groups.filter((g) => g.key.kind === 'value')
+    expect(values).toHaveLength(100)
+    // i0 first (104 items), then by ID, one item each: i5, l000 to l097.
+    expect(values[0]).toMatchObject({ key: { value: 'i0' }, values: [104, 104, 104] })
+    expect(values.slice(1).every((g) => g.values[0] === 1)).toBe(true)
+    expect(values.at(-1)).toMatchObject({ key: { value: 'l097' } })
+    expect(keys(before.groups).slice(-2)).toEqual(['empty', 'other'])
+    // Targets l098 to l102 fold into `other`: the five items linking to them, each once, though
+    // every one of them also links to i0.
+    expect(before.groups.at(-1)).toEqual({ key: { kind: 'other' }, values: [5, 5, 5] })
+
+    // An item linking to two folded targets is in `other` once: its count grows by 1 and its
+    // sum by the item's 10 points, not twice that.
+    await create({ title: 'Two', pts: 10, rel: ['l100', 'l101'] }, 'two')
+    const after = await agg('ed', body)
+    expect(after.groups.filter((g) => g.key.kind === 'value').map((g) => g.key)).toEqual(
+      values.map((g) => g.key),
+    )
+    expect(after.groups.at(-1)).toEqual({ key: { kind: 'other' }, values: [5, 6, 15] })
+  })
+
+  it('keeps the latest 366 date buckets, ascending, and folds the oldest into other', async () => {
+    // 370 more items, one a day from 2025-01-01, next to the fixture's four November 2026 days.
+    await sql`
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+      SELECT 'w1', 'd' || n, 'h1', 'f1', 1000 + n,
+             jsonb_build_object('due', to_char(date '2025-01-01' + n, 'YYYY-MM-DD')), 'own'
+      FROM generate_series(0, 369) n;
+      INSERT INTO item_index (workspace_id, attribute_id, item_id, ts)
+      SELECT 'w1', 'due', 'd' || n, (date '2025-01-01' + n)::timestamp AT TIME ZONE 'UTC'
+      FROM generate_series(0, 369) n;
+    `.execute(db)
+    const { groups, truncated } = await agg('ed', {
+      groupBy: { attribute: 'due', bucket: 'day' },
       measures: [{ fn: 'count' }],
     })
     expect(truncated).toBe(true)
-    const values = groups.filter((g) => g.key.kind === 'value')
-    expect(values).toHaveLength(100)
-    // i0 first (104 items), then by ID, one item each: i5, l000 to l097.
-    expect(values[0]).toMatchObject({ key: { value: 'i0' }, values: [104] })
-    expect(values.slice(1).every((g) => g.values[0] === 1)).toBe(true)
+    const days = groups.filter((g) => g.key.kind === 'value').map((g) => keys([g])[0] as string)
+    expect(days).toHaveLength(366)
+    expect(days).toEqual([...days].sort())
+    // 374 days in all: the 8 oldest fold, the latest (the fixture's 2026-11-30) is kept.
+    expect(days[0]).toBe('2025-01-09')
+    expect(days.at(-1)).toBe('2026-11-30')
     expect(keys(groups).slice(-2)).toEqual(['empty', 'other'])
-    expect(values.at(-1)).toMatchObject({ key: { value: 'l097' } })
-    // Targets l098 to l102 fold into `other`: the five items linking to them, each once, though
-    // every one of them also links to i0.
-    expect(groups.at(-1)).toEqual({ key: { kind: 'other' }, values: [5] })
+    expect(groups.at(-1)).toEqual({ key: { kind: 'other' }, values: [8] })
+  })
+
+  it('rounds sums and averages half away from zero, exactly, in decimal', async () => {
+    // 1.005 is just below 1.005 in binary, so rounding a double would give 1.00.
+    await sql`
+      UPDATE attribute SET config = '{"decimals":2}' WHERE workspace_id = 'w1' AND id = 'pts'
+    `.execute(db)
+    const half = await create({ title: 'Half', pts: 1.005 }, 'r1')
+    expect(half.values['pts']).toBe(1.005)
+    const { groups } = await agg('ed', {
+      where: { attribute: 'title', op: 'eq', value: 'Half' },
+      measures: [
+        { fn: 'sum', attribute: 'pts' },
+        { fn: 'avg', attribute: 'pts' },
+      ],
+    })
+    expect(groups[0]?.values).toEqual([1.01, 1.01])
   })
 
   it('agrees with POST /query on a filter with every operator, negated ones included', async () => {
