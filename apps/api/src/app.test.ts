@@ -540,29 +540,6 @@ describe('patch item', () => {
     })
     expect(missing.statusCode).toBe(404)
   })
-
-  // #199 puts condition (D66) in the contracts; #203 serves it. externalKey is served (#200).
-  it('refuses condition until it is served, and writes nothing', async () => {
-    const item = await create({ title: 'x' })
-    const before = await workspaceSnapshot(db, 'w1')
-    const refused = [
-      await request('PATCH', `/v1/workspaces/w1/items/${item.id}`, {
-        version: 1,
-        values: { title: 'y' },
-        condition: { attribute: 'title', op: 'eq', value: 'x' },
-      }),
-      await request('PUT', '/v1/workspaces/w1/hubs/build/items/by-key/k', {
-        folderId: 'build',
-        values: { title: 'y' },
-        condition: { attribute: 'title', op: 'eq', value: 'x' },
-      }),
-    ]
-    for (const res of refused) {
-      expect(res.statusCode).toBe(400)
-      expect(res.json()).toMatchObject({ error: 'invalid_request', message: /not supported yet/ })
-    }
-    expect(await workspaceSnapshot(db, 'w1')).toEqual(before)
-  })
 })
 
 describe('delete item', () => {
