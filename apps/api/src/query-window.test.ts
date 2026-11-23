@@ -1,4 +1,9 @@
-import { itemQueryResultSchema, type ItemQueryResult } from '@16bit/core'
+import {
+  aggregateResultSchema,
+  itemQueryResultSchema,
+  type AggregateResult,
+  type ItemQueryResult,
+} from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely } from 'kysely'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -168,4 +173,66 @@ describe('plans Postgres picks on a 50,000-item folder (D20, D61)', () => {
       }
     },
   )
+})
+
+describe('aggregates on the 50,000-item folder (D80, #251)', () => {
+  /** One aggregate through the API, and how long it took end to end; the best of three. */
+  async function timedAggregate(body: object): Promise<{ result: AggregateResult; ms: number }> {
+    let best = Number.POSITIVE_INFINITY
+    let result: AggregateResult | undefined
+    for (let run = 0; run < 3; run++) {
+      const started = performance.now()
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/workspaces/${WS}/aggregate`,
+        headers: { cookie },
+        payload: { from: FROM, ...body },
+      })
+      best = Math.min(best, performance.now() - started)
+      expect(res.statusCode, res.body).toBe(200)
+      result = aggregateResultSchema.parse(res.json())
+    }
+    return { result: result as AggregateResult, ms: best }
+  }
+
+  /** Six conditions on the seed's indexed attributes; `k` varies the constants. */
+  const six = (k: number) => ({
+    and: [
+      { attribute: LARGE_ATTR.stage, op: 'in', value: ['shipped', 'planned'] },
+      { attribute: LARGE_ATTR.effort, op: 'gte', value: k },
+      { attribute: LARGE_ATTR.title, op: 'contains', value: `e${String(k)}` },
+      { attribute: LARGE_ATTR.tags, op: 'not_in', value: ['docs'] },
+      { attribute: LARGE_ATTR.due, op: 'gt', value: `2026-0${String(k)}-01` },
+      { attribute: LARGE_ATTR.title, op: 'is_not_empty' },
+    ],
+  })
+
+  it('answers a group and 5 measures with 30 measure conditions in under two seconds', async () => {
+    // The spike's worst case: no top-level where, so every item reaches every measure's
+    // conditions. As NOT EXISTS per condition this timed out at 3 s (#251).
+    const { result, ms } = await timedAggregate({
+      groupBy: { attribute: LARGE_ATTR.stage },
+      measures: [
+        { fn: 'count', where: six(1) },
+        { fn: 'sum', attribute: LARGE_ATTR.effort, where: six(2) },
+        { fn: 'avg', attribute: LARGE_ATTR.effort, where: six(3) },
+        { fn: 'count_empty', attribute: LARGE_ATTR.due, where: six(4) },
+        { fn: 'max', attribute: LARGE_ATTR.effort, where: six(5) },
+      ],
+    })
+    console.info(`aggregate at the condition cap, 50,000 items: ${ms.toFixed(0)} ms`)
+    expect(result.groups.length).toBeGreaterThan(1)
+    expect(ms).toBeLessThan(2_000)
+  }, 60_000)
+
+  it('counts every item once, and once per group of a single-valued attribute', async () => {
+    const { result } = await timedAggregate({ measures: [{ fn: 'count' }] })
+    expect(result.groups).toEqual([{ key: { kind: 'all' }, values: [LARGE_ITEMS] }])
+    const byStage = await timedAggregate({
+      groupBy: { attribute: LARGE_ATTR.stage },
+      measures: [{ fn: 'count' }],
+    })
+    const total = byStage.result.groups.reduce((n, g) => n + Number(g.values[0]), 0)
+    expect(total).toBe(LARGE_ITEMS)
+  }, 60_000)
 })

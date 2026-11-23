@@ -11,6 +11,7 @@ import {
   SORT_TEXT_PREFIX,
   type Attribute,
   type BacklinkPage,
+  type CompiledCondition,
   type CompiledFilter,
   type CompiledSort,
   type Filter,
@@ -945,11 +946,25 @@ function conditionSql(
       'and' in filter ? sql` AND ` : sql` OR `,
     )})`
   }
-  const { attributeId, column, op, operands } = filter.condition
+  const { attributeId } = filter.condition
+  const { predicate, negated } = leafPredicate(filter.condition)
+  const exists = sql`EXISTS (SELECT 1 FROM ${rows} AND x.attribute_id = ${attributeId} AND ${predicate})`
+  return negated ? sql`NOT ${exists}` : exists
+}
+
+/**
+ * One condition as "some index row `x` of its attribute satisfies `predicate`", negated or not.
+ * The negative operators hold for an item with no row at all, so they are the negation of their
+ * positive form. `conditionSql` wraps it in EXISTS; the aggregate engine (aggregate.ts) folds it
+ * into one `bool_or` per item over a single scan of item_index (#251).
+ */
+export function leafPredicate(condition: CompiledCondition): {
+  predicate: RawBuilder<unknown>
+  negated: boolean
+} {
+  const { column, op, operands } = condition
   const col = sql.ref(`x.${column}`)
   const one = operands[0] ?? ''
-  const exists = (predicate: RawBuilder<unknown>) =>
-    sql`EXISTS (SELECT 1 FROM ${rows} AND x.attribute_id = ${attributeId} AND ${predicate})`
   const eq =
     column === 'txt'
       ? // Lets item_index_txt_idx narrow the rows before the full comparison.
@@ -957,34 +972,36 @@ function conditionSql(
       : sql`${col} = ${typed(column, one)}`
   const inList = sql`${col} = ANY(${operands}::${CAST[column]}[])`
   const contains = sql`x.txt ILIKE ${`%${escapeLike(String(one))}%`}`
+  const yes = (predicate: RawBuilder<unknown>) => ({ predicate, negated: false })
+  const no = (predicate: RawBuilder<unknown>) => ({ predicate, negated: true })
 
   switch (op) {
     case 'eq':
-      return exists(eq)
+      return yes(eq)
     case 'neq':
-      return sql`NOT ${exists(eq)}`
+      return no(eq)
     case 'gt':
-      return exists(sql`${col} > ${typed(column, one)}`)
+      return yes(sql`${col} > ${typed(column, one)}`)
     case 'gte':
-      return exists(sql`${col} >= ${typed(column, one)}`)
+      return yes(sql`${col} >= ${typed(column, one)}`)
     case 'lt':
-      return exists(sql`${col} < ${typed(column, one)}`)
+      return yes(sql`${col} < ${typed(column, one)}`)
     case 'lte':
-      return exists(sql`${col} <= ${typed(column, one)}`)
+      return yes(sql`${col} <= ${typed(column, one)}`)
     case 'in':
-      return exists(inList)
+      return yes(inList)
     case 'not_in':
-      return sql`NOT ${exists(inList)}`
+      return no(inList)
     case 'contains':
-      return exists(contains)
+      return yes(contains)
     case 'not_contains':
-      return sql`NOT ${exists(contains)}`
+      return no(contains)
     case 'starts_with':
-      return exists(sql`x.txt ILIKE ${`${escapeLike(String(one))}%`}`)
+      return yes(sql`x.txt ILIKE ${`${escapeLike(String(one))}%`}`)
     case 'is_empty':
-      return sql`NOT ${exists(sql`TRUE`)}`
+      return no(sql`TRUE`)
     case 'is_not_empty':
-      return exists(sql`TRUE`)
+      return yes(sql`TRUE`)
   }
 }
 
@@ -1319,7 +1336,7 @@ export async function expandItem(
 }
 
 /** `compileItemQuery`, with its problems as a 400 `invalid_request` listing every one. */
-function compileOrThrow(
+export function compileOrThrow(
   definitions: FolderAttributeDefinition[],
   query: Parameters<typeof compileItemQuery>[1],
 ): Extract<ReturnType<typeof compileItemQuery>, { ok: true }> {
