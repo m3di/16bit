@@ -15,11 +15,14 @@ import {
   itemWriteResultSchema,
   MAX_CHANGES_LIMIT,
   MAX_CLIENT_MESSAGE_BYTES,
+  MAX_ITEM_CURSOR_LENGTH,
   MAX_PENDING_CLIENT_MESSAGES,
   MAX_QUERY_OFFSET,
+  MAX_SORT_KEYS,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
   parseFeedClientMessage,
   patchItemSchema,
+  SORT_TEXT_PREFIX,
   utf8ByteLength,
   type ItemCursor,
 } from './index.ts'
@@ -69,6 +72,38 @@ describe('item query cursor', () => {
     expect(decodeItemCursor('WyJ4IiwxXQ')).toBeNull() // ["x",1]
     expect(decodeItemCursor('WyJudW1iZXIiLDBd')).toBeNull() // ["number",0]
     expect(decodeItemCursor('WyJ1cGRhdGVkIiwiaTEiXQ')).toBeNull() // ["updated","i1"]
+  })
+
+  it('fits the longest sort cursor in the query and its result (#185)', () => {
+    // Every key a text prefix of the characters JSON writes longest: a 6-byte `\u0001`.
+    const worst = encodeItemCursor({
+      order: 'sort',
+      after: [
+        ...Array.from({ length: MAX_SORT_KEYS }, () => '\u0001'.repeat(SORT_TEXT_PREFIX)),
+        'i'.repeat(64),
+      ],
+    })
+    expect(worst).toHaveLength(MAX_ITEM_CURSOR_LENGTH)
+    expect(
+      itemQuerySchema.safeParse({ from: 'h1', limit: 1, sort: [{ attribute: 'a' }], cursor: worst })
+        .success,
+    ).toBe(true)
+    expect(itemQueryResultSchema.safeParse({ items: [], nextCursor: worst, seq: 0 }).success).toBe(
+      true,
+    )
+    // A non-BMP prefix (4 bytes of UTF-8, two UTF-16 units per character) fits too.
+    const emoji = encodeItemCursor({ order: 'sort', after: ['🚀'.repeat(SORT_TEXT_PREFIX), 'i1'] })
+    expect(emoji.length).toBeLessThan(MAX_ITEM_CURSOR_LENGTH)
+    expect(decodeItemCursor(emoji)).toEqual({
+      order: 'sort',
+      after: ['🚀'.repeat(SORT_TEXT_PREFIX), 'i1'],
+    })
+    const tooLong = itemQuerySchema.safeParse({
+      from: 'h1',
+      limit: 1,
+      cursor: 'A'.repeat(MAX_ITEM_CURSOR_LENGTH + 1),
+    })
+    expect(tooLong.success).toBe(false)
   })
 
   it('counts UTF-8 bytes', () => {

@@ -1,4 +1,12 @@
-import { encodeItemCursor, itemQueryResultSchema, type Filter, type Sort } from '@16bit/core'
+import {
+  encodeItemCursor,
+  itemQueryResultSchema,
+  MAX_ITEM_CURSOR_LENGTH,
+  SORT_TEXT_PREFIX,
+  TEXT_MAX_LENGTH,
+  type Filter,
+  type Sort,
+} from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import { sql, type Kysely, type KyselyPlugin } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -445,6 +453,45 @@ describe('paging', () => {
 
   it('pages the default order, newest update first', async () => {
     expect(await allPages({}, 2)).toEqual(['e', 'd', 'c', 'b', 'a'])
+  })
+
+  it('pages past rows whose sort text is as long as text gets (#185)', async () => {
+    const long = 'm'.repeat(TEXT_MAX_LENGTH)
+    // f and g agree on their first SORT_TEXT_PREFIX characters, so they tie and fall to the ID.
+    await createIn('w1', 'g', { title: `${long.slice(1)}a` })
+    await createIn('w1', 'f', { title: long })
+    // Four bytes of UTF-8 per character.
+    await createIn('w1', 'k', { title: '\u{1F600}'.repeat(TEXT_MAX_LENGTH / 2) })
+    for (const direction of ['asc', 'desc'] as const) {
+      const sort: Sort = [{ attribute: 'title', direction }]
+      const all = await ids({ sort })
+      expect(all).toHaveLength(8)
+      const tied = all.filter((id) => id === 'f' || id === 'g')
+      expect(tied).toEqual(['f', 'g'])
+      expect(all.indexOf('g') - all.indexOf('f')).toBe(1)
+      for (const limit of [1, 2]) expect(await allPages({ sort }, limit)).toEqual(all)
+    }
+  })
+
+  it('reads a text cursor from before #185 that carries more than the prefix', async () => {
+    await createIn('w1', 'f', { title: 'z'.repeat(SORT_TEXT_PREFIX + 50) })
+    await createIn('w1', 'g', { title: `${'z'.repeat(SORT_TEXT_PREFIX)}a` })
+    const sort: Sort = [{ attribute: 'title' }]
+    const all = await ids({ sort })
+    const cursor = encodeItemCursor({
+      order: 'sort',
+      after: ['z'.repeat(SORT_TEXT_PREFIX + 50), 'f'],
+    })
+    expect(cursor.length).toBeLessThanOrEqual(MAX_ITEM_CURSOR_LENGTH)
+    const page = await result({ sort, cursor })
+    expect(page.items.map((i) => i.id)).toEqual(all.slice(all.indexOf('f') + 1))
+  })
+
+  it('refuses a cursor longer than any it makes', async () => {
+    await expectInvalid(
+      { sort: [{ attribute: 'title' }], cursor: 'A'.repeat(MAX_ITEM_CURSOR_LENGTH + 1) },
+      'cursor',
+    )
   })
 
   it('rejects a cursor that does not match the sort', async () => {

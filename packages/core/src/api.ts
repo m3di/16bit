@@ -12,7 +12,7 @@ import {
   workspaceSchema,
 } from './entities.ts'
 import { urlValueSchema } from './attribute-types/url.ts'
-import { decodeItemCursor, type ItemCursorOrder } from './cursor.ts'
+import { decodeItemCursor, MAX_ITEM_CURSOR_LENGTH, type ItemCursorOrder } from './cursor.ts'
 import { paletteColorSchema } from './palette.ts'
 import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
 import { agentHubRoleSchema, hubRoleSchema, workspaceRoleSchema } from './roles.ts'
@@ -27,6 +27,12 @@ export const MAX_PAGE_LIMIT = 200
 
 /** An opaque cursor from a previous page's `nextCursor`. */
 export const cursorSchema = z.string().min(1).max(512)
+
+/**
+ * An item query cursor (`POST /query`): longer than a list cursor, since it carries the last
+ * row's sort values, each text one cut to `SORT_TEXT_PREFIX` characters (#185).
+ */
+export const itemCursorTextSchema = z.string().min(1).max(MAX_ITEM_CURSOR_LENGTH)
 
 /**
  * A position in the workspace's change history: `revision.seq`, which only grows (D58). `0`
@@ -215,7 +221,7 @@ export const itemQuerySchema = z
     order: z.enum(ITEM_QUERY_ORDERS).optional(),
     expand: expandSchema.default([]),
     limit: z.int().min(1).max(MAX_PAGE_LIMIT),
-    cursor: cursorSchema.nullable().default(null),
+    cursor: itemCursorTextSchema.nullable().default(null),
     offset: z.int().min(0).max(MAX_QUERY_OFFSET).optional(),
     count: z.boolean().default(false),
   })
@@ -283,6 +289,7 @@ export const MAX_LINKED_ITEMS = 1000
  * ask again with a lower `limit`.
  */
 export const itemQueryResultSchema = itemPageSchema.extend({
+  nextCursor: itemCursorTextSchema.nullable(),
   linked: z.record(idSchema, linkedItemSchema).optional(),
   linkedTruncated: z.boolean().optional(),
   /** With `count: true`: the items that pass `where`, over all pages (D61). */

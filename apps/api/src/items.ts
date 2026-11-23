@@ -8,6 +8,7 @@ import {
   validateItemValues,
   MAX_HIDDEN_BACKLINKS,
   MAX_LINKED_ITEMS,
+  SORT_TEXT_PREFIX,
   type Attribute,
   type BacklinkPage,
   type CompiledFilter,
@@ -694,6 +695,9 @@ const CAST: Record<KeyKind, RawBuilder<unknown>> = {
   ts: sql`timestamptz`,
 }
 const typed = (kind: KeyKind, value: string | number) => sql`${value}::${CAST[kind]}`
+/** A cursor's sort value, cut like the key it pages (a text cursor from before #185 may be longer). */
+const cursorValue = (kind: KeyKind, value: string | number) =>
+  kind === 'txt' ? sql`left(${value}::text, ${sql.lit(SORT_TEXT_PREFIX)})` : typed(kind, value)
 
 /** `% _ \` are literal in the search text, not ILIKE wildcards. */
 const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`)
@@ -753,10 +757,24 @@ function sortKey(sort: CompiledSort): SortKey {
     sql`(SELECT ${expr} FROM item_index s WHERE s.workspace_id = i.workspace_id AND s.attribute_id = ${sort.attributeId} AND s.item_id = i.id AND s.ord = 0)`
   const desc = sort.direction === 'desc'
   switch (sort.key.by) {
+    // Text sorts by its first SORT_TEXT_PREFIX characters, the prefix item_index_txt_idx holds,
+    // so the cursor carries at most that much of it (#185). Ties past it fall to the next key.
     case 'value':
-      return { expr: value(sql.ref(`s.${sort.column}`)), kind: sort.column, desc, nullable: true }
+      return sort.column === 'txt'
+        ? {
+            expr: value(sql`left(s.txt, ${sql.lit(SORT_TEXT_PREFIX)})`),
+            kind: 'txt',
+            desc,
+            nullable: true,
+          }
+        : { expr: value(sql.ref(`s.${sort.column}`)), kind: sort.column, desc, nullable: true }
     case 'lower':
-      return { expr: value(sql`lower(s.txt)`), kind: 'txt', desc, nullable: true }
+      return {
+        expr: value(sql`left(lower(s.txt), ${sql.lit(SORT_TEXT_PREFIX)})`),
+        kind: 'txt',
+        desc,
+        nullable: true,
+      }
     case 'position': {
       // Option order; a value whose option was deleted sorts after every option.
       const { order } = sort.key
@@ -812,11 +830,13 @@ function afterCursor(
     return idDesc ? sql`${row} < ${at}` : sql`${row} > ${at}`
   }
   const equal = (key: SortKey, i: number, c: unknown) =>
-    c === null ? sql`${ref(i)} IS NULL` : sql`${ref(i)} = ${typed(key.kind, c as string | number)}`
+    c === null
+      ? sql`${ref(i)} IS NULL`
+      : sql`${ref(i)} = ${cursorValue(key.kind, c as string | number)}`
   const after = (key: SortKey, i: number, c: unknown) => {
     // Null is last, so nothing comes after it on this key; ties fall to the next key.
     if (c === null) return sql`FALSE`
-    const value = typed(key.kind, c as string | number)
+    const value = cursorValue(key.kind, c as string | number)
     const beyond = key.desc ? sql`${ref(i)} < ${value}` : sql`${ref(i)} > ${value}`
     return key.nullable ? sql`(${beyond} OR ${ref(i)} IS NULL)` : beyond
   }
