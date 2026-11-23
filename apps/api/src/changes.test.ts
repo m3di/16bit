@@ -14,7 +14,7 @@ import { sql, type Kysely } from 'kysely'
 import pg from 'pg'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
-import { readChanges } from './changes.ts'
+import { boundPageBytes, MAX_CHANGES_PAGE_BYTES, readChanges } from './changes.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { withScope, workspaceSeq } from './db/scope.ts'
 import { createTestDatabase } from './db/test-database.ts'
@@ -253,6 +253,63 @@ describe('GET /changes (D58)', () => {
     const third = await changes('vw', second.seq, 2)
     expect(third.changes.map((c) => c.itemId)).toEqual([items[4]?.id])
     expect(third).toMatchObject({ seq: 6, more: false })
+  })
+
+  it('cuts a page by bytes too, reporting its last seq and more, and misses nothing (#224)', async () => {
+    const small = buildApp({ db: appDb, maxChangesPageBytes: 2_000 })
+    const page = async (after: number) => {
+      const res = await small.inject({
+        method: 'GET',
+        url: `/v1/workspaces/${WS}/changes?after=${String(after)}`,
+        headers: { cookie: cookies.get('vw') ?? '' },
+      })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(Buffer.byteLength(res.body)).toBeLessThanOrEqual(2_000)
+      return changesPageSchema.parse(res.json())
+    }
+    try {
+      const cause = { note: 'n'.repeat(500) }
+      const items: Item[] = []
+      for (const title of ['a', 'b', 'c', 'd', 'e']) {
+        items.push(await create('ed', 'h1', title, { cause }))
+      }
+      await create('ed', 'h2', 'hidden', { cause })
+      // `a` changes again: it moves to the end, at its latest revision.
+      const first = items[0]
+      if (first) items[0] = await patch('ed', first, 'a2', { cause })
+
+      const seen: string[] = []
+      let after = 0
+      let more = true
+      let pages = 0
+      while (more) {
+        const p = await page(after)
+        expect(p.changes.length).toBeGreaterThan(0)
+        if (p.more) expect(p.seq).toBe(p.changes.at(-1)?.seq)
+        seen.push(...p.changes.map((c) => c.item?.values['t1'] as string))
+        after = p.seq
+        more = p.more
+        pages++
+      }
+      expect(pages).toBeGreaterThan(1)
+      expect(seen).toEqual(['b', 'c', 'd', 'e', 'a2'])
+      expect(after).toBe(await counter())
+    } finally {
+      await small.close()
+    }
+  })
+
+  it('sends one change larger than the byte bound alone, and leaves a small page whole', () => {
+    const change = (seq: number, size: number): ChangesPage['changes'][number] => ({
+      seq,
+      hubId: 'h1',
+      itemId: `i${String(seq)}`,
+      item: null,
+      cause: { note: 'x'.repeat(size) },
+    })
+    const page: ChangesPage = { changes: [change(1, 500), change(2, 10)], seq: 9, more: false }
+    expect(boundPageBytes(page, 100)).toEqual({ changes: [change(1, 500)], seq: 1, more: true })
+    expect(boundPageBytes(page, MAX_CHANGES_PAGE_BYTES)).toBe(page)
   })
 
   it('bounds the scan, and the high-water mark still moves past hidden changes', async () => {
