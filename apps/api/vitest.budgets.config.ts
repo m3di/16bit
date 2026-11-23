@@ -8,8 +8,5 @@ export default defineConfig({
     include: BUDGET_TESTS,
     environment: 'node',
     fileParallelism: false,
-    // Temporary: the 50,000-item aggregate sits near its 2 s limit on hosted runners (1.5-2.2 s,
-    // PR #296). Remove this when #299, which makes that query faster, merges. The limit stays.
-    retry: 1,
   },
 })
