@@ -622,8 +622,8 @@ async function seedChunk(trx: Transaction<Database>, first: number, last: number
   )
   if (index.length > 0) {
     await sql`
-      INSERT INTO item_index (workspace_id, attribute_id, item_id, ord, num, txt, ts)
-      SELECT ${ws}, attribute_id, item_id, ord, num, txt, ts
+      INSERT INTO item_index (workspace_id, hub_id, attribute_id, item_id, ord, num, txt, ts)
+      SELECT ${ws}, ${LARGE_HUB.id}::text, attribute_id, item_id, ord, num, txt, ts
       FROM unnest(${index.map((r) => r.attribute)}::text[], ${index.map((r) => r.item)}::text[],
                   ${index.map((r) => r.ord)}::smallint[], ${index.map((r) => r.num)}::float8[],
                   ${index.map((r) => r.txt)}::text[], ${index.map((r) => r.ts)}::timestamptz[])
