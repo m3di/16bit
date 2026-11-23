@@ -1,4 +1,5 @@
 import { ref, shallowRef, watch, type Ref } from 'vue'
+import { normalizeRichText, richTextToPlain } from '../../ui/index.ts'
 
 /**
  * A value that arrived while the reader was editing. `by` names who saved it; `null` means it
@@ -19,6 +20,8 @@ export interface FieldDraft<T> {
   take: () => { basedOn: number | null } | null
   /** Starts the next edit from the value shown now, as if the reader had just opened it. */
   rebase: () => void
+  /** Drops the draft for `value`, which the reader is saving some other way ("Keep mine"). */
+  reset: (value: T) => void
 }
 
 /**
@@ -84,7 +87,7 @@ export function useFieldDraft<T>(options: {
     synced = { key: key(shown()), version: version() }
   }
 
-  return { draft, incoming, take, rebase }
+  return { draft, incoming, take, rebase, reset: follow }
 }
 
 /** A value as the notes quote it: in quotes, or "no value". */
@@ -95,6 +98,10 @@ export function excerpt(text: string, max = 80): string {
   const line = text.replace(/\s+/g, ' ').trim()
   return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`
 }
+
+/** A rich text value as one shortened line, for quoting it in a note. */
+export const richTextExcerpt = (value: unknown) =>
+  excerpt(richTextToPlain(normalizeRichText(value)))
 
 /** The note shown beside a field whose draft was kept. */
 export function incomingNote(incoming: Incoming<unknown>, text: string): string {

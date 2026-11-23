@@ -195,6 +195,22 @@ describe('Rich text: a change from someone else while writing', () => {
     expect(f.commits).toEqual([[doc('Mine'), 2]])
   })
 
+  it('drops what was written since when the reader keeps the refused document', async () => {
+    const f = await field({ value: 'Theirs', version: 2 })
+    f.props.refused = { value: doc('Mine'), by: 'Mina Park' }
+    f.editor.write(doc('Something else'))
+    await nextTick()
+    fire(buttons(byData(f.root, 'data-refused-draft') as FakeNode)[0] as FakeNode, 'click')
+    expect(f.commits).toEqual([[doc('Mine'), 2]])
+    await nextTick()
+    expect(f.editor.model()).toEqual(doc('Mine'))
+    // The save shows at the same version: that is not a failed save.
+    f.props.value = doc('Mine')
+    f.props.refused = null
+    await nextTick()
+    expect(byData(f.root, 'data-changed-while-editing')).toBeUndefined()
+  })
+
   it('clears the value when the reader empties the document', async () => {
     const f = await field({ value: 'Old', version: 1 })
     f.editor.write({ type: 'doc', content: [{ type: 'paragraph' }] })

@@ -1,14 +1,8 @@
 <script setup lang="ts">
 import type { ItemValues } from '@16bit/core'
 import { computed, defineAsyncComponent, h } from 'vue'
-import {
-  FormNotice,
-  isRichTextEmpty,
-  normalizeRichText,
-  richTextToPlain,
-  ValueState,
-} from '../../ui/index.ts'
-import { excerpt, incomingNote, useFieldDraft } from './field-draft.ts'
+import { FormNotice, isRichTextEmpty, normalizeRichText, ValueState } from '../../ui/index.ts'
+import { incomingNote, richTextExcerpt, useFieldDraft } from './field-draft.ts'
 
 // Tiptap stays out of the main bundle (docs/DESIGN.md): the editor loads when a field needs it.
 const RichTextEditor = defineAsyncComponent({
@@ -48,15 +42,15 @@ const key = (doc: unknown) => JSON.stringify(normalizeRichText(doc))
 
 // The editor edits a draft, saved when it loses focus. Like the other fields (D60), it follows
 // the value until the reader changes it, and then keeps what they wrote when a change arrives.
-const { draft, incoming, take } = useFieldDraft<unknown>({
+const { draft, incoming, take, reset } = useFieldDraft<unknown>({
   shown: () => value,
   key,
   version: () => version,
   changedBy: () => changedBy,
 })
-const incomingText = computed(() =>
-  incoming.value ? excerpt(richTextToPlain(normalizeRichText(incoming.value.value))) : '',
-)
+const incomingText = computed(() => (incoming.value ? richTextExcerpt(incoming.value.value) : ''))
+
+defineExpose({ reset })
 
 function commit() {
   if (disabled) return

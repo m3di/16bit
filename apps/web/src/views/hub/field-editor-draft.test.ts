@@ -1,7 +1,7 @@
 // @vitest-environment client-node
 import type { Attribute } from '@16bit/core'
 import { nextTick, reactive } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { findAll, fire, mount, type, type FakeNode } from '../../test/fake-dom.ts'
 import FieldEditor from './FieldEditor.vue'
 import { attributes } from './fixtures.test-utils.ts'
@@ -10,6 +10,11 @@ import { attributes } from './fixtures.test-utils.ts'
 // decided by the maintainer during M3): the change is shown beside it, and the save goes out
 // against the version the draft was based on, so it meets the usual conflict.
 
+// The note and its buttons belong to FieldEditor; the actor and relation pickers need a hub's
+// value context, which these tests do not set up.
+vi.mock('./ActorEditor.vue', () => ({ default: { render: () => null } }))
+vi.mock('./RelationEditor.vue', () => ({ default: { render: () => null } }))
+
 const [title] = attributes as [Attribute]
 
 const textOf = (n: FakeNode): string =>
@@ -17,6 +22,52 @@ const textOf = (n: FakeNode): string =>
 const byData = (root: FakeNode, attr: string) =>
   findAll(root, (n) => n.props[attr] !== undefined)[0]
 const buttons = (n: FakeNode) => findAll(n, (e) => e.tag === 'button')
+
+const [base] = attributes as [Attribute]
+const tags = {
+  ...base,
+  id: 'tags',
+  name: 'Tags',
+  type: 'multi_select',
+  config: {
+    options: [
+      { id: 'ui', label: 'UI' },
+      { id: 'api', label: 'API' },
+    ],
+  },
+} as Attribute
+const owners = {
+  ...base,
+  id: 'owners',
+  name: 'Owners',
+  type: 'actor',
+  config: { multiple: true },
+} as Attribute
+const blocks = {
+  ...base,
+  id: 'blocks',
+  name: 'Blocks',
+  type: 'relation',
+  config: { targetHubId: 'bld', crossHub: false, multiple: true },
+} as Attribute
+
+/** A field with its own editor, showing `value` at version 2, with `refused` offered back. */
+function listField(attribute: Attribute, value: string[], refused: string[]) {
+  const commits: [unknown, unknown][] = []
+  const { root } = mount(
+    FieldEditor,
+    reactive({
+      attribute,
+      value,
+      version: 2,
+      itemId: 'i1',
+      changedBy: 'Mina Park',
+      refused: { value: refused, by: 'Mina Park' },
+      onCommit: (v: unknown, basedOn: unknown) => commits.push([v, basedOn]),
+    }),
+  )
+  return { note: byData(root, 'data-refused-draft') as FakeNode, commits }
+}
 
 function editor(start: { value: string; version: number }) {
   const props = {
@@ -155,5 +206,26 @@ describe('FieldEditor: a change from someone else while typing', () => {
     await nextTick()
     expect(e.input.value).toBe('Old')
     expect(byData(e.root, 'data-changed-while-editing')).toBeUndefined()
+  })
+
+  it('offers a refused multi-select value back by its option labels, and keeps it', () => {
+    const f = listField(tags, ['api'], ['ui', 'api'])
+    expect(textOf(f.note)).toContain('so your Tags “UI, API” was not saved.')
+    const [keep] = buttons(f.note)
+    fire(keep as FakeNode, 'click')
+    // The whole list, over the version now shown, not parsed as input text.
+    expect(f.commits).toEqual([[['ui', 'api'], 2]])
+  })
+
+  it.each([
+    ['an actor', owners, 'Owners'],
+    ['a relation', blocks, 'Blocks'],
+  ])('offers %s value back without quoting IDs, and keeps it', (_, attribute, name) => {
+    const f = listField(attribute, ['p1'], ['p1', 'p2'])
+    const text = textOf(f.note)
+    expect(text).toContain(`so your ${name} value was not saved.`)
+    expect(text).not.toContain('p2')
+    fire(buttons(f.note)[0] as FakeNode, 'click')
+    expect(f.commits).toEqual([[['p1', 'p2'], 2]])
   })
 })

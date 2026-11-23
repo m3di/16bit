@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Attribute, ItemValues } from '@16bit/core'
-import { computed, ref } from 'vue'
+import { computed, ref, useTemplateRef } from 'vue'
 import {
   BaseButton,
   BaseInput,
@@ -14,8 +14,8 @@ import MultiSelectEditor from './MultiSelectEditor.vue'
 import RelationEditor from './RelationEditor.vue'
 import { listValue } from './relations.ts'
 import RichTextField from './RichTextField.vue'
-import { excerpt, incomingNote, quoted, useFieldDraft } from './field-draft.ts'
-import { formatValue, fromInput, toInput } from './values.ts'
+import { incomingNote, quoted, richTextExcerpt, useFieldDraft } from './field-draft.ts'
+import { formatValue, fromInput, hasOwnEditor, toInput } from './values.ts'
 
 type Value = ItemValues[string] | undefined
 
@@ -80,15 +80,15 @@ function commit() {
   if (taken) emit('commit', parsed.value, taken.basedOn)
 }
 
-// Fields with their own editor (rich text, lists) save a whole value, not input text.
-const ownEditor = computed(() =>
-  ['multi_select', 'actor', 'relation', 'rich_text'].includes(attribute.type),
-)
+const richEditor = useTemplateRef<InstanceType<typeof RichTextField>>('richEditor')
 
 /** Saves the refused value again, over the value now shown, which the reader has seen. */
 function keepMine() {
   if (!refused) return
-  if (ownEditor.value) {
+  // Fields with their own editor (rich text, lists) save a whole value, not input text.
+  if (hasOwnEditor(attribute)) {
+    // Whatever was written since is replaced, so the save is not taken for a failed one.
+    richEditor.value?.reset(refused.value)
     emit('commit', refused.value, version)
     return
   }
@@ -106,7 +106,7 @@ function quote(v: ItemValues[string]): string | null {
     case 'multi_select':
       return quoted(formatValue(attribute, v))
     case 'rich_text':
-      return quoted(excerpt(formatValue(attribute, v)))
+      return quoted(richTextExcerpt(v))
     default:
       return quoted(toInput(attribute, v))
   }
@@ -197,6 +197,7 @@ function onToggle(checked: boolean) {
   />
   <RichTextField
     v-else-if="attribute.type === 'rich_text'"
+    ref="richEditor"
     :value="value"
     :label="label"
     :error="shownError"
