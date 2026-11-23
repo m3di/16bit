@@ -20,7 +20,8 @@ import type { RawView, ViewSource } from './source.ts'
 // A folder's root view on the hub page (D76, D83): the view, then every data block's data in one
 // request with the tree's `version` and the reader's `tz`; the hub followed from that `seq`;
 // blocks read again when what they show changes, at most once a second; the view read again on
-// a `hub` event or when the data says the tree moved (409 `stale`).
+// a `hub` event or when the data says the tree moved (409 `stale`). A relation's target hub
+// outside the view's own is held and followed too while a block labels items from it.
 
 /** One data block's data as the page holds it. */
 export type BlockLoad =
@@ -81,6 +82,10 @@ export function useRootView(options: RootViewOptions) {
   let recovering: number | null = null
   // The reader's day when the data was last read, to catch a midnight slept through.
   let readOn = ''
+  // Folders seen with a stored view, so the page need not read their items in case they have none.
+  const stored = new Set<string>()
+  // Relation target hubs outside the view's hub, held while a block shows labels from them.
+  const targetHolds = new Map<string, () => void>()
 
   const ready = computed(() => {
     const v = view.value
@@ -90,6 +95,12 @@ export function useRootView(options: RootViewOptions) {
   const allBlocks = computed(() => readableBlocks(rendered.value?.page ?? null))
   const data = computed(() => dataBlocks(allBlocks.value))
   const watched = computed(() => watches(allBlocks.value, options.description()))
+  const targetHubs = computed(() => {
+    const out = new Set<string>()
+    for (const w of watched.value.values()) for (const h of w.hubs) out.add(h)
+    out.delete(options.hubId())
+    return out
+  })
 
   const mode = computed<RootViewMode>(() => {
     const id = options.folderId()
@@ -136,6 +147,8 @@ export function useRootView(options: RootViewOptions) {
     const gen = ++generation
     clearTimers()
     fetching = false
+    // Another folder's first data owes nothing to the last folder's once-a-second limit.
+    if (view.value?.folderId !== folderId) lastFetch = -Infinity
     if (!keep || view.value?.folderId !== folderId) {
       view.value = { folderId, load: { state: 'loading' } }
       blocks.value = {}
@@ -144,6 +157,8 @@ export function useRootView(options: RootViewOptions) {
     }
     const done = (answer: RawView) => {
       if (gen !== generation) return
+      if (answer.stored) stored.add(folderId)
+      else stored.delete(folderId)
       view.value = { folderId, load: { state: 'ready', data: answer } }
       if (recovering !== null && answer.version === recovering) {
         giveUp(data.value.map((b) => b.id))
@@ -241,7 +256,28 @@ export function useRootView(options: RootViewOptions) {
     for (const item of answeredItems(answer)) store.apply(item)
     if (options.onLinked) for (const item of linkedItems(answer)) options.onLinked(item)
     store.noteRead(options.hubId(), answer.seq)
+    followTargets(answer.seq)
     schedule()
+  }
+
+  /**
+   * Holds each relation target hub the blocks label from and follows it from `seq`, the
+   * workspace's (D58), so a renamed or deleted target refreshes the labels as in the view's hub.
+   */
+  function followTargets(seq: number) {
+    for (const hubId of targetHubs.value) {
+      if (!targetHolds.has(hubId)) targetHolds.set(hubId, store.hold(hubId))
+      store.noteRead(hubId, seq)
+    }
+  }
+
+  /** Lets go of target hubs no block shows any more (all of them for an empty `keep`). */
+  function releaseTargets(keep: ReadonlySet<string>) {
+    for (const [hubId, release] of targetHolds) {
+      if (keep.has(hubId)) continue
+      release()
+      targetHolds.delete(hubId)
+    }
   }
 
   /** Marks blocks stale; they are read again together, debounced and at most once a second. */
@@ -323,8 +359,14 @@ export function useRootView(options: RootViewOptions) {
     }),
     store.on('resync', (hubId) => {
       if (hubId === options.hubId()) markStale(data.value.map((b) => b.id))
+      else if (targetHolds.has(hubId)) {
+        markStale([...watched.value].filter(([, w]) => w.hubs.has(hubId)).map(([id]) => id))
+      }
     }),
   ]
+  watch(targetHubs, (hubs) => {
+    releaseTargets(hubs)
+  })
 
   // A laptop that slept through midnight: the timer fires late, so look again on return.
   const onVisible = () => {
@@ -360,6 +402,7 @@ export function useRootView(options: RootViewOptions) {
     hubTimer = null
     if (watchesVisibility) document.removeEventListener('visibilitychange', onVisible)
     for (const stop of stops) stop()
+    releaseTargets(new Set())
     release()
   }
   if (getCurrentScope()) onScopeDispose(dispose)
@@ -372,6 +415,11 @@ export function useRootView(options: RootViewOptions) {
     rendered,
     blocks,
     problem,
+    /**
+     * Whether `folderId` was last seen with a stored view on this page. The page then waits for
+     * the view instead of reading the folder's items alongside it.
+     */
+    knownStored: (folderId: string) => stored.has(folderId),
     retry,
     reload: () => {
       const id = options.folderId()

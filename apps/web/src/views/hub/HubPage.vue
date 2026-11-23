@@ -35,13 +35,14 @@ import ItemPanelBody from './ItemPanelBody.vue'
 import ItemsBlock from './ItemsBlock.vue'
 import NewItemForm from './NewItemForm.vue'
 import { provideValueContext } from './context.ts'
+import { folderItemsOpener } from './folderItems.ts'
 import { folderColumns, ownItemCount, truncatedNote, useHub } from './useHub.ts'
 import { useHubDirectory } from './useHubDirectory.ts'
 import { opensHubSettings } from '../home/hubSettings.ts'
 import { canWriteItems } from './newItem.ts'
 import { canSort, inHub, useItems, valueErrors } from './useItems.ts'
 import { usePrincipals } from './usePrincipals.ts'
-import { defaultViewSource, useViewSource } from '../root-view/source.ts'
+import { httpViewSource, useViewSource } from '../root-view/source.ts'
 import { useRootView } from '../root-view/useRootView.ts'
 import ViewRenderer from '../root-view/ViewRenderer.vue'
 import { provideViewHost } from '../root-view/host.ts'
@@ -213,9 +214,8 @@ const folder = computed(() => {
     : (d.folders.find((f) => f.id === openFolderId.value) ?? null)
 })
 // The open folder's root view (D76): today's folder screen when it has none stored, "No view
-// yet" for a views-only folder with none, else the view. The source becomes the view routes
-// once the API has them; until then every folder answers its default.
-const viewSource = useViewSource(() => defaultViewSource(() => description.value))
+// yet" for a views-only folder with none, else the view, read from the view routes.
+const viewSource = useViewSource(() => httpViewSource(workspaceId, fetchFn))
 const rootView = useRootView({
   source: viewSource,
   store: items.store,
@@ -309,17 +309,22 @@ async function openFolder(id: string) {
 // Once the hub is read again, the watch below opens the folder.
 const retryHub = () => void loadHub()
 void loadHub()
-// Only today's folder screen lists the folder's items here; a root view reads its own data.
-let shown: { id: string; mode: string } | null = null
+// Only today's folder screen lists the folder's items here; a root view reads its own data. The
+// items are read while the view loads, so a folder with no stored view waits for no extra request.
+const openItems = folderItemsOpener(
+  (id) => void openFolder(id),
+  (id) => {
+    const f = folder.value
+    return f?.id === id && f.viewsOnly !== true && !rootView.knownStored(id)
+  },
+)
+watch(openFolderId, () => {
+  creating.value = false
+})
 watch(
-  [openFolderId, viewMode],
+  [openFolderId, viewMode, folder],
   ([id, mode]) => {
-    const before = shown
-    shown = { id, mode }
-    if (before?.id !== id) creating.value = false
-    if (mode === 'default' && (before?.id !== id || before.mode !== 'default')) {
-      void openFolder(id)
-    }
+    openItems(id, mode)
   },
   { immediate: true },
 )
