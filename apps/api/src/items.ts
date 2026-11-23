@@ -35,6 +35,14 @@ import type { Database } from './db/database.ts'
 import { inTransaction, isScoped } from './db/scope.ts'
 import { conflict, decodeCursor, encodeCursor, HttpError, notFound } from './http.ts'
 import { toAttribute, toItem } from './mappers.ts'
+import {
+  compileCondition,
+  hasClockOperand,
+  hasClockValue,
+  preconditionFailed,
+  resolveClockValues,
+  writeClock,
+} from './preconditions.ts'
 import { lockHubSchema } from './schema-lock.ts'
 
 type Db = Kysely<Database>
@@ -103,6 +111,28 @@ async function keyed<T>(write: Promise<T>): Promise<T> {
 export class KeyRace extends Error {
   constructor() {
     super('The external key changed hands during the upsert')
+  }
+}
+
+/**
+ * Runs of an upsert by key that lose a race on the key before it gives up with 409 `key_taken`.
+ * One rerun settles a race between two upserts; more means the key keeps changing hands, which
+ * only deliberate churn on one key would do.
+ */
+export const UPSERT_ATTEMPTS = 3
+
+/** Runs `attempt`, again on a `KeyRace`, up to `times` runs in all; then 409 `key_taken`. */
+export async function rerunOnKeyRace<T>(
+  attempt: () => Promise<T>,
+  times: number = UPSERT_ATTEMPTS,
+): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await attempt()
+    } catch (error) {
+      if (!(error instanceof KeyRace)) throw error
+      if (i >= times) throw new HttpError('key_taken', 'The externalKey kept changing hands; retry')
+    }
   }
 }
 
@@ -500,6 +530,8 @@ export async function createItem(
     values: Record<string, unknown>
     clientMutationId?: string | undefined
     cause?: ItemCause | undefined
+    /** The write's clock for `$now` values, when the caller has read it already (an upsert). */
+    now?: Date | undefined
   },
 ): Promise<Item> {
   return inTransaction(db, async (trx) => {
@@ -515,7 +547,10 @@ export async function createItem(
     // between this validation and the insert (schema-lock.ts).
     await lockHubSchema(trx, workspaceId, folder.hub_id, 'shared')
     const definitions = await folderDefinitions(trx, workspaceId, folder.id)
-    const values = stripNulls(validate(definitions, input.values, false))
+    // A new item has no row lock to wait for, so the clock is read here (D66).
+    const now = hasClockValue(input.values) ? (input.now ?? (await writeClock(trx))) : null
+    const clocked = now ? resolveClockValues(definitions, input.values, now) : input.values
+    const values = stripNulls(validate(definitions, clocked, false))
     const id = input.id ?? randomUUID()
     const relations = touchedRelations(definitions, values)
     const autoIds = definitions.map((d) => d.attribute).filter((a) => a.type === 'auto_id')
@@ -612,6 +647,8 @@ export interface ItemPatch {
   values: Record<string, unknown>
   /** Sets the key; `null` clears it; absent leaves it (D64). */
   externalKey?: string | null | undefined
+  /** A precondition on the item's current values (D66), checked after the version. */
+  condition?: Filter | undefined
   clientMutationId?: string | undefined
   cause?: ItemCause | undefined
 }
@@ -644,7 +681,15 @@ export async function patchItem(
     // Before reading the attributes: see createItem and schema-lock.ts.
     await lockHubSchema(trx, workspaceId, before.hubId, 'shared')
     const definitions = await folderDefinitions(trx, workspaceId, before.folderId)
-    const validated = validate(definitions, input.values, true)
+    // Checked before the row lock, so a bad request fails without waiting: `$now` with this
+    // provisional clock, which no value or comparison keeps. Read again after the lock.
+    const provisional = new Date()
+    let validated = validate(
+      definitions,
+      resolveClockValues(definitions, input.values, provisional),
+      true,
+    )
+    let condition = input.condition && compileCondition(definitions, input.condition, provisional)
     const relations = touchedRelations(definitions, validated)
 
     // NO KEY UPDATE, like the UPDATE below, so writers linking to this item are not blocked.
@@ -659,6 +704,19 @@ export async function patchItem(
     if (holdsKey !== undefined && current.external_key !== holdsKey) throw new KeyRace()
     if (input.version !== undefined && current.version !== input.version) {
       throw conflict(toItem(current))
+    }
+    // One clock reading after the row lock for every `$now` of the write (D66). `$now` touches
+    // date values only, so `relations` still holds.
+    if (hasClockValue(input.values) || (input.condition && hasClockOperand(input.condition))) {
+      const now = await writeClock(trx)
+      validated = validate(definitions, resolveClockValues(definitions, input.values, now), true)
+      if (input.condition) condition = compileCondition(definitions, input.condition, now)
+    }
+    if (
+      condition &&
+      !(await conditionHolds(trx, workspaceId, definitions, current.values, condition))
+    ) {
+      throw preconditionFailed(toItem(current))
     }
     if (Object.keys(validated).length === 0 && input.externalKey === undefined) {
       return toItem(current)
@@ -740,7 +798,7 @@ export async function upsertItem(
   actor: string,
   hubId: string,
   key: string,
-  input: Omit<ParsedUpsertItem, 'condition'>,
+  input: ParsedUpsertItem,
 ): Promise<{ item: Item; created: boolean }> {
   return inTransaction(db, async (trx) => {
     const folder = await trx
@@ -752,19 +810,32 @@ export async function upsertItem(
       .executeTakeFirst()
     if (!folder) throw notFound('Folder')
     const holder = await itemByKey(trx, workspaceId, hubId, key)
-    const { version, values, clientMutationId, cause } = input
+    const { version, values, condition, clientMutationId, cause } = input
     if (holder) {
       const item = await patchItem(
         trx,
         workspaceId,
         actor,
         holder.id,
-        { version, values, clientMutationId, cause },
+        { version, values, condition, clientMutationId, cause },
         key,
       )
       return { item, created: false }
     }
     if (version !== undefined) throw notFound('Item')
+    // No item holds the key: the condition is evaluated against an item with no values, in the
+    // folder it would be created in, so `is_empty` and the negative operators hold (#250).
+    const now =
+      hasClockValue(values) || (condition && hasClockOperand(condition))
+        ? await writeClock(trx)
+        : undefined
+    if (condition) {
+      const definitions = await folderDefinitions(trx, workspaceId, folder.id)
+      const compiled = compileCondition(definitions, condition, now ?? new Date())
+      if (!(await conditionHolds(trx, workspaceId, definitions, {}, compiled))) {
+        throw preconditionFailed(null)
+      }
+    }
     try {
       const item = await createItem(trx, workspaceId, actor, {
         folderId: folder.id,
@@ -772,6 +843,7 @@ export async function upsertItem(
         values,
         clientMutationId,
         cause,
+        now,
       })
       return { item, created: true }
     } catch (error) {
@@ -853,17 +925,31 @@ const cursorValue = (kind: KeyKind, value: string | number) =>
 /** `% _ \` are literal in the search text, not ILIKE wildcards. */
 const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`)
 
-function conditionSql(filter: CompiledFilter): RawBuilder<unknown> {
+/** An item's `item_index` rows, as `x`, for the item `i` of the outer query. */
+const ITEM_INDEX_ROWS = sql`item_index x WHERE x.workspace_id = i.workspace_id AND x.item_id = i.id`
+
+/**
+ * A filter as SQL over the index rows `rows` (`FROM ... WHERE ...`, aliased `x`): by default
+ * the stored item_index rows of item `i`. A precondition passes the projected values of one
+ * item instead, so both are evaluated by this one function.
+ */
+function conditionSql(
+  filter: CompiledFilter,
+  rows: RawBuilder<unknown> = ITEM_INDEX_ROWS,
+): RawBuilder<unknown> {
   if ('and' in filter || 'or' in filter) {
     const children = 'and' in filter ? filter.and : filter.or
     if (children.length === 0) return 'and' in filter ? sql`TRUE` : sql`FALSE`
-    return sql`(${sql.join(children.map(conditionSql), 'and' in filter ? sql` AND ` : sql` OR `)})`
+    return sql`(${sql.join(
+      children.map((child) => conditionSql(child, rows)),
+      'and' in filter ? sql` AND ` : sql` OR `,
+    )})`
   }
   const { attributeId, column, op, operands } = filter.condition
   const col = sql.ref(`x.${column}`)
   const one = operands[0] ?? ''
   const exists = (predicate: RawBuilder<unknown>) =>
-    sql`EXISTS (SELECT 1 FROM item_index x WHERE x.workspace_id = i.workspace_id AND x.attribute_id = ${attributeId} AND x.item_id = i.id AND ${predicate})`
+    sql`EXISTS (SELECT 1 FROM ${rows} AND x.attribute_id = ${attributeId} AND ${predicate})`
   const eq =
     column === 'txt'
       ? // Lets item_index_txt_idx narrow the rows before the full comparison.
@@ -900,6 +986,42 @@ function conditionSql(filter: CompiledFilter): RawBuilder<unknown> {
     case 'is_not_empty':
       return exists(sql`TRUE`)
   }
+}
+
+/**
+ * Whether a compiled precondition holds on `values` (D66): the values are projected as
+ * item_index rows would be, for every attribute of the folder, indexed or not, and the filter
+ * runs over them in SQL exactly as a query's does, with the database's comparisons, collation
+ * and `ILIKE`. One statement; no table is read.
+ */
+export async function conditionHolds(
+  trx: Trx,
+  workspaceId: string,
+  definitions: FolderAttributeDefinition[],
+  values: ItemValues,
+  condition: CompiledFilter,
+): Promise<boolean> {
+  const entries = definitions.flatMap(({ attribute }) =>
+    indexEntries({ ...attribute, indexed: true }, values[attribute.id] ?? null).map((entry) => ({
+      attributeId: attribute.id,
+      ...entry,
+    })),
+  )
+  const column = (name: 'num' | 'txt' | 'ts') =>
+    entries.map((e) => (e.column === name ? e.value : null))
+  const rows = sql`(
+    SELECT ${workspaceId}::text AS workspace_id, t.* FROM unnest(
+      ${entries.map((e) => e.attributeId)}::text[],
+      ${column('num')}::double precision[],
+      ${column('txt')}::text[],
+      ${column('ts')}::timestamptz[]
+    ) AS t(attribute_id, num, txt, ts)
+  ) x WHERE x.workspace_id = i.workspace_id`
+  const { rows: result } = await sql<{ holds: boolean }>`
+    SELECT ${conditionSql(condition, rows)} AS holds
+    FROM (SELECT ${workspaceId}::text AS workspace_id) i
+  `.execute(trx)
+  return result[0]?.holds === true
 }
 
 function sortKey(sort: CompiledSort): SortKey {
