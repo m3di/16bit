@@ -86,7 +86,7 @@ Stop the loop when the milestone's exit criteria are met, when everything left i
 1. Read the issue, its comments, and the docs it points to.
 2. Comment to claim it and state a short plan. Set `stage:in-progress`.
 3. Create a worktree and branch: `git worktree add .worktrees/<n> -b <role>/<n>-<slug> origin/main`. Work only there.
-4. Implement with tests. Run lint, typecheck, and tests locally.
+4. Implement with tests. Locally, run lint, typecheck and the tests your change touches; the full suite and Playwright run in CI (see "Keep local runs light" in `CLAUDE.md`).
 5. Push and open a pull request: what changed, how it was tested, `Closes #<n>`. Set `stage:in-review`.
 6. Comment on the issue with anything another role needs to know.
 7. Return a short report to the lead: pull request number, what was done, what is uncertain.
