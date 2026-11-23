@@ -10,7 +10,11 @@ import { sql, type Kysely } from 'kysely'
 //   `item_index_hub_fill` fills it from the item for a writer that leaves it null.
 // - The policies check `hub_id` against the caller's hubs, as `item`'s own policies do, instead
 //   of an `EXISTS (SELECT ... FROM item ...)` per row. The foreign key makes them exactly as
-//   strict: a row's `hub_id` is its item's. The subquery was a SubPlan, which made every
+//   strict: a row's `hub_id` is its item's.
+//   COUPLING: the old policy followed whatever `item_read` decided; this one repeats
+//   `item_read`'s predicate. When folder grants narrow `item_read` (D27, D54), `item_index_read`
+//   must change in the same migration, or a hidden folder's indexed values (text included) stay
+//   readable. db/item-index-hub.test.ts fails when the two predicates stop matching. The subquery was a SubPlan, which made every
 //   statement touching item_index under RLS non-parallel and hashed every readable item of the
 //   workspace per reference (#251).
 // - The RLS helpers the policies call are PARALLEL SAFE: they only read the caller's settings,
@@ -76,6 +80,11 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   for (const fn of HELPERS) {
     await sql.raw(`ALTER FUNCTION ${fn} PARALLEL SAFE`).execute(db)
   }
+  // The backfill rewrote every row and left `hub_id` without statistics; the parallel plans this
+  // is for depend on good estimates. VACUUM can't run in the migration's transaction and is
+  // left to autovacuum.
+  await sql`ANALYZE item_index`.execute(db)
+  await sql`ANALYZE item`.execute(db)
 }
 
 /** Back to 0008's policies, foreign keys and helpers; the column and its data go. */

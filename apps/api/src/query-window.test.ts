@@ -223,12 +223,10 @@ describe('aggregates on the 50,000-item folder (D80, #251)', () => {
       ],
     })
     expect(result.groups.length).toBeGreaterThan(1)
-    // Report-only until #299 (https://github.com/m3di/16bit/issues/299), which makes this query
-    // faster: it measures 1.5-2.2 s on hosted runners (PR #296). The budget is still 2 s (D80),
-    // and #299 must restore the hard assertion: expect(ms).toBeLessThan(2_000).
-    console.info(
-      `[measured] aggregate at the condition cap, 50,000 items: ${ms.toFixed(0)} ms (budget 2000 ms, not enforced until #299)`,
-    )
+    // Enforced again since #299 made the query faster (item_index's own hub_id policy and
+    // parallel-safe RLS helpers); it runs alone in CI's budgets step (#293).
+    console.info(`aggregate at the condition cap, 50,000 items: ${ms.toFixed(0)} ms`)
+    expect(ms).toBeLessThan(2_000)
   }, 60_000)
 
   it('counts every item once, and once per group of a single-valued attribute', async () => {

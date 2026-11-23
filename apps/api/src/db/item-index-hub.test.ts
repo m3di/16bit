@@ -200,6 +200,19 @@ describe('0017_item_index_hub on the latest schema', () => {
     ).toEqual([])
   })
 
+  it('reads item_index with exactly item_read’s predicate (change both together, D54)', async () => {
+    // item_index_read repeats item_read's predicate instead of following the item. When folder
+    // grants (D27, D54) narrow item_read, this fails until item_index_read is changed with it,
+    // or a hidden folder's indexed values would stay readable.
+    const { rows } = await sql<{ table: string; qual: string }>`
+      SELECT tablename AS table, qual FROM pg_policies
+      WHERE (tablename, policyname) IN (('item', 'item_read'), ('item_index', 'item_index_read'))
+    `.execute(db)
+    const qual = (table: string) => rows.find((r) => r.table === table)?.qual
+    expect(qual('item')).toBeDefined()
+    expect(qual('item_index')).toBe(qual('item'))
+  })
+
   it('lets Postgres plan item_index reads in parallel under row-level security', async () => {
     await sql`
       INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
