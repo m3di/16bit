@@ -13,6 +13,7 @@ import {
 } from './entities.ts'
 import { urlValueSchema } from './attribute-types/url.ts'
 import { decodeItemCursor, MAX_ITEM_CURSOR_LENGTH, type ItemCursorOrder } from './cursor.ts'
+import { externalKeySchema } from './external-key.ts'
 import { paletteColorSchema } from './palette.ts'
 import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
 import { agentHubRoleSchema, hubRoleSchema, workspaceRoleSchema } from './roles.ts'
@@ -353,29 +354,102 @@ export type ItemRead = z.infer<typeof itemReadSchema>
 /** Values as sent by a client, before they are checked against the folder's attributes. */
 export const itemValuesInputSchema = z.record(idSchema, z.unknown())
 
-/** `POST /v1/workspaces/:workspaceId/items`. `id` is optional; the server makes one if absent. */
+/**
+ * A precondition on a patch or upsert (D66): the query's `where` tree (D19), with its limits
+ * (`MAX_FILTER_CONDITIONS`, `MAX_FILTER_DEPTH`, `MAX_FILTER_IN_VALUES`) and each type's own
+ * operators and semantics, evaluated in the write's transaction, after the item's row lock,
+ * against that one item's current values. Unlike a query, any attribute shown on the item's
+ * folder may be named, indexed or not, since only one item is read. A date operand may be a
+ * server-clock value (`{ "$now": "-PT30M" }`). A condition naming an unknown attribute, an
+ * operator its type lacks, or an invalid operand is a 400 `invalid_request` listing every problem,
+ * as for a query.
+ *
+ * If it does not hold, nothing is written and the answer is 412 `precondition_failed` with the
+ * item as it is now, distinct from a stale `version` (409 `conflict`). The version is checked
+ * first. A failed condition records nothing under its `clientMutationId`, so a retry is
+ * evaluated again.
+ */
+export const itemConditionSchema = boundedFilterSchema
+
+/**
+ * `POST /v1/workspaces/:workspaceId/items`. `id` is optional; the server makes one if absent.
+ * `externalKey` (D64) is optional; one another item of the hub holds is 409 `key_taken`.
+ */
 export const createItemSchema = z.strictObject({
   id: idSchema.optional(),
   folderId: idSchema,
+  externalKey: externalKeySchema.optional(),
   values: itemValuesInputSchema.default({}),
   clientMutationId: clientMutationIdSchema.optional(),
   cause: itemCauseSchema.optional(),
 })
 export type CreateItem = z.input<typeof createItemSchema>
 
-/**
- * `PATCH /v1/workspaces/:workspaceId/items/:itemId`. `version` is the version the client
- * last saw (D8). `values` is merged into the item; `null` clears a value.
- */
-export const patchItemSchema = z.strictObject({
+/** The fields of a patch, for the route and the batch operation alike. */
+export const patchItemFields = {
   version: z.int().min(1),
   clientMutationId: clientMutationIdSchema.optional(),
   cause: itemCauseSchema.optional(),
-  values: itemValuesInputSchema.refine((v) => Object.keys(v).length > 0, {
-    message: 'At least one value is required',
-  }),
-})
+  externalKey: externalKeySchema.nullable().optional(),
+  condition: itemConditionSchema.optional(),
+  values: itemValuesInputSchema.default({}),
+}
+
+/** Refines a patch shape: it changes at least one value or the key. */
+export function requireAChange<
+  T extends z.ZodType<{ values: Record<string, unknown>; externalKey?: string | null | undefined }>,
+>(schema: T) {
+  return schema.refine((p) => Object.keys(p.values).length > 0 || p.externalKey !== undefined, {
+    path: ['values'],
+    message: 'At least one value or externalKey is required',
+  })
+}
+
+/**
+ * `PATCH /v1/workspaces/:workspaceId/items/:itemId`. `version` is the version the client
+ * last saw (D8). `values` is merged into the item; `null` clears a value. `externalKey` sets
+ * the item's key (D64), `null` clears it, absent leaves it. A patch changes at least one value
+ * or the key. `condition` is a precondition on the item's current values (D66).
+ */
+export const patchItemSchema = requireAChange(z.strictObject(patchItemFields))
 export type PatchItem = z.infer<typeof patchItemSchema>
+
+/**
+ * `PUT /v1/workspaces/:workspaceId/hubs/:hubId/items/by-key/:key`, the key URL-encoded
+ * (D64). `GET` on the same path reads the item, taking `getItemQuerySchema` and answering
+ * `itemReadSchema` as `GET /items/:itemId` does; a key no item of the hub holds, and a hub the
+ * caller cannot read, are 404.
+ *
+ * - `folderId` must be a folder of the hub, whether the upsert creates or patches, so a wrong
+ *   one fails at once rather than only once the item is gone: 404 `not_found`, as for a missing
+ *   folder.
+ * - No item holds the key: creates one in `folderId` with the key, and answers 201. With a
+ *   `version` it creates nothing and answers 404: a version names an item the client has seen.
+ * - An item holds the key: patches it where it is and answers 200. Items never move, so
+ *   `folderId` is used only on create, and an item in another folder of the hub is patched in
+ *   its own folder (decided by the maintainer, #199). With `version`, a stale one is 409
+ *   `conflict`; without, it is last write wins on the values sent. Empty `values` write nothing
+ *   and answer 200 with the item as it is; there is no revision, so the `clientMutationId` is
+ *   not recorded and a retry is answered afresh, which is harmless for a no-op.
+ * - `condition` (D66) is evaluated against the item that holds the key, or, when none does,
+ *   against an item with no values, so `is_empty` and the negative operators hold and the rest
+ *   fail. A failed one is 412 `precondition_failed`, with `current: null` when no item holds
+ *   the key.
+ * - `clientMutationId` (D59) and `cause` (D63) as for create and patch. A retry answers as the
+ *   first attempt did, 201 or 200, with the item as it is now.
+ *
+ * Both answers are `itemWriteResultSchema`.
+ */
+export const upsertItemSchema = z.strictObject({
+  folderId: idSchema,
+  values: itemValuesInputSchema.default({}),
+  version: z.int().min(1).optional(),
+  condition: itemConditionSchema.optional(),
+  clientMutationId: clientMutationIdSchema.optional(),
+  cause: itemCauseSchema.optional(),
+})
+export type UpsertItem = z.input<typeof upsertItemSchema>
+export type ParsedUpsertItem = z.output<typeof upsertItemSchema>
 
 /** Query string of `DELETE /v1/workspaces/:workspaceId/items/:itemId`. */
 export const deleteItemQuerySchema = z.strictObject({
@@ -406,10 +480,21 @@ export type RevisionOp = (typeof REVISION_OPS)[number]
 /**
  * What a revision changed, as stored. `update` holds only the keys it changed, `null` for a
  * cleared value. Values are as written then: an attribute or option removed since may appear.
+ * `externalKey` (D64) is there only when the write set it (`null`: cleared); an update that
+ * changed only the key has empty `values`. Server-clock values are stored resolved (D66).
  */
 export const revisionPatchSchema = z.discriminatedUnion('op', [
-  z.strictObject({ op: z.literal('create'), folderId: idSchema, values: itemValuesSchema }),
-  z.strictObject({ op: z.literal('update'), values: itemValuesSchema }),
+  z.strictObject({
+    op: z.literal('create'),
+    folderId: idSchema,
+    externalKey: externalKeySchema.optional(),
+    values: itemValuesSchema,
+  }),
+  z.strictObject({
+    op: z.literal('update'),
+    externalKey: externalKeySchema.nullable().optional(),
+    values: itemValuesSchema,
+  }),
   z.strictObject({ op: z.literal('delete') }),
 ])
 export type RevisionPatch = z.infer<typeof revisionPatchSchema>
@@ -492,6 +577,17 @@ export const API_ERROR_CODES = [
   /** `POST /items` with an `id` that is already used in the workspace. */
   'id_taken',
   /**
+   * An item write setting an `externalKey` another item of the same hub holds (409, D64). The
+   * caller can write the hub, so it may read that item with `GET .../items/by-key/:key`.
+   */
+  'key_taken',
+  /**
+   * A patch or upsert whose `condition` does not hold on the item as it is (412, D66). Nothing
+   * was written. Adds `current`: the item, or `null` for an upsert no item's key matched. A
+   * stale `version` is a 409 `conflict` instead.
+   */
+  'precondition_failed',
+  /**
    * An item write whose `clientMutationId` the caller already used for another item or
    * another operation (422, D59).
    */
@@ -537,3 +633,10 @@ export const conflictErrorSchema = z.strictObject({
   current: itemSchema,
 })
 export type ConflictError = z.infer<typeof conflictErrorSchema>
+
+export const preconditionFailedErrorSchema = z.strictObject({
+  error: z.literal('precondition_failed'),
+  message: z.string(),
+  current: itemSchema.nullable(),
+})
+export type PreconditionFailedError = z.infer<typeof preconditionFailedErrorSchema>

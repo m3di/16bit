@@ -456,6 +456,17 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // With a `clientMutationId`, a retry answers as the first attempt did and writes
           // nothing (D59, mutations.ts). A write's `seq` is read in its own transaction, which
           // still holds the workspace row: it is the write's own revision.
+          // The contracts have `externalKey` (D64) and `condition` (D66) from #199; the routes
+          // serve them from #200 and #203. Until then they are refused, never ignored: a
+          // write that skipped its condition would be silently unsafe.
+          const refuseUnserved = (body: { externalKey?: unknown; condition?: unknown }) => {
+            for (const field of ['externalKey', 'condition'] as const) {
+              if (body[field] !== undefined) {
+                throw new HttpError('invalid_request', `${field}: not supported yet`)
+              }
+            }
+          }
+
           const run =
             (request: FastifyRequest) =>
             <R>(fn: (trx: Transaction<Database>) => Promise<R>) =>
@@ -464,6 +475,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/items', async (request, reply) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createItemSchema, request.body)
+            refuseUnserved(body)
             const actor = request.principal.id
             const item = await idempotentWrite(
               run(request),
@@ -528,6 +540,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
+            refuseUnserved(body)
             const actor = request.principal.id
             return idempotentWrite(
               run(request),
