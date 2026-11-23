@@ -74,7 +74,7 @@ export function parseRawView(body: unknown): RawView {
 
 /**
  * No folder has a stored view: every folder answers its default (D76) at once, with no request.
- * Used until the view routes exist; then `httpViewSource` replaces it.
+ * For tests; the hub page reads `httpViewSource`.
  */
 export function defaultViewSource(description: () => HubDescription | null): ViewSource {
   return {

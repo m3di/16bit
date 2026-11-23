@@ -813,7 +813,7 @@ const principalRow = ({ id, kind, name, workspace_role }: Person) => ({
  * the API, and returns the secret. Null when the principal already has a key, revoked or not,
  * or holds a grant some other way, or is gone: a key is never replaced behind anyone's back.
  */
-async function seedAgentKey(
+export async function seedAgentKey(
   trx: Transaction<Database>,
   workspaceId: string,
   key: { principalId: string; hubId: string; hubRole: AgentHubRole },
