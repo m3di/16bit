@@ -14,11 +14,10 @@ import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { sessionCookie } from './db/test-session.ts'
-import { applyLargeSeed, LARGE_ATTR, LARGE_FOLDER, LARGE_WORKSPACE } from './large-seed.ts'
 
 // The aggregate engine (D80, #255) and `$me`/`$now` in reads (D79, D81), against a real Postgres
-// under row-level security. The 50,000-item budget is in query-window.test.ts, which shares the
-// seed.
+// under row-level security. The timing budgets are in aggregate-budget.test.ts (2,000 items) and
+// query-window.test.ts (50,000 items), which CI runs alone (#293).
 
 const WS = 'w1'
 const PEOPLE = ['own', 'ed', 'vw', 'none'] as const
@@ -590,7 +589,7 @@ describe('$me and $now in reads (D79, D81)', () => {
   })
 })
 
-describe('aggregate timeout and budget', () => {
+describe('aggregate timeout', () => {
   it('answers 503 timeout past its statement timeout', async () => {
     await seed()
     await start({ aggregateTimeoutMs: 1 })
@@ -614,49 +613,4 @@ describe('aggregate timeout and budget', () => {
     expect(res.statusCode, res.body).toBe(503)
     expect(res.json()).toMatchObject({ error: 'timeout' })
   }, 30_000)
-
-  it('answers a group and 5 measures on a 2,000-item hub in under 200 ms (D80)', async () => {
-    await applyLargeSeed(db, { items: 2_000 })
-    await sql`
-      INSERT INTO principal (workspace_id, id, kind, name, workspace_role)
-        VALUES (${sql.lit(LARGE_WORKSPACE.id)}, 'agg-editor', 'user', 'Editor', 'member');
-      INSERT INTO hub_grant (workspace_id, hub_id, principal_id, hub_role)
-        VALUES (${sql.lit(LARGE_WORKSPACE.id)}, 'large', 'agg-editor', 'editor');
-      ANALYZE;
-    `.execute(db)
-    await app.close()
-    app = buildApp({ db: appDb })
-    const headers = { cookie: (await sessionCookie(db, 'agg-editor')).cookie }
-    const body = {
-      from: LARGE_FOLDER.id,
-      groupBy: { attribute: LARGE_ATTR.stage },
-      measures: [
-        { fn: 'count' },
-        { fn: 'sum', attribute: LARGE_ATTR.effort },
-        { fn: 'count', where: { attribute: LARGE_ATTR.tags, op: 'in', value: ['api'] } },
-        {
-          fn: 'avg',
-          attribute: LARGE_ATTR.effort,
-          where: { attribute: LARGE_ATTR.due, op: 'lt', value: { $now: 'P0D' } },
-        },
-        { fn: 'count_empty', attribute: LARGE_ATTR.due },
-      ],
-    }
-    const run = async () => {
-      const started = performance.now()
-      const res = await app.inject({
-        method: 'POST',
-        url: `/v1/workspaces/${LARGE_WORKSPACE.id}/aggregate`,
-        headers,
-        payload: body,
-      })
-      const ms = performance.now() - started
-      expect(res.statusCode, res.body).toBe(200)
-      return ms
-    }
-    await run()
-    const ms = Math.min(await run(), await run(), await run())
-    console.info(`aggregate, 2,000 items: ${ms.toFixed(0)} ms`)
-    expect(ms).toBeLessThan(200)
-  }, 60_000)
 })
