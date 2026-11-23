@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useId } from 'vue'
 import { countLabel, moreText, type BoardCardData } from './blocks.ts'
+import BaseButton from './BaseButton.vue'
 import BoardCard from './BoardCard.vue'
 import { paletteVar, type PaletteColor } from './palette.ts'
 
@@ -60,22 +61,23 @@ const headingId = useId()
       </li>
     </ul>
     <p
-      v-else
+      v-else-if="count === 0"
       class="m-0 rounded-card border border-dashed border-line2 p-3 text-ink3"
       data-column-empty
     >
       {{ emptyText }}
     </p>
-    <p v-if="count > cards.length && cards.length > 0" class="m-0 text-secondary text-ink3">
+    <p v-if="count > cards.length" class="m-0 text-secondary text-ink3">
       {{ moreText(count - cards.length) }}
     </p>
-    <button
+    <BaseButton
       v-if="creatable"
-      type="button"
-      class="inline-flex min-h-7 cursor-pointer items-center self-start rounded-control px-2 text-ink3 hover:bg-selected hover:text-ink"
+      variant="quiet"
+      size="sm"
+      class="-ml-3 self-start"
       @click="emit('create')"
     >
       New item<span class="sr-only"> in {{ label }}</span>
-    </button>
+    </BaseButton>
   </div>
 </template>

@@ -13,6 +13,7 @@ import {
   type ListGroup,
   type ListRow,
 } from './blocks.ts'
+import BaseButton from './BaseButton.vue'
 import BlockStatus from './BlockStatus.vue'
 import FieldText from './FieldText.vue'
 import { paletteVar } from './palette.ts'
@@ -113,7 +114,11 @@ const rowClass = computed(() => [
         :aria-labelledby="group.label ? `${baseId}-${group.id}` : undefined"
         :aria-label="!group.label && label ? label : undefined"
       >
-        <li v-for="row in group.rows" :key="row.id">
+        <li
+          v-for="row in group.rows"
+          :key="row.id"
+          :class="variant === 'summary' && 'last:[&>*]:border-b-0'"
+        >
           <component
             :is="row.to ? RouterLink : 'button'"
             :to="row.to"
@@ -139,8 +144,10 @@ const rowClass = computed(() => [
                 :class="['flex shrink-0', cell.field.align === 'end' && 'justify-end']"
                 :style="{ width: `${String(cell.width)}px` }"
               >
-                <span class="sr-only">{{ `${cell.field.label} ` }}</span>
-                <FieldText v-if="cell.value" :value="cell.value" />
+                <template v-if="cell.value">
+                  <span class="sr-only">{{ `${cell.field.label} ` }}</span>
+                  <FieldText :value="cell.value" />
+                </template>
               </span>
               <span class="min-w-0 flex-[1_1_220px]">{{ row.title }}</span>
               <span
@@ -149,12 +156,13 @@ const rowClass = computed(() => [
                 :class="['flex shrink-0', cell.field.align === 'end' && 'justify-end']"
                 :style="{ width: `${String(cell.width)}px` }"
               >
-                <span class="sr-only">{{ `, ${cell.field.label} ` }}</span>
-                <FieldText
-                  v-if="cell.value"
-                  :value="cell.value"
-                  :tone="cell.field.align === 'end' ? 'ink' : 'ink2'"
-                />
+                <template v-if="cell.value">
+                  <span class="sr-only">{{ `, ${cell.field.label} ` }}</span>
+                  <FieldText
+                    :value="cell.value"
+                    :tone="cell.field.align === 'end' ? 'ink' : 'ink2'"
+                  />
+                </template>
               </span>
             </template>
           </component>
@@ -171,13 +179,9 @@ const rowClass = computed(() => [
         {{ moreText(group.more) }}
       </p>
       <div v-if="creatable" class="py-1">
-        <button
-          type="button"
-          class="-ml-2 inline-flex min-h-7 cursor-pointer items-center rounded-control px-2 text-ink3 hover:bg-selected hover:text-ink"
-          @click="emit('create', group.id)"
-        >
+        <BaseButton variant="quiet" size="sm" class="-ml-3" @click="emit('create', group.id)">
           New item<span v-if="group.label" class="sr-only"> in {{ group.label }}</span>
-        </button>
+        </BaseButton>
       </div>
     </div>
   </div>

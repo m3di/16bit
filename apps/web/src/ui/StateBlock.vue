@@ -48,9 +48,11 @@ const glyphs: Record<Exclude<BlockState, 'loading'>, string> = {
 </script>
 
 <template>
+  <!-- Compact blocks share a page with up to 20 others (D77): they are busy but not live regions,
+    and their errors are not alerts. The renderer announces one page-level message instead. -->
   <div
     v-if="state === 'loading'"
-    role="status"
+    :role="compact ? undefined : 'status'"
     aria-busy="true"
     :class="['flex flex-col', compact ? 'gap-2.5 py-1' : 'gap-3 py-2']"
   >
@@ -65,7 +67,6 @@ const glyphs: Record<Exclude<BlockState, 'loading'>, string> = {
   </div>
   <div
     v-else-if="compact"
-    :role="state === 'error' ? 'alert' : undefined"
     class="flex flex-wrap items-start gap-x-2.5 gap-y-2 py-2"
     :data-state="state"
   >

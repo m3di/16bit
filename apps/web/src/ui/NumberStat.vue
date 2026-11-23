@@ -38,7 +38,6 @@ const {
     </span>
     <span
       v-else
-      :role="state === 'error' ? 'alert' : undefined"
       :class="[
         'flex h-[38px] items-center gap-1.5 text-secondary',
         state === 'error' ? 'text-danger' : 'text-ink3',

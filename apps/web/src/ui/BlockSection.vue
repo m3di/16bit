@@ -16,12 +16,12 @@ const headingId = useId()
 <template>
   <section
     :aria-labelledby="title ? headingId : undefined"
-    class="flex min-w-0 flex-col gap-2.5"
+    class="flex min-w-0 flex-col gap-1.5"
     data-block="section"
   >
     <div
       v-if="title || caption || $slots.actions"
-      class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1"
+      class="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1"
     >
       <h2 v-if="title" :id="headingId" class="m-0 text-body font-medium text-ink">{{ title }}</h2>
       <span class="ml-auto flex flex-wrap items-center gap-3">

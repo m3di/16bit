@@ -187,7 +187,8 @@ export const BLOCK_STATE_TEXT: Record<BlockState, { title: string; message: stri
   },
   invalid: {
     title: 'This block needs fixing',
-    message: 'It uses an attribute or folder that was removed or is no longer indexed.',
+    message:
+      'It uses an attribute or folder that was removed or is no longer indexed. A hub admin can fix it.',
   },
   unresolved: {
     title: 'Nothing to show yet',

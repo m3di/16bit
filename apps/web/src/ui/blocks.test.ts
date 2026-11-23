@@ -129,19 +129,48 @@ describe('block components', () => {
     },
   )
 
-  it('invalid and unresolved are not alerts; error is', async () => {
+  it('invalid and unresolved are never alerts; error is one only at full size', async () => {
     expect(await render(StateBlock, { state: 'invalid', compact: true })).not.toContain(
       'role="alert"',
     )
     expect(await render(StateBlock, { state: 'unresolved' })).not.toContain('role="alert"')
-    expect(await render(StateBlock, { state: 'error', compact: true })).toContain('role="alert"')
+    expect(await render(StateBlock, { state: 'error' })).toContain('role="alert"')
+    // Up to 20 blocks share a page (D77): the renderer announces one page-level message.
+    expect(await render(StateBlock, { state: 'error', compact: true })).not.toContain('role=')
+    expect(await render(NumberStat, { label: 'x', state: 'error' })).not.toContain('role=')
+  })
+
+  it('compact loading is busy but not a live region; full size is a status', async () => {
+    const compact = await render(StateBlock, { state: 'loading', compact: true })
+    expect(compact).toContain('aria-busy="true"')
+    expect(compact).toContain('<span class="sr-only">Loading</span>')
+    expect(compact).not.toContain('role=')
+    expect(await render(StateBlock, { state: 'loading' })).toContain('role="status"')
+    for (const [c, props] of [
+      [GroupedList, { groups: [], fields: [] }],
+      [BarRows, { rows: [] }],
+      [BoardView, { columns: [] }],
+      [FieldsInline, { fields: [] }],
+    ] as const) {
+      expect(await render(c, { ...props, state: 'loading' })).not.toContain('role=')
+    }
   })
 
   it('PageHeader is the page h1 with the live dot as a status', async () => {
     const html = await render(PageHeader, { title: 'Parcel Tracker v2', live: 'online' })
     expect(html).toMatch(/<h1[^>]*>\s*Parcel Tracker v2\s*<\/h1>/)
-    expect(html).toMatch(/role="status"[^>]*data-live[\s\S]*Live/)
-    expect(await render(PageHeader, { title: 'x', live: 'offline' })).toContain('Offline')
+    // Live is shown, not announced: the status region is empty while online or connecting.
+    const region = (h: string) =>
+      /<span role="status"[^>]*data-live-region>([\s\S]*?)<\/span>/.exec(h)?.[1]
+    expect(html).toContain('Live')
+    expect(region(html)).toBe('<!---->')
+    expect(region(await render(PageHeader, { title: 'x', live: 'connecting' }))).toBe('<!---->')
+    const offline = await render(PageHeader, { title: 'x', live: 'offline' })
+    expect(offline).toContain('Offline')
+    expect(offline).toMatch(/data-live-region><span class="sr-only">Live updates are paused/)
+    expect(await render(PageHeader, { title: 'x', live: 'stopped' })).toMatch(
+      /data-live-region><span[^>]*>Live updates stopped/,
+    )
     expect(await render(PageHeader, { title: 'x' })).not.toContain('data-live')
     const loading = await render(PageHeader, { title: '', loading: true })
     expect(loading).not.toContain('<h1')
@@ -315,6 +344,26 @@ describe('block components', () => {
     expect(html).toMatch(/border-dashed[^>]*>\s*Nothing of yours is in review\./)
     expect(html).toContain(', 0 items')
     expect(html).toContain('var(--pal-blue)')
+  })
+
+  it('BoardColumn with a count but no cards says how many, not its empty text', async () => {
+    const html = await render(BoardColumn, {
+      label: 'In QA',
+      count: 3,
+      cards: [],
+      emptyText: 'None',
+    })
+    expect(html).toContain('+3 more')
+    expect(html).not.toContain('data-column-empty')
+  })
+
+  it('GroupedList reads no field name for a field with no value', async () => {
+    const groups: ListGroup[] = [
+      { id: 'g', label: '', rows: [{ id: 'r', title: 'T', values: { id: { text: 'PT-1' } } }] },
+    ]
+    const html = await render(GroupedList, { groups, fields: backlogFields })
+    expect(html).toContain('ID ')
+    expect(html).not.toContain(', Epic')
   })
 
   it('BoardColumn says how many cards are not shown', async () => {

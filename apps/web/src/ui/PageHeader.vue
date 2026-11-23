@@ -35,20 +35,21 @@ const {
       <p v-if="description && !loading" class="m-0 text-ink2">{{ description }}</p>
       <slot />
     </div>
-    <!-- Always in the page, so a change is announced; empty while there is nothing to say. -->
-    <span v-if="live !== null" role="status" class="inline-flex" data-live>
+    <!-- The dot and its label are shown, not announced: a load would otherwise read out
+      "Connecting", then "Live". Only losing the connection is announced, as ConnectionStatus does
+      on other pages; the region stays in the page, empty while online. -->
+    <span v-if="live !== null" class="inline-flex flex-wrap items-center" data-live>
       <StatusDot v-if="live === 'online'" tone="success" label="Live" />
       <StatusDot v-else-if="live === 'connecting'" label="Connecting" />
-      <template v-else-if="live === 'offline'">
-        <StatusDot tone="warning" label="Offline" />
-        <span class="sr-only">Live updates are paused while the connection comes back.</span>
-      </template>
-      <template v-else-if="live === 'stopped'">
-        <StatusDot tone="warning" label="Offline" />
-        <span class="ml-1.5 text-secondary text-ink3"
+      <StatusDot v-else tone="warning" label="Offline" />
+      <span role="status" class="inline-flex" data-live-region>
+        <span v-if="live === 'offline'" class="sr-only"
+          >Live updates are paused while the connection comes back.</span
+        >
+        <span v-else-if="live === 'stopped'" class="ml-1.5 text-secondary text-ink3"
           >Live updates stopped. Reload the page to see changes.</span
         >
-      </template>
+      </span>
     </span>
   </header>
 </template>
