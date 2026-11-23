@@ -445,6 +445,42 @@ describe('GET /items/:itemId/revisions', () => {
     expect(versions).toEqual([[5, 4], [3, 2], [1]])
   })
 
+  it('marks a stored patch that no longer parses unreadable and serves the rest (#222)', async () => {
+    let item: Item = await create('ed', 'h1', 'v1')
+    for (let v = 2; v <= 4; v++) item = await patch('ed', item, `v${String(v)}`)
+    // As an older version might have left them: no op at all (the first version falls back to
+    // create), an unknown op (later versions fall back to update), and a known op with an unknown
+    // key (its own op stays).
+    const corrupt = (version: number, value: string) =>
+      db
+        .updateTable('revision')
+        .set({ patch: value })
+        .where('workspace_id', '=', WS)
+        .where('item_id', '=', item.id)
+        .where('version', '=', version)
+        .execute()
+    await corrupt(1, '"just text"')
+    await corrupt(2, JSON.stringify({ op: 'move', to: 'elsewhere' }))
+    await corrupt(3, JSON.stringify({ op: 'delete', legacy: 1 }))
+
+    const page = await history('ed', item.id)
+    expect(page.items.map((r) => [r.version, r.op, r.patch === null])).toEqual([
+      [4, 'update', false],
+      [3, 'delete', true],
+      [2, 'update', true],
+      [1, 'create', true],
+    ])
+    for (const r of page.items.slice(1)) {
+      expect(r).toMatchObject({ patch: null, unreadable: true, actor: 'ed' })
+    }
+    expect(page.items[0]).not.toHaveProperty('unreadable')
+    // Paging past an unreadable entry still works.
+    const first = await history('ed', item.id, '?limit=2')
+    expect(first.items.map((r) => r.version)).toEqual([4, 3])
+    const rest = await history('ed', item.id, `?limit=2&cursor=${first.nextCursor ?? ''}`)
+    expect(rest.items.map((r) => r.version)).toEqual([2, 1])
+  })
+
   it('answers 404 exactly where GET of the item does', async () => {
     const hidden = await create('ed', 'h2', 'h2')
     const gone = await create('ed', 'h1', 'gone')
