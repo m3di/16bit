@@ -57,7 +57,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      # Excludes the API's timing budgets, which next to the rest of the suite measure the
+      # runner's load instead of the query (#293).
       - run: pnpm test
+      # Then only the budgets, one file at a time with nothing else running. Same job, so a
+      # failure here fails the required check like any other test. The limits are unchanged.
+      - name: API timing budgets
+        run: pnpm test:budgets
       - run: pnpm build
 
   e2e:
