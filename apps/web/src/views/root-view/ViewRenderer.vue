@@ -19,6 +19,7 @@ const {
   blocks,
   problem = null,
   nameOf,
+  unsaved = null,
 } = defineProps<{
   /** `null`: the tree could not be read at all. */
   page: Extract<RenderNode, { kind: 'block' }> | null
@@ -27,10 +28,16 @@ const {
   blocks: Readonly<Record<string, BlockLoad>>
   problem?: DataProblem
   nameOf: (block: Block) => string
+  /** The composer's preview: data blocks that show their data only once saved. */
+  unsaved?: ReadonlySet<string> | null
 }>()
 const emit = defineEmits<{ retry: [] }>()
 
-provideRootView({ load: (id) => blocks[id], nameOf: (block) => nameOf(block) })
+provideRootView({
+  load: (id) => blocks[id],
+  nameOf: (block) => nameOf(block),
+  unsaved: (id) => unsaved?.has(id) === true,
+})
 
 const title = computed(() =>
   page?.block.type === 'page' ? (page.block.config.title ?? folderName) : folderName,

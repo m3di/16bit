@@ -226,6 +226,20 @@ describe('FolderDialog', () => {
     expect(html).toContain('New folder')
     expect(html).toMatch(/<option value="sprints" selected/)
     expect(html).toContain('Create folder')
+    // Views only is chosen when a folder is created and never after (D76).
+    expect(html).toContain('data-folder-views-only')
+    expect(html).toContain('This cannot be changed later.')
+  })
+
+  it('does not offer views only on an existing folder', async () => {
+    const model = await storeWith(() => json(description()))
+    const html = await renderIn(FolderDialog, {
+      open: true,
+      description: description(),
+      folderId: 'sprints',
+      model,
+    })
+    expect(html).not.toContain('data-folder-views-only')
   })
 })
 
@@ -385,11 +399,39 @@ describe('HubSettingsPage, nav', () => {
       'Access',
       'Folders',
       'Attributes',
+      'Root views',
       'Agent keys',
       'Danger zone',
     ])
     expect(html).toMatch(/aria-current="page"[^>]*>General</)
     expect(html).toMatch(/class="[^"]*text-danger[^"]*"[^>]*>Danger zone</)
+  })
+})
+
+describe('HubSettingsPage, root views', () => {
+  it('a viewer and an editor see no composer, only why', async () => {
+    for (const [role, ws] of [
+      ['viewer', 'viewer'],
+      ['editor', 'member'],
+    ] as const) {
+      const html = await renderPage({
+        section: 'views',
+        role,
+        me: { state: 'ready', data: meAs(ws) },
+      })
+      expect(html, role).toContain('data-root-views-section')
+      expect(html, role).toContain('data-state="no-permission"')
+      expect(html, role).toContain('Only hub admins can compose root views')
+      expect(html, role).not.toContain('data-composer-outline')
+      expect(html, role).not.toContain('data-composer-save')
+    }
+  })
+
+  it('a hub admin gets the composer, loading the folder’s view first', async () => {
+    const html = await renderPage({ section: 'views' })
+    expect(html).toContain('data-root-views-section')
+    expect(html).toContain('data-state="loading"')
+    expect(html).not.toContain('Only hub admins can compose root views')
   })
 })
 
@@ -411,6 +453,10 @@ describe('HubSettingsPage, general', () => {
     expect(html).toMatch(/<dt[^>]*>ID prefix<\/dt><dd class="[^"]*font-mono[^"]*">BLD<\/dd>/)
     expect(html).toContain('Items are numbered BLD-1, BLD-2 and on.')
     expect(html).not.toMatch(/<input[^>]*value="BLD"/)
+    // Opens on (D76): the hub root or any folder; the root while none is set.
+    expect(html).toContain('data-opens-on')
+    expect(html).toMatch(/<option value="bld" selected[^>]*>Build \(hub root\)</)
+    expect(html).toMatch(/<option value="sprint-1"[^>]*>– – Sprint 1</)
   })
 
   it('anyone else sees the values read-only, with the reason', async () => {
@@ -430,6 +476,8 @@ describe('HubSettingsPage, general', () => {
       expect(html, role).toContain('Title')
       expect(html, role).toContain('Teal')
       expect(html, role).toContain('data-hub-prefix')
+      expect(html, role).toContain('data-opens-on-read-only')
+      expect(html, role).not.toMatch(/<select[^>]*data-opens-on/)
     }
   })
 })

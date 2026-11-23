@@ -60,6 +60,14 @@ const headingId = useId()
     :data-view-block="node.kind === 'block' ? node.block.id : node.id"
     data-block-broken
   />
+  <BlockStatus
+    v-else-if="category === 'data' && context.unsaved?.(block.id)"
+    state="empty"
+    title="Its data shows once the view is saved"
+    message="The preview reads data for saved blocks only."
+    :data-view-block="block.id"
+    data-block-unsaved
+  />
   <section
     v-else-if="wrapped"
     :aria-labelledby="headingId"

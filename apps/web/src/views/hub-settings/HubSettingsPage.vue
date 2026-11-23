@@ -17,6 +17,8 @@ import DangerSection from './DangerSection.vue'
 import FoldersSection from './FoldersSection.vue'
 import GeneralSection from './GeneralSection.vue'
 import KeysSection from './KeysSection.vue'
+import RootViewsSection from './RootViewsSection.vue'
+import { httpViewSource, type ViewSource, type ViewWrites } from '../root-view/source.ts'
 import {
   canManageSchema,
   READ_ONLY_REASON,
@@ -27,7 +29,15 @@ import {
 import type { HubAccess } from './useHubAccess.ts'
 import type { HubSettings } from './useHubSettings.ts'
 
-const { workspaceId, hubId, section, model, access, me } = defineProps<{
+const {
+  workspaceId,
+  hubId,
+  section,
+  model,
+  access,
+  me,
+  views = null,
+} = defineProps<{
   workspaceId: string
   hubId: string
   section: HubSettingsSection
@@ -36,7 +46,17 @@ const { workspaceId, hubId, section, model, access, me } = defineProps<{
   access: HubAccess
   /** The session, for the reader's workspace role. */
   me: Load<Me | null>
+  /** The view routes, for root views. The API's by default. */
+  views?: (ViewSource & ViewWrites) | null
 }>()
+
+const viewApi = computed(() => views ?? httpViewSource(workspaceId, (...args) => fetch(...args)))
+const principalId = computed(() => {
+  const m = me.state === 'ready' ? me.data : null
+  return m?.kind === 'person'
+    ? (m.memberships.find((x) => x.workspace.id === workspaceId)?.principalId ?? null)
+    : null
+})
 
 const hub = computed(() => model.hub.value)
 const description = computed(() => (hub.value.state === 'ready' ? hub.value.data : null))
@@ -184,7 +204,17 @@ async function onStatus(text: string, focus: boolean) {
         v-if="section === 'general'"
         :description="description"
         :manages="editsGeneral"
+        :manages-schema="manages"
         :model="model"
+      />
+      <RootViewsSection
+        v-else-if="section === 'views'"
+        :description="description"
+        :manages="manages"
+        :access="access"
+        :api="viewApi"
+        :me="principalId"
+        @status="onStatus"
       />
       <AccessSection
         v-else-if="section === 'access'"

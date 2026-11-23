@@ -227,6 +227,16 @@ const rootView = useRootView({
   },
 })
 const viewMode = rootView.mode
+// "Compose" on "No view yet" for hub admins only (D78): the composer on this folder.
+const composeTo = computed(() =>
+  managesSchema.value
+    ? {
+        name: 'hub-settings-views',
+        params: { workspaceId, hubId },
+        query: { folder: openFolderId.value },
+      }
+    : null,
+)
 // A root view shows the live dot in its header instead of ConnectionStatus, never both.
 const headerShowsLive = computed(() => viewMode.value === 'view' || viewMode.value === 'none')
 const liveStatus = computed(() => {
@@ -494,7 +504,7 @@ async function submitCreate(values: ItemValues) {
           </StateBlock>
           <template v-else-if="folder && viewMode === 'none'">
             <PageHeader :title="folder.name" :live="liveStatus" />
-            <NoViewYet />
+            <NoViewYet :compose-to="composeTo" />
           </template>
           <template v-else-if="folder && viewMode === 'view'">
             <FormNotice v-if="notice" data-notice>
