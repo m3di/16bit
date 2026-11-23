@@ -85,6 +85,39 @@ describe('ViewRenderer', () => {
     expect(html).not.toContain('Name of backlog')
   })
 
+  it('starts headings under a nested titled section at h3, since its heading is an h2', async () => {
+    const html = await view(
+      page([
+        {
+          id: 'outer',
+          type: 'section',
+          config: { title: 'Outer' },
+          children: [
+            {
+              id: 'cols',
+              type: 'columns',
+              config: {},
+              children: [
+                {
+                  id: 'inner',
+                  type: 'section',
+                  config: { title: 'Inner' },
+                  children: [
+                    { id: 'deep', type: 'heading', config: { text: 'Deep', level: 3 } },
+                    { id: 'l', type: 'list', config: { binding: { folderId: 'b' } } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    )
+    expect(headings(html)).toEqual(['h1 Home folder', 'h2 Outer', 'h2 Inner', 'h3 Deep'])
+    // The list inside is under a titled section: no extra heading for it.
+    expect(html).not.toContain('Name of l')
+  })
+
   it('keeps line breaks in text and shows no markup from it', async () => {
     const html = await view(
       page([{ id: 't', type: 'text', config: { text: '<b>bold</b>\nnext' } }]),
@@ -165,6 +198,7 @@ describe('views-only folders and "Opens on" in the sidebar (D76)', () => {
       hubName: 'Build',
       tree: { state: 'ready', data: folderTree(description) },
       folderId: 'home',
+      opensOnFolderId: description.hub.opensOnFolderId,
     })
 
   it('shows "Views only" in place of a views-only folder’s count', async () => {
@@ -178,6 +212,17 @@ describe('views-only folders and "Opens on" in the sidebar (D76)', () => {
     const html = await sidebar()
     expect(html).toContain('href="/w/w/hubs/bld/bld"')
     expect(html).toContain('href="/w/w/hubs/bld/home"')
+  })
+
+  it('keeps the hub root’s plain link when the hub opens on its root', async () => {
+    const html = await render(FolderSidebar, {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(description) },
+      folderId: 'home',
+    })
+    expect(html).toContain('href="/w/w/hubs/bld"')
+    expect(html).not.toContain('href="/w/w/hubs/bld/bld"')
   })
 
   it('names the hub root in an item’s folder link only when the hub opens elsewhere', () => {

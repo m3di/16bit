@@ -93,18 +93,19 @@ export function shownItemIds(status: BlockStatus | undefined): string[] {
 
 /**
  * The blocks one feed change makes stale. A delete carries no item, so its folder is unknown:
- * every block refetches, since a count may have dropped.
+ * every block that reads from its hub refetches (the view's own, or a relation target), since
+ * a count may have dropped.
  */
 export function staleBlocks(
   change: Change,
+  viewHubId: string,
   watched: ReadonlyMap<string, Watch>,
   shown: (blockId: string) => readonly string[],
 ): string[] {
   const stale: string[] = []
   for (const [id, w] of watched) {
     if (
-      change.item === null ||
-      w.folders.has(change.item.folderId) ||
+      (change.item === null ? change.hubId === viewHubId : w.folders.has(change.item.folderId)) ||
       w.hubs.has(change.hubId) ||
       shown(id).includes(change.itemId)
     ) {
@@ -131,6 +132,15 @@ export function browserTimeZone(): string | undefined {
 }
 
 const DAY = 86_400_000
+
+/** The calendar day of `now` in `timeZone`, `YYYY-MM-DD`. */
+export function dayIn(now: Date, timeZone: string | undefined): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone ?? 'UTC' }).format(now)
+  } catch {
+    return now.toISOString().slice(0, 10)
+  }
+}
 
 /**
  * Milliseconds from `now` to the next midnight in `timeZone`. A day with a clock change is an

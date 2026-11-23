@@ -57,15 +57,15 @@ describe('view sources', () => {
     const home = source.view('home')
     if (bugs instanceof Promise || home instanceof Promise) throw new Error('not at once')
     expect(bugs).toMatchObject({ stored: false, version: 0 })
-    expect(readTree(bugs.tree).tree?.root.children?.[0]?.type).toBe('table')
-    expect(readTree(home.tree).tree?.root.children).toEqual([])
+    const table = readTree(bugs.tree).page?.children[0]
+    expect(table?.kind === 'block' && table.block.type).toBe('table')
+    expect(readTree(home.tree).page?.children).toEqual([])
   })
 })
 
 describe('reading a tree for the renderer', () => {
   it('maps a tree that reads in full one to one', () => {
     const read = readTree(homeTree)
-    expect(read.tree).not.toBeNull()
     expect(read.page?.children.map((c) => (c.kind === 'block' ? c.block.type : 'broken'))).toEqual([
       'text',
       'heading',
@@ -89,7 +89,6 @@ describe('reading a tree for the renderer', () => {
       },
     ])
     const read = readTree(raw)
-    expect(read.tree).toBeNull()
     expect(read.page?.children.map((c) => c.kind)).toEqual(['block', 'broken', 'broken', 'block'])
     expect(readableBlocks(read.page).map((b) => b.id)).toEqual(['page', 'a', 's', 'd'])
   })
@@ -148,12 +147,14 @@ describe('when blocks are stale (D83)', () => {
     const w = watches(blocks, withRelation)
     expect([...(w.get('in-sprint')?.folders ?? [])]).toEqual(['bld', 'sp'])
     expect([...(w.get('epics')?.hubs ?? [])]).toEqual(['epics-hub'])
-    const touched = staleBlocks(
-      { seq: 1, hubId: 'epics-hub', itemId: 'e1', item: null },
-      new Map([['epics', w.get('epics') ?? { folders: new Set(), hubs: new Set() }]]),
-      () => [],
-    )
-    expect(touched).toEqual(['epics'])
+    const delete_ = (hubId: string) =>
+      staleBlocks({ seq: 1, hubId, itemId: 'e1', item: null }, 'bld', w, () => [])
+    // A delete in a relation target hub: only the block labelling from it.
+    expect(delete_('epics-hub')).toEqual(['epics'])
+    // A delete in the view's hub: every block, since a count may have dropped.
+    expect(delete_('bld')).toHaveLength(w.size)
+    // A delete in another hub the store follows touches nothing here.
+    expect(delete_('elsewhere')).toEqual([])
   })
 
   it('knows which items a block shows', () => {

@@ -256,10 +256,27 @@ describe('useRootView: a stored view and its data (D83)', () => {
     await settle()
     source.views = [rawView('home', homeTree, { version: 4 })]
     emit.hub('bld')
+    await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE)
     expect(view.mode.value).toBe('view')
-    await settle()
     expect(view.view.value?.version).toBe(4)
+    // Its data waits for the once-a-second limit, as any refetch does.
+    expect(source.requests).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL)
     expect(source.requests.at(-1)?.request.version).toBe(4)
+    stop()
+  })
+
+  it('reads the view once for a burst of `hub` events', async () => {
+    const viewSpy = vi.spyOn(source, 'view')
+    const { emit, stop } = setup('home', source)
+    await settle()
+    for (let i = 0; i < 5; i++) {
+      emit.hub('bld')
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL * 2)
+    expect(viewSpy).toHaveBeenCalledTimes(2)
+    expect(source.requests).toHaveLength(2)
     stop()
   })
 
@@ -271,7 +288,7 @@ describe('useRootView: a stored view and its data (D83)', () => {
     // fakeSource answers the default for a folder it holds no view for.
     bugs.views = []
     emit.hub('bld')
-    await settle()
+    await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE)
     expect(view.mode.value).toBe('default')
     stop()
   })
@@ -285,11 +302,38 @@ describe('useRootView: a stored view and its data (D83)', () => {
     const viewSpy = vi.spyOn(source, 'view')
     const { view, stop } = setup('home', source)
     await settle()
-    await settle()
+    await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL)
     expect(viewSpy).toHaveBeenCalledTimes(2)
     expect(view.view.value?.version).toBe(5)
     expect(source.requests.at(-1)?.request.version).toBe(5)
     expect(view.blocks.value['open']?.state).toBe('ready')
+    stop()
+  })
+
+  it('stops and says so when the data answers 409 forever, instead of looping', async () => {
+    source.answer(() => {
+      throw new ApiRequestError('stale', 'The view changed.', 409)
+    })
+    const viewSpy = vi.spyOn(source, 'view')
+    const { view, stop } = setup('home', source)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(viewSpy.mock.calls.length).toBeLessThanOrEqual(2)
+    expect(source.requests.length).toBeLessThanOrEqual(2)
+    expect(view.problem.value).toBe('request')
+    expect(view.blocks.value['open']).toEqual({ state: 'failed' })
+    stop()
+  })
+
+  it('stops when the view comes back at the same version after a 403 from the data', async () => {
+    source.answer(() => {
+      throw new ApiRequestError('forbidden', 'No.', 403)
+    })
+    const viewSpy = vi.spyOn(source, 'view')
+    const { view, stop } = setup('home', source)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(viewSpy).toHaveBeenCalledTimes(2)
+    expect(source.requests).toHaveLength(1)
+    expect(view.problem.value).toBe('request')
     stop()
   })
 

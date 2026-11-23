@@ -389,6 +389,7 @@ async function submitCreate(values: ItemValues) {
         :workspace-id="workspaceId"
         :hub-name="description?.hub.name ?? null"
         :tree="treeLoad"
+        :opens-on-folder-id="description?.hub.opensOnFolderId"
         :folder-id="openFolderId"
         :actions-for="folderMenus"
         @action="onFolderAction"

@@ -216,6 +216,7 @@ watch(
       <FolderSidebar
         :workspace-id="workspaceId"
         :hub-name="description.hub.name"
+        :opens-on-folder-id="description.hub.opensOnFolderId"
         :tree="tree"
         :folder-id="page.item.folderId"
         current="location"

@@ -5,7 +5,6 @@ import {
   parseViewTree,
   type Block,
   type BlockTypeName,
-  type ViewTree,
 } from '@16bit/core'
 
 // The tree as the renderer walks it. A tree `parseViewTree` reads maps one to one. A tree it
@@ -21,8 +20,6 @@ export type RenderNode =
 export interface RenderTree {
   /** The page block, with its readable config; `null` when even the root is unreadable. */
   page: Extract<RenderNode, { kind: 'block' }> | null
-  /** The tree read in full, for the data request and refreshes; `null` if read block by block. */
-  tree: ViewTree | null
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -56,12 +53,11 @@ export function readTree(raw: unknown): RenderTree {
   const parsed = parseViewTree(raw)
   if (parsed.ok) {
     const page = fromBlock(parsed.tree.root)
-    return { page: page.kind === 'block' ? page : null, tree: parsed.tree }
+    return { page: page.kind === 'block' ? page : null }
   }
   const root = isRecord(raw) ? lenient(raw['root'], 1, { left: MAX_VIEW_BLOCKS }) : null
   return {
     page: root?.kind === 'block' && root.block.type === 'page' ? root : null,
-    tree: null,
   }
 }
 
