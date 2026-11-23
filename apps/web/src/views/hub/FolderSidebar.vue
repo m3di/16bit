@@ -15,6 +15,8 @@ const props = defineProps<{
   folderId: string
   /** `location` on an item's page: the folder is where the item is, not the page itself. */
   current?: 'page' | 'location'
+  /** The hub's "Opens on" folder (D76), when it opens on one rather than on its root. */
+  opensOnFolderId?: string | undefined
   /** Each folder's actions menu. Left out, or empty for a folder, means no menu. */
   actionsFor?: (folder: Folder) => readonly SidebarAction[]
 }>()
@@ -27,12 +29,15 @@ const entries = computed(() => (props.tree.state === 'ready' ? props.tree.data :
 const root = computed(() => entries.value.find((e) => e.folder.id === e.folder.hubId) ?? null)
 const folders = computed(() => entries.value.filter((e) => e !== root.value))
 
+// The hub's own route opens on its "Opens on" folder (D76); with one set, the root's link names
+// the root so its items stay one click away.
 const linkTo = (entry: FolderEntry) => ({
   name: 'hub',
   params: {
     workspaceId: props.workspaceId,
     hubId: entry.folder.hubId,
-    folderId: entry === root.value ? undefined : entry.folder.id,
+    folderId:
+      entry === root.value && props.opensOnFolderId === undefined ? undefined : entry.folder.id,
   },
 })
 const currentOf = (entry: FolderEntry) =>
@@ -73,6 +78,7 @@ const actionsOf = (entry: FolderEntry): readonly SidebarAction[] =>
               :label="entry.folder.name"
               :color="entry.folder.color"
               :count="entry.ownCount"
+              :views-only="entry.folder.viewsOnly === true"
               :current="currentOf(entry)"
               :indent="8 + entry.depth * 12"
               :actions="actionsOf(entry)"
