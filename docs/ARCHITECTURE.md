@@ -199,6 +199,20 @@ Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE
 - Views-only folders (D76): `POST /hubs/:hubId/folders` takes `viewsOnly`, and folder reads carry `viewsOnly: true` only on such a folder. An item create or upsert into one is 422 `views_only` (the folder's flag is read first; `item_views_only_check`, 16B07, is the backstop). `PATCH /hubs/:hubId` takes `opensOnFolderId`, a folder of the hub other than the hub itself (400 otherwise), or `null` for the root; hub reads carry it only when set.
 - A views-only folder may hold subfolders; those are ordinary folders unless created views-only themselves. A stored tree that no longer parses (a broken upgrade) is logged and GET serves the default tree at the stored row's version, so a PUT at that version or a reset replaces it, rather than every read failing.
 
+**View data (#256, D83).** `GET /v1/workspaces/:w/folders/:folderId/view/data?version=&blocks=&tz=` (`apps/api/src/view-data.ts`) answers every data block of the folder's view, stored or default, as the caller under row-level security, in one `REPEATABLE READ` snapshot with one `seq`.
+- **Versions.** A stored tree past `version` is 409 `stale`. A hidden folder is 404; an unknown `tz` is 422.
+- **Status per block.**
+  - `invalid`: the blocks `checkViewTree` finds broken.
+  - Item bindings resolve first. A fixed item that is gone, hidden or in another folder is `not_found`; a rule's first match, or nothing.
+  - `unresolved`: blocks whose `$block`, or burndown range, resolved to nothing.
+  - Otherwise the block runs: sets, boards and items through `queryItems`, numbers, charts and list group measures through the aggregate engine, each in its own savepoint, so one block's failure (`error`) leaves the snapshot usable for the rest.
+  - `?blocks=` answers a subset; the item bindings they depend on still resolve.
+- **Bounds.**
+  - One 5 s deadline: each block's statements get the rest of it as their `statement_timeout`, and blocks past it answer `error: timeout`.
+  - At most 1,000 items per response; the block that would pass the cap answers `error: item_cap`.
+  - At most 4 view-data or aggregate requests in flight per principal per process (`in-flight.ts`), the next 429 `rate_limited`.
+- **Days.** `days` blocks and burndowns count weekdays or calendar days (D81). "Today" is the snapshot's `now()` in `tz`.
+
 **Changes, `seq` and mutation IDs (#170, D58, D59).**
 
 - `GET /v1/workspaces/:workspaceId/changes?after=&limit=` serves `readChanges` (`apps/api/src/changes.ts`), which the feed reuses with a list of hubs. It reads `revision` under the caller's identity, so row-level security decides which hubs show (an agent sees its own hub), collapses each item to its latest revision in the page with the item as it is now (`null` when gone). That revision's `clientMutationId` is sent only to the principal who wrote it; others get none. One read examines at most 10,000 revisions (`MAX_CHANGES_SCAN`), a primary key range, whatever RLS hides in it. The high-water `seq` is the workspace counter when the page is complete, the last returned revision's `seq` when `limit` cut it short, and the end of the examined range when the scan cap did; `more` says changes are already waiting past it.

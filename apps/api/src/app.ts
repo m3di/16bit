@@ -1,6 +1,7 @@
 import {
   can,
   aggregateRequestSchema,
+  viewDataQuerySchema,
   changeMemberRoleSchema,
   batchRequestSchema,
   changesQuerySchema,
@@ -30,6 +31,7 @@ import {
   type AggregateResult,
   type BatchResponse,
   type ChangesPage,
+  type ViewData,
   type Filter,
   type HubDescription,
   type HubListEntry,
@@ -44,6 +46,8 @@ import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
 import { aggregate } from './aggregate.ts'
+import { InFlightLimit } from './in-flight.ts'
+import { viewData } from './view-data.ts'
 import { checkTimeZone, hasObjectOperands, resolveReadFilters } from './read-operands.ts'
 import { checkHub, folderHub } from './access.ts'
 import { readChanges } from './changes.ts'
@@ -139,6 +143,12 @@ export interface AppOptions {
   feed?: FeedOptions
   /** Statement timeout of `POST /aggregate`. Defaults to `AGGREGATE_TIMEOUT_MS`; lowered in tests. */
   aggregateTimeoutMs?: number
+  /** View-data and aggregate requests one principal may have in flight (D83). Default 4. */
+  viewRequestsInFlight?: number
+  /** View data's whole-request deadline (D83). Defaults to `VIEW_DATA_DEADLINE_MS`; lowered in tests. */
+  viewDataDeadlineMs?: number
+  /** Items per view-data response. Defaults to `MAX_VIEW_DATA_ITEMS`; lowered in tests. */
+  viewDataMaxItems?: number
 }
 
 /** Default cap on folders and attributes returned by a hub description. */
@@ -163,6 +173,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
   const { maxLinkedItems, maxHiddenBacklinks, aggregateTimeoutMs } = options
+  const inFlight = new InFlightLimit(options.viewRequestsInFlight)
   const app = Fastify({
     logger: false,
     // A path parameter's longest decoded form, in UTF-16 code units. A valid external key
@@ -506,12 +517,32 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/aggregate', async (request) => {
             const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(aggregateRequestSchema, request.body)
-            return snapshot(request, async (trx): Promise<AggregateResult> => {
-              const result = await aggregate(trx, workspaceId, request.principal, body, {
-                timeoutMs: aggregateTimeoutMs,
-              })
-              return { ...result, seq: await workspaceSeq(trx, workspaceId) }
-            })
+            return inFlight.run(workspaceId, request.principal.id, () =>
+              snapshot(request, async (trx): Promise<AggregateResult> => {
+                const result = await aggregate(trx, workspaceId, request.principal, body, {
+                  timeoutMs: aggregateTimeoutMs,
+                })
+                return { ...result, seq: await workspaceSeq(trx, workspaceId) }
+              }),
+            )
+          })
+
+          // View data (D83, view-data.ts): every data block of the folder's view in one
+          // snapshot, sharing the per-principal limit with `/aggregate`.
+          ws.get('/folders/:folderId/view/data', async (request): Promise<ViewData> => {
+            const { workspaceId, folderId } = parse(folderParams, request.params)
+            const query = parse(viewDataQuerySchema, request.query)
+            return inFlight.run(workspaceId, request.principal.id, () =>
+              snapshot(request, (trx) =>
+                viewData(
+                  trx,
+                  workspaceId,
+                  request.principal,
+                  { folderId, ...query },
+                  { deadlineMs: options.viewDataDeadlineMs, maxItems: options.viewDataMaxItems },
+                ),
+              ),
+            )
           })
 
           // Item writes check the caller's grant in the write's own transaction and hold it
