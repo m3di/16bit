@@ -21,6 +21,16 @@ import { HttpError } from './http.ts'
 
 type Trx = Transaction<Database>
 
+/** A `$block` named a block that resolved to nothing (D77): its dependents are `unresolved`. */
+export class Unresolved extends Error {
+  readonly blocks: string[]
+
+  constructor(blocks: string[]) {
+    super(`Unresolved blocks: ${blocks.join(', ')}`)
+    this.blocks = blocks
+  }
+}
+
 /** Zone names Postgres knows (`pg_timezone_names`), read once per process. */
 let zones: Promise<ReadonlySet<string>> | null = null
 
@@ -60,6 +70,9 @@ export function hasObjectOperands(filter: Filter | null | undefined): boolean {
  * Each filter with `$me` and `$now` resolved, in order. `filters` are checked first: a misplaced
  * or malformed operand, or any `$block`, is a 400 `invalid_request` listing every problem, as a
  * query's other problems are. `tz` must have passed `checkTimeZone`.
+ *
+ * In a view (view-data.ts), `blocks` holds the item each item-bound block resolved to, and
+ * `$block` is allowed and resolved from it; one that resolved to nothing throws `Unresolved`.
  */
 export async function resolveReadFilters(
   trx: Trx,
@@ -67,9 +80,10 @@ export async function resolveReadFilters(
   me: string,
   tz: string,
   filters: readonly { where: Filter | null | undefined; path: string }[],
+  blocks?: ReadonlyMap<string, string | null>,
 ): Promise<(Filter | null)[]> {
   const errors: QueryError[] = filters.flatMap(({ where, path }) =>
-    where ? checkFilterOperands(attributes, where, path, { blocks: false }) : [],
+    where ? checkFilterOperands(attributes, where, path, { blocks: blocks !== undefined }) : [],
   )
   if (errors.length > 0) {
     throw new HttpError(
@@ -107,9 +121,10 @@ export async function resolveReadFilters(
         if (!at) throw new Error(`No clock read for ${value.$now}`)
         return includeTime ? at.at : at.day
       },
+      ...(blocks && { blocks }),
     })
-    // `$block` is refused above, so nothing is left unresolved.
-    if (!resolved.ok) throw new Error('Unresolved $block outside a view')
+    // Outside a view `$block` is refused above, so only a view gets here.
+    if (!resolved.ok) throw new Unresolved(resolved.unresolved)
     return resolved.filter
   })
 }
