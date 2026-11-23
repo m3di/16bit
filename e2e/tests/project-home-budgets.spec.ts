@@ -126,8 +126,9 @@ test('project home is on screen within 2 s on 2,000 tasks, with 15 agents writin
   playwright,
   baseURL,
 }) => {
-  // Pinned: view data takes about 7 s on this hub (issue 306). The fix removes this line.
-  test.fail()
+  // Off until issue 306 is fixed: on some runs view data takes about 7 s on this hub, on others
+  // under 300 ms, so the test neither passes nor fails reliably. The fix removes this line.
+  test.fixme()
   test.setTimeout(180_000)
   const owner = inWorkspace(as('owner'), SCALE.workspaceId)
   await blockTimes(owner, SCALE.folders.home)
