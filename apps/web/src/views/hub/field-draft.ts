@@ -38,10 +38,15 @@ export function useFieldDraft<T>(options: {
   key: (value: T) => string
   version: () => number | null
   changedBy: () => string
+  /**
+   * The reader's own save of this field is still pending. A newer version that arrives meanwhile
+   * may hold someone else's value hidden under it, so it does not move the base.
+   */
+  saving?: () => boolean
   /** The draft took the value shown, so whatever was said about the old draft is over. */
   onFollow?: () => void
 }): FieldDraft<T> {
-  const { shown, key, version, changedBy, onFollow } = options
+  const { shown, key, version, changedBy, saving = () => false, onFollow } = options
   const draft = ref(shown()) as Ref<T>
   /** The value the draft last followed, and the item version then: what an edit is based on. */
   let synced = { key: key(draft.value), version: version() }
@@ -55,18 +60,20 @@ export function useFieldDraft<T>(options: {
     onFollow?.()
   }
 
-  watch([() => key(shown()), version], ([now, at], [before, was]) => {
+  watch([() => key(shown()), version, saving], ([now, at], [before]) => {
     if (now !== before) {
       if (at !== null && editing() && now !== key(draft.value)) {
-        // Someone else's save always brings a newer version. The value changing under the same
-        // version is the reader's own pending edit going away: the server refused it.
-        incoming.value = { value: shown(), by: at === was ? null : changedBy() }
+        // Someone else's save always brings a version newer than the draft's base. The value
+        // changing at that same version is the reader's own pending edit going away: the server
+        // refused it.
+        incoming.value = { value: shown(), by: at === synced.version ? null : changedBy() }
         return
       }
       follow(shown())
-    } else if (now === synced.key) {
+    } else if (now === synced.key && !saving()) {
       // A newer version that leaves this field as it was (another field changed, or the reader's
       // own save came back) moves the base along: only a change to this field is a conflict.
+      // Not while this field's save is pending: the value shown is the reader's, not the server's.
       synced = { ...synced, version: at }
     }
   })

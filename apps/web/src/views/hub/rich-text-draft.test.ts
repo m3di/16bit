@@ -71,6 +71,7 @@ async function field(start: { value: string; version: number }) {
     itemId: 'i1',
     changedBy: 'Mina Park',
     refused: null as { value: unknown; by: string } | null,
+    saving: false,
     onCommit: (value: unknown, basedOn: unknown) => commits.push([value, basedOn]),
   })
   editor.current = null
@@ -167,6 +168,54 @@ describe('Rich text: a change from someone else while writing', () => {
     const note = textOf(byData(f.root, 'data-changed-while-editing') as FakeNode)
     expect(note).toContain('Your last change was not saved, so the saved value is still “Old”.')
     expect(note).not.toContain('Changed by')
+  })
+
+  it('keeps the base while its save is in flight, so a change hidden under it still conflicts', async () => {
+    const f = await field({ value: 'Old', version: 1 })
+    f.editor.write(doc('Mine'))
+    await nextTick()
+    f.editor.blur()
+    expect(f.commits).toEqual([[doc('Mine'), 1]])
+    f.props.saving = true
+    f.props.value = doc('Mine')
+    await nextTick()
+    f.editor.write(doc('Mine and more'))
+    await nextTick()
+    // Someone else's save arrives under the pending value, then the 409 drops it.
+    f.props.version = 2
+    await nextTick()
+    f.props.value = doc('Theirs')
+    f.props.saving = false
+    await nextTick()
+    expect(f.editor.model()).toEqual(doc('Mine and more'))
+    const note = textOf(byData(f.root, 'data-changed-while-editing') as FakeNode)
+    expect(note).toContain('Changed by Mina Park while you were editing: “Theirs”')
+    f.editor.blur()
+    expect(f.commits).toEqual([
+      [doc('Mine'), 1],
+      [doc('Mine and more'), 1],
+    ])
+  })
+
+  it('moves the base along once its own save is confirmed', async () => {
+    const f = await field({ value: 'Old', version: 1 })
+    f.editor.write(doc('Mine'))
+    await nextTick()
+    f.editor.blur()
+    f.props.saving = true
+    f.props.value = doc('Mine')
+    await nextTick()
+    f.editor.write(doc('Mine and more'))
+    await nextTick()
+    f.props.version = 2
+    f.props.saving = false
+    await nextTick()
+    expect(byData(f.root, 'data-changed-while-editing')).toBeUndefined()
+    f.editor.blur()
+    expect(f.commits).toEqual([
+      [doc('Mine'), 1],
+      [doc('Mine and more'), 2],
+    ])
   })
 
   it('follows a rolled-back value after a save when the reader stopped writing', async () => {

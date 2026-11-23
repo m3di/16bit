@@ -23,6 +23,7 @@ const {
   readOnly,
   version = null,
   changedBy = 'Someone else',
+  saving,
 } = defineProps<{
   value: unknown
   label: string
@@ -33,6 +34,8 @@ const {
   version?: number | null
   /** Who changed the item last, by name, for "Changed by … while you were editing". */
   changedBy?: string
+  /** The reader's own save of this field is pending. */
+  saving?: boolean
 }>()
 
 /** `basedOn`: the item version the draft started from, so a change since is a 409 (D60). */
@@ -47,6 +50,7 @@ const { draft, incoming, take, reset } = useFieldDraft<unknown>({
   key,
   version: () => version,
   changedBy: () => changedBy,
+  saving: () => saving,
 })
 const incomingText = computed(() => (incoming.value ? richTextExcerpt(incoming.value.value) : ''))
 
