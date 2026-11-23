@@ -312,6 +312,51 @@ describe('the seeded project home (Main.dc.html)', () => {
 })
 
 describe('blocks that can no longer run (these tests change data)', () => {
+  it('sends every group of a grouped list, labelled and counted, even without measures (#291)', async () => {
+    const list = (id: string, attribute: string) => ({
+      id,
+      type: 'list',
+      config: { binding: { folderId: F.backlog, limit: 2 }, groupBy: { attribute } },
+    })
+    const tree = {
+      schemaVersion: 1,
+      root: {
+        id: 'page',
+        type: 'page',
+        config: {},
+        children: [list('by-epic', A.epic), list('by-stage', A.stage)],
+      },
+    }
+    const put = await call(app, DEV, `/folders/${F.sprints}/view`, 'PUT', { version: 0, tree })
+    expect(put.statusCode, put.body).toBe(200)
+    const view = await data('sara', F.sprints)
+    const groupsOf = (id: string) => {
+      const d = ok(view.blocks[id])
+      if (d.kind !== 'items') throw new Error(d.kind)
+      // Only 2 rows came back: the groups cover all 40 items, not just these.
+      expect(d.items).toHaveLength(2)
+      return d.groups?.map((g) => [
+        g.key.kind === 'value' ? (g.key.label ?? g.key.value) : g.key.kind,
+        ...g.values,
+      ])
+    }
+    // Relation groups: largest first, labelled with the epic's title; then items with no epic.
+    expect(groupsOf('by-epic')).toEqual([
+      ['Tracking page', 14],
+      ['Courier tools', 13],
+      ['Notifications', 9],
+      ['empty', 4],
+    ])
+    // Select groups: in option order, every one present.
+    expect(groupsOf('by-stage')).toEqual([
+      ['to-do', 13],
+      ['in-progress', 1],
+      ['in-review', 1],
+      ['in-qa', 1],
+      ['done', 24],
+    ])
+  })
+
   it('answers not_found for a fixed item that is gone, ok with nothing for a rule that finds none', async () => {
     const made = await call(app, DEV, '/items', 'POST', {
       folderId: F.epics,

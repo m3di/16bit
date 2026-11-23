@@ -263,8 +263,14 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
         total: page.total ?? page.items.length,
         ...(page.linked && { linked: page.linked }),
       }
-      if (groupBy && groupBy.measures.length > 0) {
-        const measures = await measuresOf(run, binding.folderId, groupBy.measures)
+      // A grouped list always gets its groups, in the server's order, with their keys and
+      // labels (#291): the client never rebuilds groups from the rows it got, which may be cut
+      // off at `limit`. Without measures each group carries its item count.
+      if (groupBy) {
+        const measures =
+          groupBy.measures.length > 0
+            ? await measuresOf(run, binding.folderId, groupBy.measures)
+            : [{ fn: 'count' as const }]
         const result = await aggregated(run, binding.folderId, where ?? null, measures, {
           attribute: groupBy.attribute,
           bucket: groupBy.bucket,
