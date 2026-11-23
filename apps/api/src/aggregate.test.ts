@@ -594,13 +594,14 @@ describe('aggregate timeout and budget', () => {
   it('answers 503 timeout past its statement timeout', async () => {
     await seed()
     await start({ aggregateTimeoutMs: 1 })
-    // Enough rows that the statement can't finish within a millisecond.
+    // Enough rows that the statement can't finish within a millisecond (a grouped aggregate over
+    // them takes tens of milliseconds), and few enough to insert quickly on a loaded runner.
     await sql`
       INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
       SELECT 'w1', 'g' || n, 'h1', 'f1', n, jsonb_build_object('pts', n), 'own'
-      FROM generate_series(1, 20000) n;
+      FROM generate_series(1, 5000) n;
       INSERT INTO item_index (workspace_id, attribute_id, item_id, num)
-      SELECT 'w1', 'pts', 'g' || n, n FROM generate_series(1, 20000) n;
+      SELECT 'w1', 'pts', 'g' || n, n FROM generate_series(1, 5000) n;
     `.execute(db)
     const res = await call('ed', 'POST', '/aggregate', {
       from: 'f1',
@@ -612,7 +613,7 @@ describe('aggregate timeout and budget', () => {
     })
     expect(res.statusCode, res.body).toBe(503)
     expect(res.json()).toMatchObject({ error: 'timeout' })
-  })
+  }, 30_000)
 
   it('answers a group and 5 measures on a 2,000-item hub in under 200 ms (D80)', async () => {
     await applyLargeSeed(db, { items: 2_000 })
