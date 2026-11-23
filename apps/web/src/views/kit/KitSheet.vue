@@ -21,6 +21,7 @@ import {
 } from '../../ui/index.ts'
 import KitSettings from './KitSettings.vue'
 import KitValues from './KitValues.vue'
+import KitChart from './KitChart.vue'
 
 const { theme } = defineProps<{ theme: 'light' | 'dark' }>()
 
@@ -436,6 +437,8 @@ onScopeDispose(() => {
         </div>
       </div>
     </section>
+
+    <KitChart />
 
     <KitValues />
 

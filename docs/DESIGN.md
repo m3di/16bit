@@ -175,6 +175,12 @@ The settings mockups have no tabs, dialogs, menus, type picker, or options edito
 
 Layouts are built from flex and grid with wrapping, never fixed widths. At phone width the sidebar stacks above the content, toolbars wrap, and wide tables scroll inside their own box.
 
+## Charts (M4)
+
+| Component | Notes |
+|---|---|
+| BurndownChart | The `chart` block's burndown from `Main.dc.html`, hand-written SVG with no chart library. Points left are the sprint's total minus the points done by each item's "Done on" date (D82), stepping over weekdays by default or calendar days (D81). Each step is the start of a day; work done on a weekend counts on the next weekday, and on a weekend "today" is drawn at the Friday. Today's point is the points left now, in a filled `--accent` dot with an `--ink` label box and `--bg` text ("Today: 18 points left"), flipped left near the right edge. Earlier days are `--bg` dots on a 1.5px `--accent` line (dots dropped past 31 days); the ideal line is 1px dashed `--ink3` from the total to 0 at the sprint's end; three hairline `--line` grid lines with `--ink3` 11px labels (total, half, 0); day labels for the first day, the last day and today, dropped where two would overlap. A legend (Actual, Ideal) sits above it on the right. Colours are token utilities on SVG fill and stroke, so the theme switches without a rebuild (D39). The SVG is as many units wide as its box is pixels, so text stays 11px. It is `aria-hidden`; a visually hidden table (Day, Points left, Ideal, with today and the end of the sprint marked) replaces it for screen readers. Before the sprint it draws the ideal line only. A sprint with no points, and the loading, error, no-permission, invalid and unresolved states, belong to the block around it. Rendering four charts (one a 366-day year) and 20 updates on a production build at 6x CPU throttling caused no long task (issue 259). |
+
 ## Mockups
 
 `design/mockups/` holds the source of the reference screens: main dashboard (light and dark), project home, my work and backlog, task, workspace settings, and hub settings. They were made in a design canvas and depend on its runtime, so they do not open as standalone pages. Read them for structure, spacing, and colour values.
