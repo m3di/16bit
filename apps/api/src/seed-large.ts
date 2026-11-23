@@ -4,6 +4,7 @@
 // (project-seed.ts; the M4-04 and M4-12 budgets). DEVELOPMENT ONLY: the dev owner's
 // account has the published password DEV_PASSWORD.
 import { createDb, migrateToLatest } from './db/database.ts'
+import { analyzeSeeded } from './seed-analyze.ts'
 import { DEV_OWNER } from './dev-accounts.ts'
 import { applyLargeSeed, LARGE_FOLDER, LARGE_WORKSPACE } from './large-seed.ts'
 import {
@@ -59,6 +60,8 @@ try {
       console.log(`seed:large: sign in as ${DEV_OWNER.email} to see it`)
     }
   }
+  // Fresh statistics, so the next reads plan for the rows just written (#306).
+  await analyzeSeeded(db)
 } catch (error) {
   console.error('seed:large: failed:', error)
   process.exitCode = 1
