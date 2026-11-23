@@ -31,6 +31,7 @@ const FROM = LARGE_FOLDER.id
 
 let db: Kysely<Database>
 let appDb: Kysely<Database>
+let diagAppUrl = ''
 let drop: () => Promise<void>
 let app: FastifyInstance
 let cookie: string
@@ -40,6 +41,7 @@ beforeAll(async () => {
   drop = test.drop
   db = createDb(test.url)
   appDb = createDb(test.appUrl)
+  diagAppUrl = test.appUrl
   await migrateToLatest(db)
   const seeded = await applyLargeSeed(db)
   expect(seeded.folderItems).toBe(LARGE_ITEMS)
@@ -239,4 +241,85 @@ describe('aggregates on the 50,000-item folder (D80, #251)', () => {
     const total = byStage.result.groups.reduce((n, g) => n + Number(g.values[0]), 0)
     expect(total).toBe(LARGE_ITEMS)
   }, 60_000)
+})
+
+// DIAGNOSTIC for #299 (PR #300), to be removed before merge: the same aggregate with parallel
+// workers on and off, in one run, and the pivot's plan under RLS.
+describe('DIAGNOSTIC #299', () => {
+  const body = {
+    from: FROM,
+    groupBy: { attribute: LARGE_ATTR.stage },
+    measures: [
+      { fn: 'count' },
+      { fn: 'sum', attribute: LARGE_ATTR.effort },
+      { fn: 'count', where: { attribute: LARGE_ATTR.tags, op: 'in', value: ['api'] } },
+      {
+        fn: 'avg',
+        attribute: LARGE_ATTR.effort,
+        where: { attribute: LARGE_ATTR.due, op: 'lt', value: '2027-01-01' },
+      },
+      { fn: 'count_empty', attribute: LARGE_ATTR.due },
+    ],
+  }
+  const best = async (on: FastifyInstance) => {
+    let ms = Number.POSITIVE_INFINITY
+    for (let i = 0; i < 4; i++) {
+      const started = performance.now()
+      const res = await on.inject({
+        method: 'POST',
+        url: `/v1/workspaces/${WS}/aggregate`,
+        headers: { cookie },
+        payload: body,
+      })
+      expect(res.statusCode, res.body).toBe(200)
+      ms = Math.min(ms, performance.now() - started)
+    }
+    return ms
+  }
+
+  it('times parallel on and off, and prints the plan', async () => {
+    const { rows: cpus } = await sql<{ setting: string }>`
+      SELECT setting FROM pg_settings WHERE name IN ('max_worker_processes', 'max_parallel_workers_per_gather', 'max_parallel_workers', 'work_mem', 'shared_buffers') ORDER BY name
+    `.execute(db)
+    console.info(`[diag] settings ${JSON.stringify(cpus)}`)
+    const on = await best(app)
+    await sql.raw(`ALTER ROLE sixteenbit_api SET max_parallel_workers_per_gather = 0`).execute(db)
+    const offDb = createDb(diagAppUrl)
+    const off = buildApp({ db: offDb })
+    try {
+      const offMs = await best(off)
+      console.info(
+        `[diag] aggregate 50k, parallel on: ${on.toFixed(0)} ms, off: ${offMs.toFixed(0)} ms`,
+      )
+    } finally {
+      await off.close()
+      await offDb.destroy()
+      await sql.raw(`ALTER ROLE sixteenbit_api RESET max_parallel_workers_per_gather`).execute(db)
+    }
+    const { rows: owner } = await sql<{ id: string }>`
+      SELECT principal_id AS id FROM hub_grant WHERE workspace_id = ${WS} LIMIT 1
+    `.execute(db)
+    const plan = await appDb.transaction().execute(async (trx) => {
+      await sql`SELECT set_config('app.workspace_id', ${WS}, true),
+                       set_config('app.principal_id', ${owner[0]?.id ?? ''}, true)`.execute(trx)
+      const { rows } = await sql<{ 'QUERY PLAN': string }>`
+        EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+        SELECT v.stage, count(*), sum(v.effort::numeric), count(*) FILTER (WHERE v.api)
+        FROM item i LEFT JOIN (
+          SELECT x.item_id,
+            max(x.txt) FILTER (WHERE x.attribute_id = ${LARGE_ATTR.stage}) AS stage,
+            max(x.num) FILTER (WHERE x.attribute_id = ${LARGE_ATTR.effort} AND x.ord = 0) AS effort,
+            coalesce(bool_or(x.txt = 'api') FILTER (WHERE x.attribute_id = ${LARGE_ATTR.tags}), false) AS api
+          FROM item_index x
+          WHERE x.workspace_id = ${WS}
+            AND x.attribute_id = ANY(${[LARGE_ATTR.stage, LARGE_ATTR.effort, LARGE_ATTR.tags]}::text[])
+          GROUP BY x.item_id
+        ) v ON v.item_id = i.id
+        WHERE i.workspace_id = ${WS} AND i.folder_id = ${FROM}
+        GROUP BY v.stage
+      `.execute(trx)
+      return rows.map((r) => r['QUERY PLAN']).join('\n')
+    })
+    console.info(`[diag] plan\n${plan}`)
+  }, 120_000)
 })
