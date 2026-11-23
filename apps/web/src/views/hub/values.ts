@@ -72,11 +72,27 @@ export function toInput(attribute: Attribute, value: Value): string {
   return typeof value === 'object' ? '' : String(value)
 }
 
+/** Types edited by their own component (lists, rich text, auto IDs), never through a text input. */
+export const OWN_EDITOR_TYPES = [
+  'multi_select',
+  'actor',
+  'auto_id',
+  'rich_text',
+  'relation',
+] as const satisfies readonly Attribute['type'][]
+type OwnEditorType = (typeof OWN_EDITOR_TYPES)[number]
+
+export const hasOwnEditor = (
+  attribute: Attribute,
+): attribute is Extract<Attribute, { type: OwnEditorType }> =>
+  (OWN_EDITOR_TYPES as readonly string[]).includes(attribute.type)
+
 export type Parsed = { ok: true; value: ItemValues[string] } | { ok: false; message: string }
 
 /** Turns input text into a stored value. The empty string clears the value. */
 export function fromInput(attribute: Attribute, text: string): Parsed {
   if (text.trim() === '' && attribute.type !== 'text') return { ok: true, value: null }
+  if (hasOwnEditor(attribute)) return { ok: false, message: 'This field has its own editor' }
   switch (attribute.type) {
     case 'text':
       return { ok: true, value: text === '' ? null : text }
@@ -96,12 +112,5 @@ export function fromInput(attribute: Attribute, text: string): Parsed {
     case 'select':
     case 'url':
       return { ok: true, value: text }
-    case 'multi_select':
-    case 'actor':
-    case 'auto_id':
-    case 'rich_text':
-    case 'relation':
-      // These have their own editors and never come through a text input.
-      return { ok: false, message: 'This field has its own editor' }
   }
 }
