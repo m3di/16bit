@@ -30,6 +30,7 @@ const {
   version = null,
   changedBy = 'Someone else',
   refused = null,
+  saving,
 } = defineProps<{
   attribute: Attribute
   value: Value
@@ -47,6 +48,8 @@ const {
   changedBy?: string
   /** The reader's value a conflict refused (a 409), offered back to them, and who changed it. */
   refused?: { value: ItemValues[string]; by: string } | null
+  /** The reader's own save of this field is pending (D60: the draft's base waits for it). */
+  saving?: boolean
 }>()
 
 /** `basedOn`: the item version the edit started from, so a change since is a 409 (D60). */
@@ -64,6 +67,7 @@ const { draft, incoming, take, rebase } = useFieldDraft({
   key: (text) => text,
   version: () => version,
   changedBy: () => changedBy,
+  saving: () => saving,
   onFollow: () => {
     localError.value = ''
   },
@@ -205,6 +209,7 @@ function onToggle(checked: boolean) {
     :read-only="readOnly"
     :version="version"
     :changed-by="changedBy"
+    :saving="saving"
     @commit="(v, basedOn) => emit('commit', v, basedOn)"
   />
   <CheckboxField

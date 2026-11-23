@@ -439,6 +439,18 @@ describe('a draft kept while someone else saved (D60)', () => {
     expect(s.refusedValue('i1', 'title')).toBeNull()
   })
 
+  it('says which fields have a save pending, until it is confirmed or refused', async () => {
+    const { s } = await live(
+      () => page([item('i1', 1, { title: 'Old' }, 1)], 10),
+      () => json(withSeq(item('i1', 1, { title: 'Mine' }, 2), 11)),
+    )
+    const saved = s.save('i1', { title: 'Mine' })
+    expect(s.savingField('i1', 'title')).toBe(true)
+    expect(s.savingField('i1', 'points')).toBe(false)
+    await saved
+    expect(s.savingField('i1', 'title')).toBe(false)
+  })
+
   it('drops the offer when the reader takes the other value', async () => {
     const theirs = item('i1', 1, { title: 'Theirs' }, 2)
     const { s } = await live(

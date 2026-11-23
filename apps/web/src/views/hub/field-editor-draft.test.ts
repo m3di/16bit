@@ -77,6 +77,7 @@ function editor(start: { value: string; version: number }) {
     itemId: 'i1',
     changedBy: 'Mina Park',
     refused: null as { value: string; by: string } | null,
+    saving: false,
   }
   const commits: [unknown, unknown][] = []
   let dismissed = 0
@@ -191,6 +192,58 @@ describe('FieldEditor: a change from someone else while typing', () => {
     expect(e.commits).toEqual([
       ['Mine', 1],
       ['Mine and more', 1],
+    ])
+  })
+
+  it('keeps the base while its save is in flight, so a change hidden under it still conflicts', async () => {
+    const e = editor({ value: 'Old', version: 1 })
+    type(e.input, 'Mine')
+    await nextTick()
+    fire(e.input, 'change')
+    expect(e.commits).toEqual([['Mine', 1]])
+    // The pending edit shows while it is saved, and the reader goes on typing.
+    e.props.saving = true
+    e.props.value = 'Mine'
+    await nextTick()
+    type(e.input, 'Mine and more')
+    await nextTick()
+    // Someone else's save of this field arrives under the reader's pending value.
+    e.props.version = 2
+    await nextTick()
+    // The reader's save meets the conflict: their value shows, at the version already held.
+    e.props.value = 'Theirs'
+    e.props.saving = false
+    await nextTick()
+    expect(e.input.value).toBe('Mine and more')
+    const note = textOf(byData(e.root, 'data-changed-while-editing') as FakeNode)
+    expect(note).toContain('Changed by Mina Park while you were editing: “Theirs”')
+    // Saved against the version the draft was based on: a 409, never a silent overwrite.
+    fire(e.input, 'change')
+    expect(e.commits).toEqual([
+      ['Mine', 1],
+      ['Mine and more', 1],
+    ])
+  })
+
+  it('moves the base along once its own save is confirmed', async () => {
+    const e = editor({ value: 'Old', version: 1 })
+    type(e.input, 'Mine')
+    await nextTick()
+    fire(e.input, 'change')
+    e.props.saving = true
+    e.props.value = 'Mine'
+    await nextTick()
+    type(e.input, 'Mine and more')
+    await nextTick()
+    // Confirmed: the new version and the end of the save arrive together.
+    e.props.version = 2
+    e.props.saving = false
+    await nextTick()
+    expect(byData(e.root, 'data-changed-while-editing')).toBeUndefined()
+    fire(e.input, 'change')
+    expect(e.commits).toEqual([
+      ['Mine', 1],
+      ['Mine and more', 2],
     ])
   })
 

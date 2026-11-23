@@ -858,6 +858,10 @@ export function useItems(
     if (!entry || !(attributeId in entry.values)) return null
     return { value: entry.values[attributeId] ?? null, by: entry.by }
   }
+  /** A save of this field is pending: sent or queued, not yet confirmed or refused. */
+  function savingField(id: string, attributeId: string) {
+    return store.pending(id).some((w) => w.kind === 'patch' && attributeId in w.values)
+  }
   function forgetRefused(id: string, attributeIds: readonly string[]) {
     const entry = refusedEdits.value[id]
     if (!entry) return
@@ -1267,5 +1271,6 @@ export function useItems(
     dispose,
     refusedValue,
     forgetRefused,
+    savingField,
   }
 }
