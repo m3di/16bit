@@ -316,6 +316,7 @@ async function bumpCounts(
 export async function writeIndex(
   trx: Trx,
   workspaceId: string,
+  hubId: string,
   itemId: string,
   definitions: FolderAttributeDefinition[],
   values: ItemValues,
@@ -340,6 +341,7 @@ export async function writeIndex(
   const rows = touched.flatMap((attribute) =>
     indexEntries(attribute, values[attribute.id] ?? null).map((entry) => ({
       workspace_id: workspaceId,
+      hub_id: hubId,
       attribute_id: attribute.id,
       item_id: itemId,
       ord: entry.ord,
@@ -622,7 +624,7 @@ export async function createItem(
     )
     if (!row) throw new HttpError('id_taken', 'This item ID is already used')
 
-    await writeIndex(trx, workspaceId, id, definitions, stored, false)
+    await writeIndex(trx, workspaceId, folder.hub_id, id, definitions, stored, false)
     await writeLinks(trx, workspaceId, id, relations, stored, false)
     try {
       await appendRevision(
@@ -761,7 +763,7 @@ export async function patchItem(
     )
 
     await writeLinks(trx, workspaceId, id, relations, patch, true)
-    await writeIndex(trx, workspaceId, id, definitions, patch, true)
+    await writeIndex(trx, workspaceId, before.hubId, id, definitions, patch, true)
     await appendRevision(
       trx,
       workspaceId,

@@ -783,6 +783,7 @@ async function indexSeededAttributes(
       attributes.flatMap((attribute) =>
         indexEntries(attribute, item.values[attribute.id] ?? null).map((entry) => ({
           workspace_id: workspaceId,
+          hub_id: hubId,
           attribute_id: attribute.id,
           item_id: item.id,
           ord: entry.ord,

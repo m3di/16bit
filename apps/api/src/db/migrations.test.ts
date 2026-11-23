@@ -123,6 +123,7 @@ describe('migrations', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -798,6 +799,7 @@ describe('0009_schema_writes', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -853,6 +855,7 @@ describe('0010_invite_update_owner', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -888,6 +891,7 @@ describe('0011_deleted_attribute', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     const backfilled = await db
       .selectFrom('deleted_attribute')
@@ -951,6 +955,7 @@ describe('0012_mutation_ids', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     // Existing revisions carry no ID.
     expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
@@ -1052,6 +1057,7 @@ describe('0013_hub_prefix_unique', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
 
     expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
@@ -1135,6 +1141,7 @@ describe('0014_revision_cause', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     const migrated = [
       [1, { note: 'from the old column' }],
@@ -1174,6 +1181,7 @@ describe('0014_revision_cause', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     expect(await causes()).toEqual(migrated)
 
@@ -1187,6 +1195,7 @@ describe('0014_revision_cause', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
     expect((await causes())[2]).toEqual([3, { note: json }])
   })
@@ -1205,6 +1214,7 @@ describe('0014_revision_cause', () => {
       '0014_revision_cause',
       '0015_item_external_key',
       '0016_views',
+      '0017_item_index_hub',
     ])
   })
 
@@ -1274,7 +1284,11 @@ describe('0015_item_external_key', () => {
     await sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
               VALUES ('w1', 'i1', 'h1', 'f1', 1, '{"a":1}', 'p1')`.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key', '0016_views'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0015_item_external_key',
+      '0016_views',
+      '0017_item_index_hub',
+    ])
     const keys = () =>
       db.selectFrom('item').select(['id', 'external_key', 'values']).orderBy('id').execute()
     expect(await keys()).toEqual([{ id: 'i1', external_key: null, values: { a: 1 } }])
@@ -1292,7 +1306,11 @@ describe('0015_item_external_key', () => {
       { id: 'i2' },
     ])
 
-    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key', '0016_views'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0015_item_external_key',
+      '0016_views',
+      '0017_item_index_hub',
+    ])
     expect((await keys()).map((r) => r.external_key)).toEqual([null, null])
     await item('i3', 3, 'src/app.ts')
   })

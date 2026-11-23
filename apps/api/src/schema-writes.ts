@@ -894,6 +894,8 @@ async function stripValues(
     const index = changes.flatMap((c) =>
       indexEntries(attribute, c.value).map((entry) => ({
         workspace_id: workspaceId,
+        // An attribute's items are in its hub (D10).
+        hub_id: attribute.hubId,
         attribute_id: key,
         item_id: c.id,
         ord: entry.ord,
