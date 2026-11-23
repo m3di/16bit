@@ -20,6 +20,12 @@ const STATUS: Record<ApiErrorCode, number> = {
   in_use: 409,
   confirm_required: 409,
   rate_limited: 429,
+  invalid_view: 422,
+  has_view: 409,
+  views_only: 422,
+  stale: 409,
+  invalid_time_zone: 422,
+  timeout: 503,
   internal: 500,
 }
 

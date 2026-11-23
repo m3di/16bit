@@ -53,7 +53,8 @@ const atLeastOneChange =
 /**
  * `PATCH /hubs/:hubId`, hub admins (`hub.rename`). Returns the hub (`hubSchema`). At least
  * one field besides `version`. `titleAttributeId` must name a `text` attribute of this hub
- * (400 otherwise), or `null` to clear it.
+ * (400 otherwise), or `null` to clear it. `opensOnFolderId` (D76, `hub.manageSchema`) must
+ * name a folder of this hub (400 otherwise), or `null` to open on the hub root.
  */
 export const updateHubSchema = z
   .strictObject({
@@ -61,9 +62,10 @@ export const updateHubSchema = z
     name: schemaNameSchema.optional(),
     color: paletteColorSchema.optional(),
     titleAttributeId: idSchema.nullable().optional(),
+    opensOnFolderId: idSchema.nullable().optional(),
   })
-  .refine(atLeastOneChange(['name', 'color', 'titleAttributeId']), {
-    message: 'At least one of name, color or titleAttributeId is required',
+  .refine(atLeastOneChange(['name', 'color', 'titleAttributeId', 'opensOnFolderId']), {
+    message: 'At least one of name, color, titleAttributeId or opensOnFolderId is required',
   })
 export type UpdateHub = z.infer<typeof updateHubSchema>
 
@@ -89,13 +91,16 @@ export type DeleteFolderQuery = z.infer<typeof deleteFolderQuerySchema>
 /**
  * `POST /hubs/:hubId/folders`. `parentId` is the hub or a folder in it. `id` is optional; the
  * server makes one if absent. A folder takes its hub's `idPrefix` (item numbers are per hub).
- * Returns 201 with the folder.
+ * Returns 201 with the folder. `viewsOnly` makes a folder that holds no items and only shows
+ * its root view (D76); it is fixed at creation.
  */
 export const createFolderSchema = z.strictObject({
   id: idSchema.optional(),
   parentId: idSchema,
   name: schemaNameSchema,
   color: paletteColorSchema,
+  /** Absent is false. */
+  viewsOnly: z.boolean().optional(),
 })
 export type CreateFolder = z.input<typeof createFolderSchema>
 

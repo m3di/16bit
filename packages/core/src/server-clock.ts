@@ -53,8 +53,9 @@ export function serverClockOffsetMs(duration: string): number | null {
  * D68). Every `$now` in one write, values and condition alike, sees that one instant. Accepted
  * wherever a date attribute takes a value: in `values` of create, patch, upsert and batch
  * operations, and as the operand of a `condition` on a date attribute (`eq`, `neq`, `gt`, `gte`,
- * `lt`, `lte`). Not yet in `POST /query`; M4 views resolve it against the read's own clock. The
- * stored value is an ordinary date: see `resolveServerClock`.
+ * `lt`, `lte`). Reads (`POST /query`, `POST /aggregate`, views) take it too, resolved against the
+ * read's own clock in the request's time zone (operands.ts, D79, D81). The stored value is an
+ * ordinary date: see `resolveServerClock`.
  */
 export const serverClockValueSchema = z.strictObject({
   $now: z

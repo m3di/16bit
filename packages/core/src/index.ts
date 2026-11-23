@@ -1,5 +1,6 @@
 // Shared types, attribute type contracts, block registry, and query shape.
 // This package must not depend on Node or browser APIs.
+export * from './aggregate.ts'
 export * from './api.ts'
 export * from './auth.ts'
 export * from './attribute-types/index.ts'
@@ -9,8 +10,11 @@ export * from './entities.ts'
 export * from './external-key.ts'
 export * from './feed.ts'
 export * from './hub-settings.ts'
+export * from './operands.ts'
 export * from './palette.ts'
 export * from './query.ts'
 export * from './roles.ts'
 export * from './server-clock.ts'
 export * from './validate.ts'
+export * from './view-data.ts'
+export * from './views.ts'
