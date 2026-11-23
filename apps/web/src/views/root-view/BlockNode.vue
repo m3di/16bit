@@ -38,9 +38,10 @@ const component = computed(() => {
   if (!b) return null
   return blockComponent(b.type) ?? (category.value === 'data' ? DataBlockStates : null)
 })
-// A titled section is the h2 its children sit under.
+// A titled section's heading is always an h2 (BlockSection), however deep it sits, so its
+// children's headings start at h3.
 const childLevel = computed(() =>
-  block.value?.type === 'section' && block.value.config.title ? level + 1 : level,
+  block.value?.type === 'section' && block.value.config.title ? 3 : level,
 )
 // A list's groups and a board's columns are h3s: outside a titled section they get one, so the
 // outline never goes from the page's h1 straight to an h3.

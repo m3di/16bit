@@ -7,6 +7,7 @@ import { viewRequests, type RequestQueue } from './queue.ts'
 import {
   browserTimeZone,
   dataBlocks,
+  dayIn,
   msUntilMidnight,
   readsToday,
   shownItemIds,
@@ -72,6 +73,12 @@ export function useRootView(options: RootViewOptions) {
   let pendingSince: number | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let midnightTimer: ReturnType<typeof setTimeout> | null = null
+  let hubTimer: ReturnType<typeof setTimeout> | null = null
+  // The version a data error (409, 403, 404) made us read the view again at. Answered the same,
+  // or failing the same way again, the page stops and says so instead of looping.
+  let recovering: number | null = null
+  // The reader's day when the data was last read, to catch a midnight slept through.
+  let readOn = ''
 
   const ready = computed(() => {
     const v = view.value
@@ -114,6 +121,14 @@ export function useRootView(options: RootViewOptions) {
     pendingSince = null
   }
 
+  /** The data could not be read and reading the view again did not help: say so, once. */
+  function giveUp(ids: readonly string[]) {
+    const next = { ...blocks.value }
+    for (const id of ids) if (next[id]?.state !== 'ready') next[id] = { state: 'failed' }
+    blocks.value = next
+    requestFailed.value = true
+  }
+
   /** Reads the view. `keep` holds what is shown until the answer comes (a reload). */
   function loadView(folderId: string, keep: boolean) {
     const gen = ++generation
@@ -123,10 +138,15 @@ export function useRootView(options: RootViewOptions) {
       view.value = { folderId, load: { state: 'loading' } }
       blocks.value = {}
       requestFailed.value = false
+      recovering = null
     }
     const done = (answer: RawView) => {
       if (gen !== generation) return
       view.value = { folderId, load: { state: 'ready', data: answer } }
+      if (recovering !== null && answer.version === recovering) {
+        giveUp(data.value.map((b) => b.id))
+        return
+      }
       startData(gen)
     }
     const failed = (thrown: unknown) => {
@@ -163,7 +183,9 @@ export function useRootView(options: RootViewOptions) {
     const next: Record<string, BlockLoad> = {}
     for (const id of ids) next[id] = blocks.value[id] ?? { state: 'loading' }
     blocks.value = next
-    void fetchData(gen, null)
+    // A reload's data waits for the once-a-second limit like any refetch (D83).
+    if (now() - lastFetch >= REFRESH_INTERVAL) void fetchData(gen, null)
+    else markStale(ids)
     scheduleMidnight(gen)
   }
 
@@ -187,20 +209,24 @@ export function useRootView(options: RootViewOptions) {
       if (gen !== generation) return
       fetching = false
       const error = asRequestError(thrown)
-      // The tree moved past ours, or the folder went out of reach: read the view again.
+      // The tree moved past ours, or the folder went out of reach: read the view again, once.
       if (error.code === 'stale' || error.isNotFound || error.isNoPermission) {
-        loadView(v.folderId, true)
+        if (recovering === null) {
+          recovering = v.version
+          loadView(v.folderId, true)
+        } else {
+          giveUp(asked)
+        }
         return
       }
-      const next = { ...blocks.value }
-      for (const id of asked) if (next[id]?.state !== 'ready') next[id] = { state: 'failed' }
-      blocks.value = next
-      requestFailed.value = true
+      giveUp(asked)
       schedule()
       return
     }
     if (gen !== generation) return
     fetching = false
+    recovering = null
+    readOn = dayIn(new Date(now()), timeZone)
     const next = { ...blocks.value }
     for (const id of asked) {
       const status = answer.blocks[id]
@@ -263,6 +289,7 @@ export function useRootView(options: RootViewOptions) {
   function retry() {
     const v = view.value
     if (!v) return
+    recovering = null
     if (v.load.state !== 'ready') {
       loadView(v.folderId, false)
       return
@@ -275,25 +302,42 @@ export function useRootView(options: RootViewOptions) {
     store.on('change', (change) => {
       if (mode.value !== 'view') return
       markStale(
-        staleBlocks(change, watched.value, (id) => {
+        staleBlocks(change, options.hubId(), watched.value, (id) => {
           const b = blocks.value[id]
           return b?.state === 'ready' ? shownItemIds(b.status) : []
         }),
       )
     }),
     // A view write sends the hub NOTIFY (D76): a folder may have gained or lost its view.
+    // A burst of them (an admin saving again and again) is one reload.
     store.on('hub', (hubId) => {
-      const id = options.folderId()
-      if (hubId === options.hubId() && id !== null && mode.value !== 'loading') loadView(id, true)
+      if (hubId !== options.hubId() || hubTimer !== null) return
+      hubTimer = setTimeout(() => {
+        hubTimer = null
+        const id = options.folderId()
+        if (id !== null && mode.value !== 'loading') loadView(id, true)
+      }, REFRESH_DEBOUNCE)
     }),
     store.on('resync', (hubId) => {
       if (hubId === options.hubId()) markStale(data.value.map((b) => b.id))
     }),
   ]
 
+  // A laptop that slept through midnight: the timer fires late, so look again on return.
+  const onVisible = () => {
+    if (document.visibilityState !== 'visible' || mode.value !== 'view' || readOn === '') return
+    if (dayIn(new Date(now()), timeZone) !== readOn) {
+      markStale(data.value.filter(readsToday).map((b) => b.id))
+    }
+  }
+  const watchesVisibility = typeof document !== 'undefined'
+  if (watchesVisibility) document.addEventListener('visibilitychange', onVisible)
+
   watch(
     options.folderId,
     (id) => {
+      if (hubTimer !== null) clearTimeout(hubTimer)
+      hubTimer = null
       if (id !== null) {
         loadView(id, false)
         return
@@ -309,6 +353,9 @@ export function useRootView(options: RootViewOptions) {
   function dispose() {
     generation++
     clearTimers()
+    if (hubTimer !== null) clearTimeout(hubTimer)
+    hubTimer = null
+    if (watchesVisibility) document.removeEventListener('visibilitychange', onVisible)
     for (const stop of stops) stop()
     release()
   }
