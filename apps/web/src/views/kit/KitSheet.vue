@@ -19,6 +19,7 @@ import {
   type RowWindows,
   type TableColumn,
 } from '../../ui/index.ts'
+import KitBlocks from './KitBlocks.vue'
 import KitSettings from './KitSettings.vue'
 import KitValues from './KitValues.vue'
 
@@ -440,5 +441,7 @@ onScopeDispose(() => {
     <KitValues />
 
     <KitSettings :theme="theme" />
+
+    <KitBlocks />
   </div>
 </template>
