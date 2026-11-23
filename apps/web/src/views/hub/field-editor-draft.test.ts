@@ -96,21 +96,51 @@ describe('FieldEditor: a change from someone else while typing', () => {
     expect(e.input.value).toBe('Theirs')
   })
 
-  it('offers the refused value back after a conflict: keep mine, or use theirs', async () => {
+  it('offers the refused value back after a conflict: keep mine, or use the latest', async () => {
     const e = editor({ value: 'Theirs', version: 2 })
     e.props.refused = { value: 'Mine', by: 'Mina Park' }
     await nextTick()
     const note = byData(e.root, 'data-refused-draft') as FakeNode
-    expect(textOf(note)).toContain('Mina Park changed Title while you were editing')
-    expect(textOf(note)).toContain('“Mine” was not saved')
-    const [keep, theirs] = buttons(note)
+    // Every queued edit is offered back, including fields the other person did not touch, so
+    // the note does not claim they changed this one.
+    expect(textOf(note)).toContain(
+      'Mina Park changed this item while you were editing, so your Title “Mine” was not saved.',
+    )
+    expect(textOf(note)).toContain('The latest value is shown.')
+    expect(textOf(note)).not.toContain('Theirs is shown')
+    const [keep, latest] = buttons(note)
     expect(textOf(keep as FakeNode)).toBe('Keep mine')
-    expect(textOf(theirs as FakeNode)).toBe('Use theirs')
-    fire(theirs as FakeNode, 'click')
+    expect(textOf(latest as FakeNode)).toBe('Use latest')
+    fire(latest as FakeNode, 'click')
     expect(e.dismissed()).toBe(1)
     fire(keep as FakeNode, 'click')
     // Saved over the version now shown, which the reader has seen.
     expect(e.commits).toEqual([['Mine', 2]])
+  })
+
+  it('says a save failed, not that someone changed it, when the reader is still typing', async () => {
+    const e = editor({ value: 'Old', version: 1 })
+    type(e.input, 'Mine')
+    await nextTick()
+    fire(e.input, 'change')
+    // The pending edit shows, and the reader goes on typing.
+    e.props.value = 'Mine'
+    await nextTick()
+    type(e.input, 'Mine and more')
+    await nextTick()
+    // The server refused the save (not a conflict): the value goes back, the version stays.
+    e.props.value = 'Old'
+    await nextTick()
+    expect(e.input.value).toBe('Mine and more')
+    const note = textOf(byData(e.root, 'data-changed-while-editing') as FakeNode)
+    expect(note).toContain('Your last change was not saved, so the saved value is still “Old”.')
+    expect(note).not.toContain('Changed by')
+    // Saving again goes out against the same version, which the server still has.
+    fire(e.input, 'change')
+    expect(e.commits).toEqual([
+      ['Mine', 1],
+      ['Mine and more', 1],
+    ])
   })
 
   it('follows a rolled-back value after a save, as before', async () => {
