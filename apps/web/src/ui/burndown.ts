@@ -61,20 +61,30 @@ export interface Burndown {
   actual: number[]
   /** The tick today is drawn at, or null outside the sprint. Its value is the points left now. */
   todayIndex: number | null
+  /**
+   * Whether today is itself a sprint day. False on a weekend in weekdays mode, or on a
+   * Saturday or Sunday start before the first weekday: today is then drawn at a nearby day's tick.
+   */
+  todayIsDay: boolean
 }
 
 /**
  * Points left at the start of each sprint day up to today, and now at today's tick. On a weekend
- * in weekdays mode, today is drawn at the last weekday before it. After the sprint, the last tick
- * is the points left at its end.
+ * in weekdays mode, today is drawn at the last weekday before it; a sprint that starts on a
+ * Saturday or Sunday draws a today before its first weekday at that weekday's tick. After the
+ * sprint, the last tick is the points left at its end. A sprint longer than MAX_DAYS ends at its
+ * last drawn day, so today and the end point never fall past the axis.
  */
 export function burndown(input: BurndownInput): Burndown {
   const days = sprintDays(input.start, input.end, input.days ?? 'weekdays')
   const total = Math.max(0, Number.isFinite(input.total) ? input.total : 0)
   const n = days.length
   const ideal = Array.from({ length: n + 1 }, (_, i) => (n === 0 ? 0 : total * (1 - i / n)))
-  const empty: Burndown = { days, total, ideal, actual: [], todayIndex: null }
-  if (n === 0) return empty
+  const empty: Burndown = { days, total, ideal, actual: [], todayIndex: null, todayIsDay: false }
+  const lastDay = days[n - 1]
+  if (lastDay === undefined) return empty
+  // Past the cap the axis stops at the last drawn day, and so does the sprint.
+  const end = n >= MAX_DAYS && lastDay < input.end ? lastDay : input.end
 
   // Points done on or before each date: one pass over the done dates in order.
   const done = Object.entries(input.doneByDay)
@@ -92,9 +102,9 @@ export function burndown(input: BurndownInput): Burndown {
   const today = input.today
   if (!ISO_DATE.test(today) || today < input.start) return empty
 
-  if (today > input.end) {
+  if (today > end) {
     const actual = days.map((day) => left(day, false))
-    actual.push(left(input.end, true))
+    actual.push(left(end, true))
     return { ...empty, actual }
   }
 
@@ -102,7 +112,7 @@ export function burndown(input: BurndownInput): Burndown {
   for (let i = 0; i < n; i++) if ((days[i] ?? '') <= today) t = i
   const actual = days.slice(0, t).map((day) => left(day, false))
   actual.push(left(today, true))
-  return { ...empty, actual, todayIndex: t }
+  return { ...empty, actual, todayIndex: t, todayIsDay: days[t] === today }
 }
 
 /** Plot area inside the SVG, from the mockup's 480 by 200 viewBox. */
@@ -156,14 +166,16 @@ const round = (v: number) => Math.round(v * 10) / 10
 export function burndownGeometry(b: Burndown, width = 480): BurndownGeometry {
   const right = Math.max(PLOT.left + 40, width - PLOT.rightPad)
   const n = b.days.length
-  const max = Math.max(1, b.total, ...b.actual)
+  const top = Math.max(b.total, ...b.actual)
+  // With no points at all the line lies on 0; the scale needs a span, the labels do not.
+  const max = top > 0 ? top : 1
   const xAt = (i: number) => round(PLOT.left + ((right - PLOT.left) * i) / Math.max(1, n))
   const yAt = (v: number) => round(PLOT.bottom - ((PLOT.bottom - PLOT.top) * v) / max)
   const path = (values: number[]) =>
     values.map((v, i) => `${i === 0 ? 'M' : 'L'}${String(xAt(i))} ${String(yAt(v))}`).join('')
 
   const half = Math.round(max / 2)
-  const levels = [max, half, 0].filter((v, i, all) => all.indexOf(v) === i)
+  const levels = top > 0 ? [max, half, 0].filter((v, i, all) => all.indexOf(v) === i) : [0]
   const grid = levels.map(yAt)
   const yLabels = levels.map((v) => ({
     x: PLOT.left - 10,

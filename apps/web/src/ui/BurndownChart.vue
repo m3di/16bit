@@ -55,7 +55,15 @@ const geo = computed(() => burndownGeometry(series.value, width.value))
 const rows = computed(() => {
   const b = series.value
   return b.days.map((day, i) => ({
-    day: formatDay(day) + (i === b.todayIndex ? ', today' : ''),
+    // On a weekend today is drawn at another day's tick: that row holds the points left now,
+    // but it is not today, so it says so.
+    day:
+      formatDay(day) +
+      (i !== b.todayIndex
+        ? ''
+        : b.todayIsDay
+          ? ', today'
+          : `, points left now (today is ${formatDay(today)})`),
     left: i < b.actual.length ? formatPoints(b.actual[i] ?? 0) : 'Not yet',
     ideal: formatPoints(b.ideal[i] ?? 0),
   }))

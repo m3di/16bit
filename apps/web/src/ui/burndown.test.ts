@@ -46,13 +46,33 @@ describe('sprintDays', () => {
     expect(sprintDays('2020-01-01', '2029-12-31', 'calendar')).toHaveLength(MAX_DAYS)
   })
 
-  it('does not move a day across a time zone or daylight saving change', () => {
-    expect(sprintDays('2026-03-27', '2026-03-30', 'calendar')).toEqual([
-      '2026-03-27',
-      '2026-03-28',
-      '2026-03-29',
-      '2026-03-30',
-    ])
+  it('does not move a day across a daylight saving change in the local zone', () => {
+    const saved = process.env['TZ']
+    try {
+      // Node reads TZ again when it changes. US clocks go forward on Sunday Mar 8 2026, Europe's
+      // on Sunday Mar 29: neither may drop, repeat or shift a day.
+      for (const zone of ['America/New_York', 'Europe/Berlin', 'Australia/Sydney']) {
+        process.env['TZ'] = zone
+        expect(new Date(2026, 2, 7, 12).getTimezoneOffset()).not.toBe(
+          new Date(2026, 6, 8, 12).getTimezoneOffset(),
+        )
+        expect(sprintDays('2026-03-06', '2026-03-10', 'calendar')).toEqual([
+          '2026-03-06',
+          '2026-03-07',
+          '2026-03-08',
+          '2026-03-09',
+          '2026-03-10',
+        ])
+        expect(sprintDays('2026-03-27', '2026-03-31')).toEqual([
+          '2026-03-27',
+          '2026-03-30',
+          '2026-03-31',
+        ])
+      }
+    } finally {
+      if (saved === undefined) delete process.env['TZ']
+      else process.env['TZ'] = saved
+    }
   })
 })
 
@@ -89,6 +109,54 @@ describe('burndown', () => {
     const b = burndown({ ...mockup, doneByDay: { '2026-11-01': 4, '2026-11-10': 99 } })
     expect(b.actual[0]).toBe(30)
     expect(b.actual.at(-1)).toBe(0)
+  })
+
+  it('marks a weekend today as not a sprint day', () => {
+    expect(burndown(mockup).todayIsDay).toBe(true)
+    expect(burndown({ ...mockup, today: '2026-11-14' }).todayIsDay).toBe(false)
+  })
+
+  it('draws a today on a Saturday start at the first weekday, holding the points left now', () => {
+    const b = burndown({
+      ...mockup,
+      start: '2026-11-07',
+      today: '2026-11-07',
+      doneByDay: { '2026-11-07': 4 },
+    })
+    expect(b.days[0]).toBe('2026-11-09')
+    expect(b.todayIndex).toBe(0)
+    expect(b.todayIsDay).toBe(false)
+    expect(b.actual).toEqual([30])
+  })
+
+  it('past the 366-day cap, ends the sprint at the last drawn day', () => {
+    const long = {
+      start: '2026-01-01',
+      end: '2027-06-30',
+      total: 100,
+      days: 'calendar' as const,
+      doneByDay: { '2026-06-01': 10, '2027-01-05': 30 },
+    }
+    const during = burndown({ ...long, today: '2027-03-01' })
+    expect(during.days).toHaveLength(MAX_DAYS)
+    expect(during.days.at(-1)).toBe('2027-01-01')
+    // Today is past the drawn axis, so it is after the (capped) sprint: no today, an end point.
+    expect(during.todayIndex).toBeNull()
+    expect(during.actual).toHaveLength(MAX_DAYS + 1)
+    expect(during.actual.at(-1)).toBe(90)
+    const inside = burndown({ ...long, today: '2026-12-31' })
+    expect(inside.todayIndex).toBe(MAX_DAYS - 2)
+    expect(inside.actual).toHaveLength(MAX_DAYS - 1)
+  })
+
+  it('with no points, draws the line on 0 and labels only 0', () => {
+    const b = burndown({ ...mockup, total: 0, doneByDay: {} })
+    expect(b.actual).toEqual([0, 0, 0, 0, 0, 0])
+    const g = burndownGeometry(b)
+    expect(g.yLabels.map((l) => l.text)).toEqual(['0'])
+    expect(g.grid).toEqual([170])
+    expect(g.actualPath).toMatch(/^M40 170L83 170/)
+    expect(g.today?.text).toBe('Today: 0 points left')
   })
 
   it('ignores bad dates and non-positive points', () => {
@@ -160,6 +228,12 @@ describe('BurndownChart', () => {
     expect(html).toContain('stroke-line')
     expect(html).toContain('fill-ink')
     expect(html).not.toMatch(/(fill|stroke)="#/)
+  })
+
+  it('on a weekend, the row at Friday holds the points left now and is not called today', async () => {
+    const html = await render({ ...mockup, today: '2026-11-14' })
+    expect(html).toContain('Nov 13, points left now (today is Nov 14)')
+    expect(html).not.toContain('Nov 13, today')
   })
 
   it('adds an end row after the sprint', async () => {
