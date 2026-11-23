@@ -7,6 +7,7 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDb, migrateToLatest } from './db/database.ts'
+import { analyzeSeeded } from './seed-analyze.ts'
 import { applySeed } from './demo-seed.ts'
 import { DEV_PASSWORD } from './dev-accounts.ts'
 import { applyProjectSeed, PARCEL_HUB } from './project-seed.ts'
@@ -86,6 +87,8 @@ try {
       )
     }
   }
+  // Fresh statistics, so the next reads plan for the rows just written (#306).
+  await analyzeSeeded(db)
 } catch (error) {
   console.error('seed: failed:', error)
   process.exitCode = 1
