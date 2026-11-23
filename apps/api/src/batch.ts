@@ -1,5 +1,5 @@
 import type { BatchResult, ParsedBatchRequest } from '@16bit/core'
-import { HttpError } from './http.ts'
+import { HttpError, nulRefusal } from './http.ts'
 import {
   createWrite,
   deleteWrite,
@@ -22,7 +22,9 @@ import { rerunOnKeyRace } from './items.ts'
 type Operation = ParsedBatchRequest['operations'][number]
 
 /** The status and body a failed operation's route would have answered. */
-function failure(error: unknown): BatchResult {
+function failure(error: unknown, op: Operation['op']): BatchResult {
+  const nul = nulRefusal(error, `POST /items/batch (${op})`)
+  if (nul) error = nul
   if (error instanceof HttpError) {
     return {
       status: error.status,
@@ -64,7 +66,7 @@ export async function runBatch(
     try {
       results.push(await runOne({ ...ctx, keyRefs: true }, operation))
     } catch (error) {
-      results.push(failure(error))
+      results.push(failure(error, operation.op))
     }
   }
   return results

@@ -69,6 +69,21 @@ export const sqlState = (error: unknown): string | undefined => {
   return typeof code === 'string' ? code : undefined
 }
 
+/**
+ * Postgres can't store U+0000 in `text` (22021) or `jsonb` (22P05). The core schemas refuse it
+ * in item values, causes, keys and filters (#221); for anything else they miss (names in hub
+ * settings, an account name), this turns the database's refusal into the client's 400 it is,
+ * not a 500. Nothing was written: the statement failed and its transaction rolls back. Logs
+ * the SQLSTATE and `where` (method and route, or the batch operation), never the error, which
+ * can quote the value.
+ */
+export function nulRefusal(error: unknown, where: string): HttpError | null {
+  const state = sqlState(error)
+  if (state !== '22021' && state !== '22P05') return null
+  console.warn(`U+0000 refused by the database (SQLSTATE ${state}) at ${where}`)
+  return new HttpError('invalid_request', 'Text cannot contain the character U+0000')
+}
+
 /** Parses request input with a shared schema from packages/core, or throws a 400. */
 export function parse<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   const result = schema.safeParse(input ?? {})

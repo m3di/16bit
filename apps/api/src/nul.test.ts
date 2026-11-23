@@ -234,7 +234,8 @@ describe('causes, keys and filters with U+0000 answer 400 invalid_request', () =
       values: { t: 'two' },
       condition: { attribute: 't', op: 'eq', value: NUL },
     })
-    expect([400, 422], res.body).toContain(res.statusCode)
+    expect(res.statusCode, res.body).toBe(400)
+    expect(res.json()).toMatchObject({ error: 'invalid_request' })
     expect(
       (
         await db
@@ -282,5 +283,40 @@ describe('names in hub settings with U+0000 answer 400, never 500', () => {
       400,
       'invalid_request',
     )
+    const folder = await as('POST', '/hubs/h1/folders', {
+      id: 'f1',
+      parentId: 'h1',
+      name: 'F',
+      color: 'blue',
+    })
+    expect(folder.statusCode, folder.body).toBe(201)
+    await refused(
+      () => as('PATCH', '/folders/f1', { version: 0, name: NUL }),
+      400,
+      'invalid_request',
+    )
+  })
+
+  it('an account name when accepting an invite', async () => {
+    const invite = await as('POST', '/invites', { workspaceRole: 'member' })
+    expect(invite.statusCode, invite.body).toBe(201)
+    const { token } = invite.json<{ token: string }>()
+    const email = 'nul@test.invalid'
+    await refused(
+      () =>
+        app.inject({
+          method: 'POST',
+          url: `/v1/auth/invites/${token}`,
+          payload: { name: NUL, email, password: 'a long enough password' },
+        }),
+      400,
+      'invalid_request',
+    )
+    const account = await db
+      .selectFrom('account')
+      .select('id')
+      .where('email', '=', email)
+      .executeTakeFirst()
+    expect(account).toBeUndefined()
   })
 })
