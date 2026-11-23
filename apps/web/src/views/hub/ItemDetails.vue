@@ -13,6 +13,7 @@ const {
   disabled,
   readOnly,
   refusedValue = () => null,
+  savingField = () => false,
 } = defineProps<{
   item: Item
   columns: readonly FolderAttributeDefinition[]
@@ -24,6 +25,8 @@ const {
   readOnly?: boolean
   /** The reader's value for a field that a 409 refused, and who changed it (D60). */
   refusedValue?: (attributeId: string) => { value: ItemValues[string]; by: string } | null
+  /** The reader's own save of this field is pending. */
+  savingField?: (attributeId: string) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -73,6 +76,7 @@ function commit(attributeId: string, value: ItemValues[string], basedOn: number 
         :version="item.version"
         :changed-by="changedBy"
         :refused="refusedFor(attribute.id)"
+        :saving="savingField(attribute.id)"
         @commit="(value, basedOn) => commit(attribute.id, value, basedOn)"
         @dismiss-refused="emit('dismissRefused', attribute.id)"
       />

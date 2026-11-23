@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Attribute, ItemValues } from '@16bit/core'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useTemplateRef } from 'vue'
 import {
   BaseButton,
   BaseInput,
@@ -14,7 +14,8 @@ import MultiSelectEditor from './MultiSelectEditor.vue'
 import RelationEditor from './RelationEditor.vue'
 import { listValue } from './relations.ts'
 import RichTextField from './RichTextField.vue'
-import { formatValue, fromInput, toInput } from './values.ts'
+import { incomingNote, quoted, richTextExcerpt, useFieldDraft } from './field-draft.ts'
+import { formatValue, fromInput, hasOwnEditor, toInput } from './values.ts'
 
 type Value = ItemValues[string] | undefined
 
@@ -29,6 +30,7 @@ const {
   version = null,
   changedBy = 'Someone else',
   refused = null,
+  saving,
 } = defineProps<{
   attribute: Attribute
   value: Value
@@ -46,6 +48,8 @@ const {
   changedBy?: string
   /** The reader's value a conflict refused (a 409), offered back to them, and who changed it. */
   refused?: { value: ItemValues[string]; by: string } | null
+  /** The reader's own save of this field is pending (D60: the draft's base waits for it). */
+  saving?: boolean
 }>()
 
 /** `basedOn`: the item version the edit started from, so a change since is a 409 (D60). */
@@ -55,44 +59,19 @@ const emit = defineEmits<{
   dismissRefused: []
 }>()
 
-// The input holds a draft. While the reader has not changed it, it follows the value, which is
-// how a rolled-back edit becomes visible. Once they have typed, a change from someone else does
-// not replace what they typed: it is shown beside the field, and their save goes out against
-// the version they started from, so it meets the usual conflict (D60, decided by the maintainer
-// during M3).
-const shownText = () => toInput(attribute, value)
-const display = (text: string) => (text === '' ? 'no value' : `“${text}”`)
-const draft = ref(shownText())
-/** The text the draft last followed, and the item version then: what an edit is based on. */
-let synced = { text: draft.value, version }
 const localError = ref('')
-/** Someone else's value that arrived while the reader was typing. */
-const incoming = ref<{ text: string; by: string } | null>(null)
-const typing = () => draft.value !== synced.text
-
-function follow(text: string) {
-  draft.value = text
-  synced = { text, version }
-  incoming.value = null
-  localError.value = ''
-}
-
-watch(shownText, (text) => {
-  if (version !== null && typing() && text !== draft.value) {
-    incoming.value = { text, by: changedBy }
-    return
-  }
-  follow(text)
-})
-
-// A newer version that leaves this field as it was (another field changed, or the reader's
-// own save came back) moves the base along: only a change to this field makes a conflict.
-watch(
-  () => version,
-  (now) => {
-    if (shownText() === synced.text) synced = { ...synced, version: now }
+// The input holds a draft that keeps what the reader typed when a change arrives (D60).
+const shownText = () => toInput(attribute, value)
+const { draft, incoming, take, rebase } = useFieldDraft({
+  shown: shownText,
+  key: (text) => text,
+  version: () => version,
+  changedBy: () => changedBy,
+  saving: () => saving,
+  onFollow: () => {
+    localError.value = ''
   },
-)
+})
 
 function commit() {
   const parsed = fromInput(attribute, draft.value)
@@ -101,25 +80,42 @@ function commit() {
     return
   }
   localError.value = ''
-  if (draft.value === synced.text) {
-    // Unchanged after all: someone else's value, if one came, is simply shown.
-    if (incoming.value) follow(shownText())
-    return
-  }
-  const basedOn = synced.version
-  incoming.value = null
-  // From here the draft follows the value again, so a rolled-back edit shows.
-  synced = { text: draft.value, version: basedOn }
-  emit('commit', parsed.value, basedOn)
+  const taken = take()
+  if (taken) emit('commit', parsed.value, taken.basedOn)
 }
 
-/** Saves the refused value again, over the value now shown. */
+const richEditor = useTemplateRef<InstanceType<typeof RichTextField>>('richEditor')
+
+/** Saves the refused value again, over the value now shown, which the reader has seen. */
 function keepMine() {
   if (!refused) return
-  synced = { text: shownText(), version }
+  // Fields with their own editor (rich text, lists) save a whole value, not input text.
+  if (hasOwnEditor(attribute)) {
+    // Whatever was written since is replaced, so the save is not taken for a failed one.
+    richEditor.value?.reset(refused.value)
+    emit('commit', refused.value, version)
+    return
+  }
+  rebase()
   draft.value = toInput(attribute, refused.value)
   commit()
 }
+
+/** A value as the conflict note quotes it, or `null` where a quote would only be IDs. */
+function quote(v: ItemValues[string]): string | null {
+  switch (attribute.type) {
+    case 'actor':
+    case 'relation':
+      return null
+    case 'multi_select':
+      return quoted(formatValue(attribute, v))
+    case 'rich_text':
+      return quoted(richTextExcerpt(v))
+    default:
+      return quoted(toInput(attribute, v))
+  }
+}
+const refusedQuote = computed(() => (refused ? quote(refused.value) : null))
 
 const list = computed(() => listValue(value))
 const readOnlyHint = 'You can view this but not change it.'
@@ -205,12 +201,16 @@ function onToggle(checked: boolean) {
   />
   <RichTextField
     v-else-if="attribute.type === 'rich_text'"
+    ref="richEditor"
     :value="value"
     :label="label"
     :error="shownError"
     :disabled="disabled"
     :read-only="readOnly"
-    @commit="emit('commit', $event)"
+    :version="version"
+    :changed-by="changedBy"
+    :saving="saving"
+    @commit="(v, basedOn) => emit('commit', v, basedOn)"
   />
   <CheckboxField
     v-else-if="attribute.type === 'boolean'"
@@ -242,19 +242,18 @@ function onToggle(checked: boolean) {
     @change="commit"
     @keydown.enter="onEnter"
   />
-  <!-- Notes about other people's changes, for the fields that keep a typed draft. -->
+  <!-- Rich text keeps its own draft and shows its own note, in RichTextField. -->
   <FormNotice v-if="incoming" tone="info" data-changed-while-editing>
-    Changed by {{ incoming.by }} while you were editing: {{ display(incoming.text) }}. Saving yours
-    will ask which to keep.
+    {{ incomingNote(incoming, incoming.value) }}
   </FormNotice>
   <FormNotice v-if="refused" tone="info" data-refused-draft>
-    {{ refused.by }} changed {{ attribute.name }} while you were editing, so your value
-    {{ display(toInput(attribute, refused.value)) }} was not saved. Theirs is shown.
+    {{ refused.by }} changed this item while you were editing, so your {{ attribute.name }}
+    {{ refusedQuote ?? 'value' }} was not saved. The latest value is shown.
     <template #action>
       <span class="flex flex-wrap gap-2">
         <BaseButton size="sm" variant="outline" @click="keepMine">Keep mine</BaseButton>
         <BaseButton size="sm" variant="quiet" @click="emit('dismissRefused')"
-          >Use theirs</BaseButton
+          >Use latest</BaseButton
         >
       </span>
     </template>

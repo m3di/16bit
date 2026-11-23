@@ -461,6 +461,7 @@ async function submitCreate(values: ItemValues) {
               :disabled="items.isCreating(item.id)"
               :read-only="readOnly"
               :refused-value="(attributeId: string) => items.refusedValue(item.id, attributeId)"
+              :saving-field="(attributeId: string) => items.savingField(item.id, attributeId)"
               @save="(values, basedOn) => items.save(item.id, values, basedOn)"
               @dismiss-refused="items.forgetRefused(item.id, [$event])"
             />

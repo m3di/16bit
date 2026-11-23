@@ -20,14 +20,22 @@ type Trx = Transaction<Database>
 
 export type MutationOp = 'create' | 'update' | 'delete'
 
-/** What this attempt would write: compared with the first attempt's revision. */
-export interface MutationAttempt {
-  op: MutationOp
-  /** The item, when the attempt names one (patch, delete, create with an `id`). */
-  itemId?: string | undefined
-  /** The folder a create goes into. */
-  folderId?: string | undefined
-}
+/**
+ * What this attempt would write: compared with the first attempt's revision. An `upsert` (D64)
+ * may have created or patched, so it matches a first attempt of either op (#200): one in the hub
+ * `hubId`, where a create was of the key `externalKey` into `folderId`, and the item that holds
+ * the key now, if any, is the first attempt's. A patch's revision does not record the key, so
+ * once no item holds it the hub is all that is compared.
+ */
+export type MutationAttempt =
+  | {
+      op: MutationOp
+      /** The item, when the attempt names one (patch, delete, create with an `id`). */
+      itemId?: string | undefined
+      /** The folder a create goes into. */
+      folderId?: string | undefined
+    }
+  | { op: 'upsert'; hubId: string; externalKey: string; folderId: string }
 
 /** The first attempt with this ID, as far as the caller can still read it. */
 export interface KnownMutation {
@@ -48,7 +56,7 @@ export async function findMutation(
 ): Promise<KnownMutation | null> {
   const row = await trx
     .selectFrom('revision')
-    .select(['item_id', 'patch'])
+    .select(['item_id', 'hub_id', 'patch'])
     .where('workspace_id', '=', workspaceId)
     .where('actor', '=', actor)
     .where('client_mutation_id', '=', clientMutationId)
@@ -56,9 +64,11 @@ export async function findMutation(
   if (!row) return null
   const op = row.patch['op'] as MutationOp
   const same =
-    op === attempt.op &&
-    (attempt.itemId === undefined || attempt.itemId === row.item_id) &&
-    (attempt.folderId === undefined || attempt.folderId === row.patch['folderId'])
+    attempt.op === 'upsert'
+      ? await sameUpsert(trx, workspaceId, attempt, { ...row, op })
+      : op === attempt.op &&
+        (attempt.itemId === undefined || attempt.itemId === row.item_id) &&
+        (attempt.folderId === undefined || attempt.folderId === row.patch['folderId'])
   if (!same) {
     throw new HttpError(
       'mutation_id_reused',
@@ -66,6 +76,32 @@ export async function findMutation(
     )
   }
   return { op, itemId: row.item_id }
+}
+
+/** Whether an upsert's first attempt is the revision `first` (see `MutationAttempt`). */
+async function sameUpsert(
+  trx: Trx,
+  workspaceId: string,
+  attempt: Extract<MutationAttempt, { op: 'upsert' }>,
+  first: { op: MutationOp; item_id: string; hub_id: string; patch: Record<string, unknown> },
+): Promise<boolean> {
+  if (first.hub_id !== attempt.hubId) return false
+  if (first.op === 'delete') return false
+  if (
+    first.op === 'create' &&
+    (first.patch['externalKey'] !== attempt.externalKey ||
+      first.patch['folderId'] !== attempt.folderId)
+  ) {
+    return false
+  }
+  const holder = await trx
+    .selectFrom('item')
+    .select('id')
+    .where('workspace_id', '=', workspaceId)
+    .where('hub_id', '=', attempt.hubId)
+    .where('external_key', '=', attempt.externalKey)
+    .executeTakeFirst()
+  return holder === undefined || holder.id === first.item_id
 }
 
 /** The unique index on a revision's mutation ID (migration 0012). */
