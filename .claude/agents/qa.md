@@ -11,9 +11,9 @@ Before starting, read `CLAUDE.md`, `docs/WORKFLOW.md`, and the issue's acceptanc
 
 When verifying a pull request:
 
-1. Check out the branch in its worktree. Run the app and the tests.
+1. Check out the branch in its worktree. Read CI's results for the full suite and Playwright; locally run at most the specs you touch, one at a time, with `--project chromium` against a running `pnpm dev` ("Keep local runs light" in `CLAUDE.md`).
 2. Go through the acceptance criteria one by one and try to break each: empty input, invalid values, stale versions, a second writer, narrow screens.
-3. If the change is user-visible, add or extend a Playwright test in `e2e` that covers it, and push it to the same branch.
+3. If the change is user-visible, add or extend a Playwright test in `e2e` that covers it, push it to the same branch, and confirm it passes in CI.
 4. Post one comment prefixed `**[qa]**` listing each criterion as passed or failed, with steps to reproduce any failure.
 5. Set `qa:passed` if everything holds. Otherwise leave it unset, set the issue back to `stage:in-progress`, and address the comment to the author role.
 
