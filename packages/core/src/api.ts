@@ -511,16 +511,26 @@ export const revisionPatchSchema = z.discriminatedUnion('op', [
 ])
 export type RevisionPatch = z.infer<typeof revisionPatchSchema>
 
-/** One entry of an item's history (D9, D63). `actor` is the principal who wrote it. */
-export const revisionEntrySchema = z.strictObject({
+const revisionEntryFields = {
   seq: seqSchema,
   version: z.int().min(1),
   op: z.enum(REVISION_OPS),
-  patch: revisionPatchSchema,
   actor: idSchema,
   at: timestampSchema,
   cause: itemCauseSchema.nullable(),
-})
+}
+
+/**
+ * One entry of an item's history (D9, D63). `actor` is the principal who wrote it.
+ *
+ * A stored patch that no longer matches `revisionPatchSchema` (written by an older version, for
+ * example) comes back as `{ patch: null, unreadable: true }` with the rest of the entry, so one
+ * such revision never fails the whole history read (#222). `op` is still the stored operation.
+ */
+export const revisionEntrySchema = z.union([
+  z.strictObject({ ...revisionEntryFields, patch: revisionPatchSchema }),
+  z.strictObject({ ...revisionEntryFields, patch: z.null(), unreadable: z.literal(true) }),
+])
 export type RevisionEntry = z.infer<typeof revisionEntrySchema>
 
 /**
