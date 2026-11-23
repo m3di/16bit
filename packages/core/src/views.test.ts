@@ -24,6 +24,7 @@ import {
   type Filter,
   type ViewSchemaContext,
   type ViewTree,
+  viewTreeBytes,
 } from './index.ts'
 
 // Contracts for root views, blocks, aggregates and view data (#252, D76 to D83).
@@ -455,6 +456,60 @@ describe('parseViewTree: structure (D14, D77)', () => {
       'A view has at most 20 data blocks',
     ])
     expect(errorsOf(tree(...tables.slice(0, 20)))).toEqual([])
+  })
+
+  it('counts the stored tree, with defaults filled in, against 128 KiB', () => {
+    // Headings gain `level: 2` when parsed. Text blocks fill the rest up to 10 bytes under the
+    // cap as sent, so the tree passes before parsing and fails as it would be stored.
+    const headings: BlockInput[] = Array.from({ length: 150 }, (_, i) => ({
+      id: `h${String(i)}`,
+      type: 'heading',
+      config: { text: 'h' },
+    }))
+    const texts = (fill: number): BlockInput[] =>
+      Array.from({ length: 25 }, (_, i) => ({
+        id: `t${String(i)}`,
+        type: 'text',
+        config: { text: 'x'.repeat(i === 0 ? fill : 4900) },
+      }))
+    const at = (fill: number) => tree(...headings, ...texts(fill))
+    const fill = 1 + MAX_VIEW_BYTES - 10 - viewTreeBytes(at(1))
+    expect(viewTreeBytes(at(fill))).toBe(MAX_VIEW_BYTES - 10)
+    expect(errorsOf(at(fill))).toEqual([{ path: '', message: 'A view is at most 128 KiB' }])
+    // Room for the defaults: 150 headings at `, "level": 2` (12 bytes) each.
+    const fits = fill - 150 * 12
+    const parsedFits = parseViewTree(at(fits))
+    expect(parsedFits.ok).toBe(true)
+    if (parsedFits.ok) expect(viewTreeBytes(parsedFits.tree)).toBe(MAX_VIEW_BYTES - 10)
+  })
+
+  it('refuses U+0000 anywhere in the tree, as Postgres would (#221)', () => {
+    const nul = 'a\u0000b'
+    const paths = (raw: unknown) => errorsOf(raw).map((e) => e.path)
+    expect(paths(tree({ id: 'h', type: 'heading', config: { text: nul } }))).toEqual([
+      'root.children.0.config.text',
+    ])
+    expect(paths(tree({ id: 't', type: 'text', config: { text: nul } }))).toEqual([
+      'root.children.0.config.text',
+    ])
+    expect(
+      paths({ schemaVersion: 1, root: { id: 'p', type: 'page', config: { title: nul } } }),
+    ).toEqual(['root.config.title'])
+    const board = { ...VALID.board, config: { ...(VALID.board.config as object), emptyText: nul } }
+    expect(paths(tree(board as BlockInput))).toEqual(['root.children.0.config.emptyText'])
+    const filtered = {
+      id: 'tbl',
+      type: 'table',
+      config: {
+        binding: { folderId: 'backlog', where: { attribute: 'title', op: 'eq', value: nul } },
+      },
+    }
+    expect(paths(tree(filtered as BlockInput))).toEqual([
+      'root.children.0.config.binding.where.value',
+    ])
+    // The schemas refuse it too, for callers that parse a config directly.
+    expect(BLOCK_TYPES.heading.configSchema.safeParse({ text: nul }).success).toBe(false)
+    expect(BLOCK_TYPES.text.configSchema.safeParse({ text: nul }).success).toBe(false)
   })
 
   it('refuses a tree over 128 KiB', () => {

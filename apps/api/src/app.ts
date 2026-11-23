@@ -689,10 +689,25 @@ export function buildApp(options: AppOptions): FastifyInstance {
           })
 
           // Schema writes for hub settings (#112, schema-writes.ts).
+          // The contracts have views-only folders and "Opens on" (D76) from #252; the routes
+          // store them from M4-03. Until then they are refused, never ignored: a folder asked
+          // for as views-only must not quietly become an ordinary one.
+          const refuseUnservedViews = (body: {
+            viewsOnly?: boolean
+            opensOnFolderId?: unknown
+          }) => {
+            if (body.viewsOnly === true) {
+              throw new HttpError('invalid_request', 'viewsOnly: not supported yet')
+            }
+            if (body.opensOnFolderId !== undefined) {
+              throw new HttpError('invalid_request', 'opensOnFolderId: not supported yet')
+            }
+          }
 
           ws.patch('/hubs/:hubId', async (request) => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             const body = parse(updateHubSchema, request.body)
+            refuseUnservedViews(body)
             return scoped(request, (trx) =>
               updateHub(trx, workspaceId, request.principal, hubId, body),
             )
@@ -718,6 +733,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/hubs/:hubId/folders', async (request, reply) => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             const body = parse(createFolderSchema, request.body)
+            refuseUnservedViews(body)
             const folder = await scoped(request, (trx) =>
               createFolder(trx, workspaceId, request.principal, hubId, body),
             )

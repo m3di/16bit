@@ -9,6 +9,7 @@ import {
   type Measure,
 } from './aggregate.ts'
 import { idSchema, timestampSchema, type Attribute } from './entities.ts'
+import { hasNul, noNul, NUL_MESSAGE } from './nul.ts'
 import { blockReferences, checkFilterOperands, countConditions } from './operands.ts'
 import {
   boundedFilterSchema,
@@ -63,7 +64,9 @@ export const setBindingSchema = z.strictObject({
 export type SetBinding = z.infer<typeof setBindingSchema>
 
 /**
- * One item: a fixed item in a folder, or the first match of a rule (`where` may use `$me` and
+ * One item: a fixed item in a folder, or the first match of a rule. A fixed `itemId` resolves
+ * only within `folderId` (a folder of the view's own hub, D79); an item that is elsewhere,
+ * gone or hidden answers `not_found` in view data. A rule (`where` may use `$me` and
  * `$now`, never `$block`, D77). No match is not an error: the block shows its empty state and
  * blocks that name it with `$block` answer `unresolved`.
  */
@@ -84,8 +87,18 @@ export type BindingKind = (typeof BINDING_KINDS)[number]
 // ----------------------------------------------------------------------------------------
 // Block configs (D77)
 
-const titleSchema = z.string().trim().min(1).max(200)
-const emptyTextSchema = z.string().trim().min(1).max(200)
+const titleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(...noNul)
+const emptyTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(...noNul)
 /** Weekdays (Monday to Friday, no holidays) or calendar days (D81). */
 export const DAY_COUNTS = ['weekdays', 'calendar'] as const
 const daysSchema = z.enum(DAY_COUNTS).default('weekdays')
@@ -112,7 +125,14 @@ export const headingBlockConfigSchema = z.strictObject({
   level: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(2),
 })
 /** Plain text. */
-export const textBlockConfigSchema = z.strictObject({ text: z.string().trim().min(1).max(5000) })
+export const textBlockConfigSchema = z.strictObject({
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .max(5000)
+    .refine(...noNul),
+})
 
 /** The default view's block: today's folder table (`ItemsBlock`). */
 export const tableBlockConfigSchema = z.strictObject({ binding: setBindingSchema })
@@ -612,14 +632,15 @@ export type ParseViewTreeResult = { ok: true; tree: ViewTree } | { ok: false; er
  * every block's config, the structure (root page, allowed children, unique IDs, caps) and the
  * `$block` rules. Used on every read of a stored tree and on PUT, which answers 422
  * `invalid_view` with these errors. Paths are like `root.children.0.config.binding.where`.
+ * The returned tree, defaults filled in, is the form to store: it is within `MAX_VIEW_BYTES`
+ * as the `view_tree_size` CHECK counts it, and holds no U+0000.
  */
 export function parseViewTree(raw: unknown): ParseViewTreeResult {
-  if (viewTreeBytes(raw) > MAX_VIEW_BYTES) {
-    return {
-      ok: false,
-      errors: [{ path: '', message: `A view is at most ${String(MAX_VIEW_BYTES / 1024)} KiB` }],
-    }
-  }
+  const tooBig = { path: '', message: `A view is at most ${String(MAX_VIEW_BYTES / 1024)} KiB` }
+  // Before parsing, so an oversized body costs no more than this; and after, below.
+  if (viewTreeBytes(raw) > MAX_VIEW_BYTES) return { ok: false, errors: [tooBig] }
+  const nul = nulPath(raw, [])
+  if (nul !== null) return { ok: false, errors: [{ path: nul, message: NUL_MESSAGE }] }
   let tree = raw
   if (typeof tree === 'object' && tree !== null && !Array.isArray(tree)) {
     let record = tree as Record<string, unknown>
@@ -633,11 +654,34 @@ export function parseViewTree(raw: unknown): ParseViewTreeResult {
     tree = record
   }
   const parsed = viewTreeSchema.safeParse(tree)
-  if (parsed.success) return { ok: true, tree: parsed.data }
-  return {
-    ok: false,
-    errors: parsed.error.issues.map((i) => ({ path: issuePath(i.path), message: i.message })),
+  if (!parsed.success) {
+    return {
+      ok: false,
+      errors: parsed.error.issues.map((i) => ({ path: issuePath(i.path), message: i.message })),
+    }
   }
+  // The parsed tree, defaults filled in, is what is stored and what the `view_tree_size` CHECK
+  // measures; defaults can push a tree just under the cap over it.
+  if (viewTreeBytes(parsed.data) > MAX_VIEW_BYTES) return { ok: false, errors: [tooBig] }
+  return { ok: true, tree: parsed.data }
+}
+
+/**
+ * The path of the first string or key holding U+0000, which Postgres can't store in `jsonb`
+ * (#221), or null. Covers every value of the tree, filter operands included.
+ */
+function nulPath(value: unknown, path: string[]): string | null {
+  if (typeof value === 'string') return hasNul(value) ? path.join('.') : null
+  if (typeof value !== 'object' || value === null) return null
+  const entries: [string, unknown][] = Array.isArray(value)
+    ? value.map((v, i): [string, unknown] => [String(i), v])
+    : Object.entries(value)
+  for (const [key, v] of entries) {
+    if (hasNul(key)) return [...path, JSON.stringify(key)].join('.')
+    const found = nulPath(v, [...path, key])
+    if (found !== null) return found
+  }
+  return null
 }
 
 /**
