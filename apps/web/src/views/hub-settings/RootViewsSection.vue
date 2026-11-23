@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BlockTypeName, HubDescription } from '@16bit/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   BaseButton,
@@ -13,6 +13,7 @@ import {
 import BlockForm from '../composer/BlockForm.vue'
 import ComposerPreview from '../composer/ComposerPreview.vue'
 import OutlineNode from '../composer/OutlineNode.vue'
+import { provideOutlineFocus } from '../composer/outline-focus.ts'
 import {
   BLOCK_LABELS,
   childTypes,
@@ -44,6 +45,7 @@ const router = useRouter()
 
 const schema = computed(() => composerSchema(description))
 const composer = useViewComposer({ api, schema: () => schema.value })
+const outlineFocus = provideOutlineFocus()
 
 // ---- the folder being composed: `?folder=`, else the one the hub opens on, else the root ----
 const folders = computed(() =>
@@ -81,6 +83,23 @@ onMounted(() => {
 const people = computed(() =>
   access.members.value.state === 'ready' ? access.members.value.data : [],
 )
+
+// A draft is never dropped without asking: leaving the section, another folder through the
+// address (back button, a Compose link), or closing the tab.
+const LEAVE = 'This view has unsaved changes. Leave and discard them?'
+const mayLeave = () =>
+  !composer.dirty.value || (typeof window !== 'undefined' && window.confirm(LEAVE))
+const stopGuard = router.beforeEach((to, from) =>
+  to.name === from.name && to.query['folder'] === from.query['folder'] ? true : mayLeave(),
+)
+const onUnload = (event: BeforeUnloadEvent) => {
+  if (composer.dirty.value) event.preventDefault()
+}
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', onUnload)
+onBeforeUnmount(() => {
+  stopGuard()
+  if (typeof window !== 'undefined') window.removeEventListener('beforeunload', onUnload)
+})
 
 // ---- state ---------------------------------------------------------------------------------
 const state = computed((): SettingsState => {
@@ -171,10 +190,30 @@ function add() {
     false,
   )
 }
-function remove(id: string) {
+// Focus stays in the outline (DESIGN.md, as OptionsEditor does): after Remove on the block that
+// took its place, else the one before it, else the parent; after a move on the moved block's
+// button, or its other move button when this one is now at the end.
+async function remove(id: string) {
   const at = composer.blocks.value.find((l) => l.block.id === id)
   composer.remove(id)
-  if (at) emit('status', `Removed ${BLOCK_LABELS[at.block.type]} ${id}.`, false)
+  if (!at?.parent) return
+  emit('status', `Removed ${BLOCK_LABELS[at.block.type]} ${id}.`, false)
+  const siblings = at.parent.children ?? []
+  const next = siblings[at.index] ?? siblings[at.index - 1] ?? at.parent
+  await nextTick()
+  outlineFocus.focus(next.id, 'select')
+}
+async function move(id: string, by: -1 | 1) {
+  composer.move(id, by)
+  await nextTick()
+  const at = composer.blocks.value.find((l) => l.block.id === id)
+  const count = at?.parent?.children?.length ?? 1
+  if (!at) return
+  const first = at.index === 0
+  const last = at.index === count - 1
+  if (count === 1) outlineFocus.focus(id, 'select')
+  else if (by === -1) outlineFocus.focus(id, first ? 'down' : 'up')
+  else outlineFocus.focus(id, last ? 'up' : 'down')
 }
 
 // ---- save, discard, reset ------------------------------------------------------------------
@@ -267,7 +306,7 @@ const busy = computed(() => composer.busy.value !== null)
               :schema="schema"
               root
               @select="composer.selected.value = $event"
-              @move="(id, by) => composer.move(id, by)"
+              @move="move"
               @remove="remove"
             />
           </ul>
@@ -287,7 +326,7 @@ const busy = computed(() => composer.busy.value !== null)
 
         <BlockForm
           v-if="selected"
-          :key="selected.block.id"
+          :key="`${String(composer.revision.value)}:${selected.block.id}`"
           :block="selected.block"
           :root="draft"
           :path="selected.path"
@@ -343,7 +382,11 @@ const busy = computed(() => composer.busy.value !== null)
   <ConfirmDialog
     v-model:open="confirmReset"
     :title="`Reset ${folder?.name ?? 'this folder'} to its default view?`"
-    message="The saved view is deleted and the folder opens on its default again. This cannot be undone."
+    :message="
+      composer.dirty.value
+        ? 'The saved view is deleted, your unsaved changes are discarded, and the folder opens on its default again. This cannot be undone.'
+        : 'The saved view is deleted and the folder opens on its default again. This cannot be undone.'
+    "
     confirm-label="Reset to default"
     :busy="composer.busy.value === 'reset'"
     @confirm="reset"

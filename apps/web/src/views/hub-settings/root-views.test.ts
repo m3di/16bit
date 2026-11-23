@@ -3,7 +3,14 @@ import { defaultViewTree, type ViewData } from '@16bit/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ApiRequestError } from '../../api/client.ts'
-import { findAll, fire, mount, setLayout, type FakeNode } from '../../test/fake-dom.ts'
+import {
+  activeElement,
+  findAll,
+  fire,
+  mount,
+  setLayout,
+  type FakeNode,
+} from '../../test/fake-dom.ts'
 import { fakeApi as fakeFetch, json } from '../hub/fixtures.test-utils.ts'
 import type { RawView, ViewSource, ViewWrites } from '../root-view/source.ts'
 import { description, HUB, WS } from './fixtures.test-utils.ts'
@@ -185,5 +192,39 @@ describe('the root view composer', () => {
     // The outline marks the block.
     const row = findAll(root, (n) => n.props['data-outline-block'] === 'list')[0]
     expect(row && squeeze(row)).toContain('2 problems')
+  })
+
+  it('keeps focus in the outline when a block is removed or moved to an end', async () => {
+    const { root } = await open((_, __, tree) => Promise.resolve(stored(1, tree)))
+    const add = findAll(root, (n) => n.props['data-composer-add'] !== undefined)[0]
+    const select = add && findAll(add, (n) => n.tag === 'select')[0]
+    if (!select) throw new Error('no add select')
+    choose(select, 'list')
+    fire(button(root, 'Add block'), 'click')
+    await flush()
+    const rowOf = (n: FakeNode | undefined) => {
+      let at = n
+      while (at && at.props['data-outline-block'] === undefined) at = at.parent ?? undefined
+      return at?.props['data-outline-block']
+    }
+    const labelled = (label: string) => {
+      const b = findAll(root, (n) => n.tag === 'button' && n.props['aria-label'] === label)[0]
+      if (!b) throw new Error(`no button "${label}"`)
+      return b
+    }
+
+    // Moving the table down puts it last: Down is now disabled, so focus is on its Up.
+    fire(labelled('Move Table: Backlog down'), 'click')
+    await flush()
+    let focused = activeElement(root)
+    expect(rowOf(focused)).toBe('table')
+    expect(focused?.props['aria-label']).toBe('Move Table: Backlog up')
+
+    // Removing the first block: the one that took its place gets focus.
+    fire(labelled('Remove List: Backlog'), 'click')
+    await flush()
+    focused = activeElement(root)
+    expect(rowOf(focused)).toBe('table')
+    expect(focused?.props['data-outline-select']).toBeDefined()
   })
 })

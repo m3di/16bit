@@ -173,4 +173,92 @@ describe('useViewComposer', () => {
     c.add('page', 'number')
     expect([...c.unsaved.value].sort()).toEqual(['number', 'table'])
   })
+
+  it('counts blocks that name a changed block through `$block` as unsaved too', async () => {
+    const tree = {
+      schemaVersion: 1,
+      root: {
+        id: 'page',
+        type: 'page',
+        config: {},
+        children: [
+          {
+            id: 'sprint',
+            type: 'fields',
+            config: {
+              binding: { by: 'rule', folderId: 'backlog', where: { and: [] }, sort: [] },
+              fields: ['title'],
+              layout: 'inline',
+            },
+          },
+          {
+            id: 'open',
+            type: 'number',
+            config: {
+              kind: 'aggregate',
+              binding: {
+                folderId: 'backlog',
+                where: { attribute: 'title', op: 'in', value: [{ $block: 'sprint' }] },
+                sort: [],
+                limit: 50,
+              },
+              value: { fn: 'count' },
+            },
+          },
+          {
+            id: 'all',
+            type: 'table',
+            config: { binding: { folderId: 'backlog', sort: [], limit: 50 } },
+          },
+        ],
+      },
+    }
+    const { api } = fakeApi({ view: () => Promise.resolve(view(2, tree)) })
+    const c = compose(api)
+    await c.load('backlog')
+    expect([...c.unsaved.value]).toEqual([])
+    // Another sprint rule: "this sprint" numbers are no longer the stored ones.
+    const sprint = c.blocks.value.find((l) => l.block.id === 'sprint')?.block
+    if (sprint) sprint.config['binding'] = { by: 'item', folderId: 'backlog', itemId: 'i9' }
+    expect([...c.unsaved.value].sort()).toEqual(['open', 'sprint'])
+  })
+
+  it('on a 409 from Reset keeps the view and offers their version', async () => {
+    const theirs = view(5)
+    const { api } = fakeApi({
+      view: () => Promise.resolve(view(3)),
+      reset: () =>
+        Promise.reject(
+          new ApiRequestError('conflict', 'Stale', 409, {
+            error: 'conflict',
+            message: 'Stale',
+            current: theirs,
+          }),
+        ),
+    })
+    const c = compose(api)
+    await c.load('backlog')
+    expect(await c.reset()).toBe(false)
+    expect(c.notice.value?.tone).toBe('conflict')
+    expect(c.saved.value?.version).toBe(3)
+    expect(c.busy.value).toBeNull()
+    c.reload()
+    expect(c.saved.value?.version).toBe(5)
+  })
+
+  it('says why a Reset failed for any other reason, and changes nothing', async () => {
+    const { api, calls } = fakeApi({
+      view: () => Promise.resolve(view(3)),
+      reset: () => Promise.reject(new ApiRequestError('forbidden', 'Forbidden', 403)),
+    })
+    const c = compose(api)
+    await c.load('backlog')
+    expect(await c.reset()).toBe(false)
+    expect(c.notice.value).toEqual({
+      tone: 'error',
+      text: 'Only hub admins can change root views. The view was not reset.',
+    })
+    expect(c.saved.value?.version).toBe(3)
+    expect(calls.filter((x) => x.method === 'view')).toHaveLength(1)
+  })
 })

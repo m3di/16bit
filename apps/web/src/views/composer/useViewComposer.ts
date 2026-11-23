@@ -50,6 +50,27 @@ export interface ViewComposerOptions {
 const sameBlock = (a: DraftBlock, b: { type: string; config: unknown }) =>
   a.type === b.type && stableJson(a.config) === stableJson(b.config)
 
+/** Blocks a draft block names: `{ "$block": id }` anywhere in its config, a burndown's range. */
+export function referencedBlocks(block: DraftBlock): string[] {
+  const out = new Set<string>()
+  const visit = (v: unknown) => {
+    if (Array.isArray(v)) {
+      v.forEach(visit)
+    } else if (v && typeof v === 'object') {
+      const r = v as Record<string, unknown>
+      if (typeof r['$block'] === 'string') out.add(r['$block'])
+      Object.values(r).forEach(visit)
+    }
+  }
+  visit(block.config)
+  const range = block.config['range']
+  if (block.type === 'chart' && range && typeof range === 'object') {
+    const id = (range as Record<string, unknown>)['block']
+    if (typeof id === 'string') out.add(id)
+  }
+  return [...out]
+}
+
 function refusal(error: ApiRequestError, what: 'save' | 'reset'): string {
   const nothing = what === 'save' ? 'The view was not saved.' : 'The view was not reset.'
   if (error.isNoPermission) return `Only hub admins can change root views. ${nothing}`
@@ -68,6 +89,8 @@ export function useViewComposer(options: ViewComposerOptions) {
   const draft = ref<DraftBlock | null>(null)
   const baseline = ref('')
   const selected = ref<string | null>(null)
+  /** Moves on each time the draft is replaced (load, save, reload, discard): forms start over. */
+  const revision = ref(0)
   const serverErrors = shallowRef<TreeError[]>([])
   const notice = shallowRef<ComposerNotice | null>(null)
   const busy = ref<'save' | 'reset' | null>(null)
@@ -105,6 +128,7 @@ export function useViewComposer(options: ViewComposerOptions) {
   function take(answer: RawView) {
     view.value = { state: 'ready', data: answer }
     draft.value = draftFrom(answer.tree)
+    revision.value++
     baseline.value = stableJson(draft.value)
     serverErrors.value = []
     if (!selected.value || !walk(draft.value).some((l) => l.block.id === selected.value)) {
@@ -168,13 +192,28 @@ export function useViewComposer(options: ViewComposerOptions) {
     return new Map(readableBlocks(readTree(v.tree).page).map((b) => [b.id, b]))
   })
 
-  /** Draft data blocks that differ from the stored ones: their data shows after saving. */
+  /**
+   * Draft data blocks whose stored data would not be theirs: new or changed ones, and any that
+   * name one of those through `$block` or a burndown's range (the sprint changed, so "this
+   * sprint" numbers did too). Their data shows after saving.
+   */
   const unsaved = computed(() => {
     const out = new Set<string>()
-    for (const { block } of blocks.value) {
-      if (BLOCK_TYPES[block.type].category !== 'data') continue
+    const data = blocks.value.filter(({ block }) => BLOCK_TYPES[block.type].category === 'data')
+    for (const { block } of data) {
       const stored = storedBlocks.value.get(block.id)
       if (!stored || !sameBlock(block, stored)) out.add(block.id)
+    }
+    const refs = new Map(data.map(({ block }) => [block.id, referencedBlocks(block)]))
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const [id, names] of refs) {
+        if (!out.has(id) && names.some((n) => out.has(n))) {
+          out.add(id)
+          grew = true
+        }
+      }
     }
     return out
   })
@@ -339,6 +378,7 @@ export function useViewComposer(options: ViewComposerOptions) {
     view,
     saved,
     draft,
+    revision,
     selected,
     dirty,
     errors,

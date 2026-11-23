@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { BaseButton } from '../../ui/index.ts'
 import { summaryOf } from './defaults.ts'
+import { useOutlineFocus } from './outline-focus.ts'
 import { BLOCK_LABELS, type ComposerSchema, type DraftBlock } from './tree.ts'
 
 // One block in the outline: a button that selects it, and move up, move down and remove. The
@@ -28,6 +29,7 @@ const name = computed(() => {
   return summary ? `${BLOCK_LABELS[block.type]}: ${summary}` : BLOCK_LABELS[block.type]
 })
 const issues = computed(() => problems.get(block.id) ?? 0)
+const focus = useOutlineFocus()
 </script>
 
 <template>
@@ -39,6 +41,7 @@ const issues = computed(() => problems.get(block.id) ?? 0)
       ]"
     >
       <button
+        :ref="focus.register(block.id, 'select')"
         type="button"
         class="min-w-0 flex-[1_1_120px] cursor-pointer truncate border-0 bg-transparent px-1 py-1 text-left text-body text-ink"
         :aria-current="selected === block.id ? 'true' : undefined"
@@ -52,6 +55,7 @@ const issues = computed(() => problems.get(block.id) ?? 0)
       </button>
       <template v-if="!root">
         <BaseButton
+          :ref="focus.register(block.id, 'up')"
           size="sm"
           variant="quiet"
           :disabled="index === 0"
@@ -60,6 +64,7 @@ const issues = computed(() => problems.get(block.id) ?? 0)
           >Up</BaseButton
         >
         <BaseButton
+          :ref="focus.register(block.id, 'down')"
           size="sm"
           variant="quiet"
           :disabled="index === count - 1"

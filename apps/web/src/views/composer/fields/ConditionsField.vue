@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { MAX_FILTER_CONDITIONS, type FilterCondition, type FilterOperator } from '@16bit/core'
-import { computed, ref } from 'vue'
+import { computed, ref, useId } from 'vue'
 import { BaseButton, BaseSelect } from '../../../ui/index.ts'
 import ComposerTextarea from '../ComposerTextarea.vue'
 import {
@@ -38,6 +38,7 @@ const {
 }>()
 
 const { form, value, error } = useField(() => path)
+const errorId = `${useId()}-error`
 
 const attributes = computed(() => attributesFor(form.schema(), folderId, { indexed: true }))
 const list = computed(() => flatten(value.value))
@@ -141,7 +142,11 @@ const shownAttributes = (attributeId: string) =>
 </script>
 
 <template>
-  <fieldset class="m-0 flex min-w-0 flex-col gap-2 border-0 p-0" data-composer-conditions>
+  <fieldset
+    class="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"
+    :aria-describedby="error && !json ? errorId : undefined"
+    data-composer-conditions
+  >
     <legend class="mb-1 p-0 text-secondary text-ink3">{{ label }}</legend>
 
     <template v-if="json">
@@ -150,7 +155,7 @@ const shownAttributes = (attributeId: string) =>
         :label="`${label} as JSON`"
         mono
         :rows="6"
-        :error="jsonError"
+        :error="jsonError || error"
         hint='A filter as POST /query takes it: { "and": [...] }, { "or": [...] } or one condition. Applied when you leave the field.'
         data-conditions-json
         @change="applyJson"
@@ -234,6 +239,9 @@ const shownAttributes = (attributeId: string) =>
       >
     </template>
 
-    <span v-if="error" class="text-secondary text-danger" data-field-error>{{ error }}</span>
+    <!-- In JSON mode the textarea shows it, tied to the field; in the list, to the fieldset. -->
+    <span v-if="error && !json" :id="errorId" class="text-secondary text-danger" data-field-error>{{
+      error
+    }}</span>
   </fieldset>
 </template>
