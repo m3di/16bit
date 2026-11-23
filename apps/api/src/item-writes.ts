@@ -14,7 +14,7 @@ import { checkHub, folderHub, itemHub } from './access.ts'
 import type { Database } from './db/database.ts'
 import { workspaceSeq } from './db/scope.ts'
 import { HttpError } from './http.ts'
-import { createItem, deleteItem, getItem, itemByKey, patchItem, upsertItem } from './items.ts'
+import { createItem, deleteItem, getItem, patchItem, upsertItem } from './items.ts'
 import { idempotentWrite, type KnownMutation } from './mutations.ts'
 
 // The item writes, as the single-item routes and the batch call (D65, #202) both run them:
@@ -92,23 +92,27 @@ export async function resolveKeyRefs(
       })
       continue
     }
-    const resolved: unknown[] = []
-    for (const element of value as unknown[]) {
-      if (!isKeyRef(element)) {
-        resolved.push(element)
-        continue
-      }
-      const target = await itemByKey(trx, workspaceId, hubId, element.externalKey)
-      if (!target) {
-        errors.push({
-          attributeId,
-          code: 'invalid_value',
-          message: `No item of this hub has the external key ${JSON.stringify(element.externalKey)}`,
-        })
-        break
-      }
-      resolved.push(target.id)
+    // One lookup for every key this attribute names (#281).
+    const elements = value as unknown[]
+    const wanted = [...new Set(elements.filter(isKeyRef).map((e) => e.externalKey))]
+    const holders = await trx
+      .selectFrom('item')
+      .select(['id', 'external_key'])
+      .where('workspace_id', '=', workspaceId)
+      .where('hub_id', '=', hubId)
+      .where('external_key', 'in', wanted)
+      .execute()
+    const idByKey = new Map(holders.map((h) => [h.external_key, h.id]))
+    const missing = wanted.find((key) => !idByKey.has(key))
+    if (missing !== undefined) {
+      errors.push({
+        attributeId,
+        code: 'invalid_value',
+        message: `No item of this hub has the external key ${JSON.stringify(missing)}`,
+      })
+      continue
     }
+    const resolved = elements.map((e) => (isKeyRef(e) ? idByKey.get(e.externalKey) : e))
     out[attributeId] = resolved
   }
   if (errors.length > 0) {

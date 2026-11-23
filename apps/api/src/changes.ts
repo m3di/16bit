@@ -14,6 +14,13 @@ import { toItem } from './mappers.ts'
  */
 export const MAX_CHANGES_SCAN = 10_000
 
+/**
+ * Most bytes (UTF-8 JSON) of one `GET /changes` page, short of a single change larger than that.
+ * Up to 1,000 changes, each with an item and a cause of up to about 21 KB (D63), could otherwise
+ * make a page of about 21 MB (#224). The feed splits its messages at 256 KiB the same way.
+ */
+export const MAX_CHANGES_PAGE_BYTES = 1024 * 1024
+
 export interface ChangesRead {
   /**
    * The caller. A change carries its `clientMutationId` only for the principal who wrote it:
@@ -28,6 +35,8 @@ export interface ChangesRead {
   hubIds?: readonly string[]
   /** Lowered in tests. */
   maxScan?: number
+  /** `readChanges` only: `MAX_CHANGES_PAGE_BYTES`; lowered in tests. */
+  maxBytes?: number | undefined
 }
 
 /**
@@ -50,7 +59,28 @@ export async function readChanges(
   workspaceId: string,
   read: ChangesRead,
 ): Promise<ChangesPage> {
-  return (await readChangesBatch(trx, workspaceId, read)).page
+  const { page } = await readChangesBatch(trx, workspaceId, read)
+  return boundPageBytes(page, read.maxBytes ?? MAX_CHANGES_PAGE_BYTES)
+}
+
+/**
+ * The page cut to at most `maxBytes` as JSON (one change larger than that goes alone). A cut page
+ * reports its last change's `seq` as its high-water mark and `more: true`, as a page cut by
+ * `limit` does (D58): changes are in `seq` order, each item at its latest revision in the page,
+ * so every change up to that `seq` the caller may see has been returned, and an item left out
+ * comes back on the next page with `after = seq`.
+ */
+export function boundPageBytes(page: ChangesPage, maxBytes: number): ChangesPage {
+  let size = Buffer.byteLength(JSON.stringify({ ...page, changes: [] }))
+  for (const [i, change] of page.changes.entries()) {
+    // The comma between changes counts too.
+    size += Buffer.byteLength(JSON.stringify(change)) + (i > 0 ? 1 : 0)
+    if (i > 0 && size > maxBytes) {
+      const changes = page.changes.slice(0, i)
+      return { changes, seq: changes.at(-1)?.seq ?? page.seq, more: true }
+    }
+  }
+  return page
 }
 
 /**
