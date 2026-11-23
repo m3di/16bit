@@ -76,4 +76,6 @@ export const toItem = (row: Selectable<ItemTable>): Item => ({
   version: row.version,
   updatedAt: row.updated_at.toISOString(),
   updatedBy: row.updated_by,
+  // D64: absent when the item has none, never null.
+  ...(row.external_key !== null && { externalKey: row.external_key }),
 })

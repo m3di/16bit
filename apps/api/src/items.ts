@@ -23,7 +23,7 @@ import {
   type ItemRead,
   type ItemValues,
   type LinkedItem,
-  type PatchItem,
+  type ParsedUpsertItem,
   type RevisionPatch,
   type Subject,
   type ValueError,
@@ -74,6 +74,35 @@ const REVISION_VERSION_KEY = 'revision_workspace_id_item_id_version_key'
 export class MutationReplayed extends Error {
   constructor() {
     super('This clientMutationId was already used')
+  }
+}
+
+/** UNIQUE (workspace_id, hub_id, external_key) on item (0015): a key names one item of a hub. */
+const EXTERNAL_KEY_KEY = 'item_external_key_key'
+
+const keyTaken = () =>
+  new HttpError('key_taken', 'Another item of this hub already has this externalKey')
+
+/** Runs an item INSERT or UPDATE, answering a key another item holds with 409 `key_taken`. */
+async function keyed<T>(write: Promise<T>): Promise<T> {
+  try {
+    return await write
+  } catch (error) {
+    if ((error as { constraint?: unknown }).constraint === EXTERNAL_KEY_KEY) throw keyTaken()
+    throw error
+  }
+}
+
+/**
+ * Thrown inside an upsert by key (D64) when the key changed hands after it was looked up: a
+ * racing upsert created the item first (the insert hit `item_external_key_key`), or the item
+ * that held it was deleted or re-keyed before its row was locked. The transaction must roll
+ * back; the route runs the upsert again in a new one, where the key is found, or not, as it now
+ * stands, so the loser of two creates patches the winner's item.
+ */
+export class KeyRace extends Error {
+  constructor() {
+    super('The external key changed hands during the upsert')
   }
 }
 
@@ -467,6 +496,7 @@ export async function createItem(
   input: {
     id?: string | undefined
     folderId: string
+    externalKey?: string | undefined
     values: Record<string, unknown>
     clientMutationId?: string | undefined
     cause?: ItemCause | undefined
@@ -523,20 +553,25 @@ export async function createItem(
     const stored: ItemValues = { ...values }
     for (const attribute of autoIds) stored[attribute.id] = seq_id
 
-    const row = await trx
-      .insertInto('item')
-      .values({
-        workspace_id: workspaceId,
-        id,
-        hub_id: folder.hub_id,
-        folder_id: folder.id,
-        seq_id,
-        values: JSON.stringify(stored),
-        updated_by: actor,
-      })
-      .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
-      .returningAll()
-      .executeTakeFirst()
+    // The key's unique index is not the ON CONFLICT arbiter, so a taken key raises 23505. An
+    // uncommitted insert of the same key makes this one wait, and raises it only once it commits.
+    const row = await keyed(
+      trx
+        .insertInto('item')
+        .values({
+          workspace_id: workspaceId,
+          id,
+          hub_id: folder.hub_id,
+          folder_id: folder.id,
+          seq_id,
+          values: JSON.stringify(stored),
+          updated_by: actor,
+          external_key: input.externalKey ?? null,
+        })
+        .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
+        .returningAll()
+        .executeTakeFirst(),
+    )
     if (!row) throw new HttpError('id_taken', 'This item ID is already used')
 
     await writeIndex(trx, workspaceId, id, definitions, stored, false)
@@ -548,7 +583,12 @@ export async function createItem(
         folder.hub_id,
         id,
         row.version,
-        { op: 'create', folderId: folder.id, values: stored },
+        {
+          op: 'create',
+          folderId: folder.id,
+          ...(input.externalKey !== undefined && { externalKey: input.externalKey }),
+          values: stored,
+        },
         actor,
         input.clientMutationId,
         input.cause,
@@ -565,15 +605,41 @@ export async function createItem(
   })
 }
 
+/** A patch as `patchItem` takes it: the route's, or an upsert's on the item holding its key. */
+export interface ItemPatch {
+  /** The version the client last saw (D8). Absent: last write wins (an upsert, D64). */
+  version?: number | undefined
+  values: Record<string, unknown>
+  /** Sets the key; `null` clears it; absent leaves it (D64). */
+  externalKey?: string | null | undefined
+  clientMutationId?: string | undefined
+  cause?: ItemCause | undefined
+}
+
+/**
+ * Patches an item. A patch with no values and no key writes nothing and returns the item as it
+ * is (after the version check); only an upsert sends one, the route's schema refuses it. With
+ * `holdsKey`, the patch is an upsert's: an item that is gone or no longer holds that key by the
+ * time its row is locked is a `KeyRace`, not a 404.
+ */
 export async function patchItem(
   db: Db,
   workspaceId: string,
   actor: string,
   id: string,
-  input: PatchItem,
+  input: ItemPatch,
+  holdsKey?: string,
 ): Promise<Item> {
+  const gone = () => (holdsKey === undefined ? notFound('Item') : new KeyRace())
   return inTransaction(db, async (trx) => {
-    const before = await getItem(trx, workspaceId, id)
+    const found = await trx
+      .selectFrom('item')
+      .selectAll()
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', id)
+      .executeTakeFirst()
+    if (!found) throw gone()
+    const before = toItem(found)
     await checkCause(trx, workspaceId, input.cause)
     // Before reading the attributes: see createItem and schema-lock.ts.
     await lockHubSchema(trx, workspaceId, before.hubId, 'shared')
@@ -589,8 +655,14 @@ export async function patchItem(
       .where('id', '=', id)
       .forNoKeyUpdate()
       .executeTakeFirst()
-    if (!current) throw notFound('Item')
-    if (current.version !== input.version) throw conflict(toItem(current))
+    if (!current) throw gone()
+    if (holdsKey !== undefined && current.external_key !== holdsKey) throw new KeyRace()
+    if (input.version !== undefined && current.version !== input.version) {
+      throw conflict(toItem(current))
+    }
+    if (Object.keys(validated).length === 0 && input.externalKey === undefined) {
+      return toItem(current)
+    }
 
     // The item cannot change folder, so the definitions read before the transaction still apply.
     const patch = await checkTargets(trx, workspaceId, actor, relations, validated, current.values)
@@ -600,19 +672,22 @@ export async function patchItem(
       validate(definitions, Object.fromEntries(emptied.map((k) => [k, null])), true)
     }
     const cleared = Object.keys(patch).filter((key) => patch[key] === null)
-    const row = await trx
-      .updateTable('item')
-      .set({
-        // `null` clears a value: drop those top-level keys only. Nested nulls are data.
-        values: sql`(${sql.ref('values')} || ${JSON.stringify(patch)}::jsonb) - ${cleared}::text[]`,
-        version: sql`version + 1`,
-        updated_at: sql`now()`,
-        updated_by: actor,
-      })
-      .where('workspace_id', '=', workspaceId)
-      .where('id', '=', id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+    const row = await keyed(
+      trx
+        .updateTable('item')
+        .set({
+          // `null` clears a value: drop those top-level keys only. Nested nulls are data.
+          values: sql`(${sql.ref('values')} || ${JSON.stringify(patch)}::jsonb) - ${cleared}::text[]`,
+          version: sql`version + 1`,
+          updated_at: sql`now()`,
+          updated_by: actor,
+          ...(input.externalKey !== undefined && { external_key: input.externalKey }),
+        })
+        .where('workspace_id', '=', workspaceId)
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow(),
+    )
 
     await writeLinks(trx, workspaceId, id, relations, patch, true)
     await writeIndex(trx, workspaceId, id, definitions, patch, true)
@@ -622,12 +697,88 @@ export async function patchItem(
       row.hub_id,
       id,
       row.version,
-      { op: 'update', values: patch },
+      {
+        op: 'update',
+        ...(input.externalKey !== undefined && { externalKey: input.externalKey }),
+        values: patch,
+      },
       actor,
       input.clientMutationId,
       input.cause,
     )
     return toItem(row)
+  })
+}
+
+/** The item of hub `hubId` that holds `key`, or undefined. Run in the caller's scope. */
+export async function itemByKey(
+  db: Db,
+  workspaceId: string,
+  hubId: string,
+  key: string,
+): Promise<Item | undefined> {
+  const row = await db
+    .selectFrom('item')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('hub_id', '=', hubId)
+    .where('external_key', '=', key)
+    .executeTakeFirst()
+  return row && toItem(row)
+}
+
+/**
+ * Upsert by key (D64, `upsertItemSchema`): patches the item of hub `hubId` that holds `key`
+ * where it is, or creates one in `folderId` with the key. `folderId` must be a folder of the hub
+ * either way (404). With `version` and no item holding the key, 404. Without `version`, last
+ * write wins on the values sent. A `KeyRace` means the key changed hands meanwhile: roll back and
+ * run it again. The caller has checked `item.write` on the hub in this transaction.
+ */
+export async function upsertItem(
+  db: Db,
+  workspaceId: string,
+  actor: string,
+  hubId: string,
+  key: string,
+  input: Omit<ParsedUpsertItem, 'condition'>,
+): Promise<{ item: Item; created: boolean }> {
+  return inTransaction(db, async (trx) => {
+    const folder = await trx
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', input.folderId)
+      .where('hub_id', '=', hubId)
+      .executeTakeFirst()
+    if (!folder) throw notFound('Folder')
+    const holder = await itemByKey(trx, workspaceId, hubId, key)
+    const { version, values, clientMutationId, cause } = input
+    if (holder) {
+      const item = await patchItem(
+        trx,
+        workspaceId,
+        actor,
+        holder.id,
+        { version, values, clientMutationId, cause },
+        key,
+      )
+      return { item, created: false }
+    }
+    if (version !== undefined) throw notFound('Item')
+    try {
+      const item = await createItem(trx, workspaceId, actor, {
+        folderId: folder.id,
+        externalKey: key,
+        values,
+        clientMutationId,
+        cause,
+      })
+      return { item, created: true }
+    } catch (error) {
+      // Another upsert created the key's item after the lookup, and has committed.
+      if (error instanceof HttpError && error.code === 'key_taken') throw new KeyRace()
+      throw error
+    }
   })
 }
 
