@@ -62,7 +62,7 @@ import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
 import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { withScope, workspaceSeq } from './db/scope.ts'
-import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
+import { decodeCursor, encodeCursor, HttpError, notFound, parse, sqlState } from './http.ts'
 import { backlinks, expandItem, getItem, itemByKey, rerunOnKeyRace, queryItems } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
 import { runBatch } from './batch.ts'
@@ -187,6 +187,16 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
+    // Postgres can't store U+0000 in `text` (22021) or `jsonb` (22P05). The core schemas refuse
+    // it in item values, causes, keys and filters (#221); this answers the rest (names in hub
+    // settings, for one) as the client's error it is, not a 500. Nothing was written: the
+    // statement failed and its transaction rolled back.
+    const state = sqlState(error)
+    if (state === '22021' || state === '22P05') {
+      return reply
+        .status(400)
+        .send({ error: 'invalid_request', message: 'Text cannot contain the character U+0000' })
+    }
     // Fastify's own client errors keep their status: 400 malformed JSON, 413 body too large,
     // 415 unsupported content type, and so on.
     const status = (error as { statusCode?: number }).statusCode
