@@ -41,6 +41,8 @@ export type MutationAttempt =
 export interface KnownMutation {
   op: MutationOp
   itemId: string
+  /** The first attempt's revision: a retried batch delete answers with it (D65). */
+  seq: number
 }
 
 /**
@@ -56,7 +58,7 @@ export async function findMutation(
 ): Promise<KnownMutation | null> {
   const row = await trx
     .selectFrom('revision')
-    .select(['item_id', 'hub_id', 'patch'])
+    .select(['item_id', 'hub_id', 'patch', 'seq'])
     .where('workspace_id', '=', workspaceId)
     .where('actor', '=', actor)
     .where('client_mutation_id', '=', clientMutationId)
@@ -75,7 +77,7 @@ export async function findMutation(
       'This clientMutationId was already used for another item or operation',
     )
   }
-  return { op, itemId: row.item_id }
+  return { op, itemId: row.item_id, seq: row.seq }
 }
 
 /** Whether an upsert's first attempt is the revision `first` (see `MutationAttempt`). */

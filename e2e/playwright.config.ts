@@ -32,6 +32,13 @@ const builtUrl = `http://localhost:${builtPort}`
 const webRoot = fileURLToPath(new URL('../apps/web/dist', import.meta.url))
 /** An app already running elsewhere for the budgets, as `E2E_BASE_URL` is for the rest. */
 const externalBuiltUrl = process.env['E2E_BUDGETS_BASE_URL'] ?? externalBaseUrl
+/**
+ * The API servers the suite starts allow this many sign-ins and invite acceptances per IP per 15
+ * minutes, not the default 100 (issue 229): a run makes about 40 from one IP, so a few runs in a
+ * row against one server would hit the limit. Tests only; a deployment keeps the default. A
+ * reused `pnpm dev` keeps its own setting (see .env.example).
+ */
+export const E2E_SIGN_IN_LIMIT_PER_IP = '10000'
 /** The projects that run on the production build; the `built` server below is only for them. */
 const BUILT_PROJECTS = ['budgets', 'production']
 
@@ -69,7 +76,12 @@ export function runsOnBuilt(argv: readonly string[]): boolean {
 export const builtServer = {
   name: 'built',
   command: 'pnpm --filter @16bit/web build && pnpm --filter @16bit/api start',
-  env: { MIGRATION_DATABASE_URL: '', PORT: builtPort, WEB_ROOT: webRoot },
+  env: {
+    MIGRATION_DATABASE_URL: '',
+    PORT: builtPort,
+    WEB_ROOT: webRoot,
+    SIGN_IN_LIMIT_PER_IP: E2E_SIGN_IN_LIMIT_PER_IP,
+  },
   url: `http://${process.env['HOST'] ?? '127.0.0.1'}:${builtPort}/health`,
   reuseExistingServer: false,
   timeout: 180_000,
@@ -137,7 +149,7 @@ export default defineConfig({
           name: 'api',
           command: 'pnpm --filter @16bit/api start',
           // The API never holds the owner's URL (#44). .env, loaded above, has it locally.
-          env: { MIGRATION_DATABASE_URL: '' },
+          env: { MIGRATION_DATABASE_URL: '', SIGN_IN_LIMIT_PER_IP: E2E_SIGN_IN_LIMIT_PER_IP },
           // /health also checks the database, so the suite starts only once Postgres answers.
           url: `${apiUrl}/health`,
           reuseExistingServer: !ci,

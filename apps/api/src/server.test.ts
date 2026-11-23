@@ -93,6 +93,50 @@ describe('server', () => {
     expect(output).toContain(`api received ${signal}, closing`)
   })
 
+  it('refuses to start with an invalid sign-in limit, before it binds (#229)', async () => {
+    const child = spawn(process.execPath, [server], {
+      env: { ...process.env, PORT: '0', DATABASE_URL: appUrl, SIGN_IN_LIMIT_PER_IP: 'lots' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    const collect = (chunk: Buffer) => (out += chunk.toString())
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    const [code] = (await once(child, 'exit')) as [number | null]
+    expect(code).toBe(1)
+    expect(out).toContain('SIGN_IN_LIMIT_PER_IP must be a whole number')
+    expect(out).not.toContain('api listening')
+  })
+
+  it('warns at start when production takes its sign-in limits from the environment (#229)', async () => {
+    const child = spawn(process.execPath, [server], {
+      env: {
+        ...process.env,
+        PORT: '0',
+        NODE_ENV: 'production',
+        SIGN_IN_LIMIT_PER_IP: '10000',
+        // Never reachable, so it waits before binding and is killed below.
+        DATABASE_URL: 'postgres://unused@127.0.0.1:1/unused',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    await new Promise<void>((resolve, reject) => {
+      const collect = (chunk: Buffer) => {
+        out += chunk.toString()
+        if (out.includes('Meant for tests only')) resolve()
+      }
+      child.stdout.on('data', collect)
+      child.stderr.on('data', collect)
+      child.once('exit', () => {
+        reject(new Error(`server exited without the warning: ${out}`))
+      })
+    })
+    child.kill('SIGTERM')
+    await once(child, 'exit')
+    expect(out).toContain('api: sign-in limits set from the environment: 10000 per IP')
+  }, 15_000)
+
   it('refuses to start without DATABASE_URL', async () => {
     const env: NodeJS.ProcessEnv = { ...process.env, PORT: '0' }
     delete env['DATABASE_URL']

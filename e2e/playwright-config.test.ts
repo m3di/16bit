@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import config, { builtServer, runsOnBuilt } from './playwright.config.ts'
+import config, { builtServer, E2E_SIGN_IN_LIMIT_PER_IP, runsOnBuilt } from './playwright.config.ts'
 
 describe('playwright config', () => {
   it('runs specs from tests/ in parallel so they can be sharded', () => {
@@ -75,6 +75,19 @@ describe('playwright config', () => {
     // rebuilds, and Playwright refuses to start while the port is taken.
     expect(builtServer.reuseExistingServer).toBe(false)
     expect(builtServer.command).toMatch(/^pnpm --filter @16bit\/web build && /)
+  })
+
+  it('raises the sign-in limit per IP on the API servers it starts, and nothing else (issue 229)', () => {
+    const servers = Array.isArray(config.webServer) ? config.webServer : []
+    expect(Number(E2E_SIGN_IN_LIMIT_PER_IP)).toBeGreaterThan(100)
+    const api = servers.find((server) => server.name === 'api')
+    for (const env of [api?.env ?? {}, builtServer.env]) {
+      expect(env['SIGN_IN_LIMIT_PER_IP']).toBe(E2E_SIGN_IN_LIMIT_PER_IP)
+      expect(env).not.toHaveProperty('SIGN_IN_LIMIT_PER_EMAIL')
+    }
+    expect(servers.find((server) => server.name === 'web')?.env ?? {}).not.toHaveProperty(
+      'SIGN_IN_LIMIT_PER_IP',
+    )
   })
 
   it('starts the API without the owner URL, which .env may set (#44)', () => {
