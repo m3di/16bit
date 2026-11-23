@@ -251,6 +251,47 @@ describe('the seeded project home (Main.dc.html)', () => {
     }
   })
 
+  it('stops at the deadline while a block waits, answering timeout for it and the rest', async () => {
+    const version = await versionOf(F.home)
+    const short = buildApp({ db: appDb, viewDataDeadlineMs: 400 })
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let locked: () => void = () => undefined
+    const isLocked = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    // Every statement that reads items waits on this lock; each one may only wait for what is
+    // left of the request's 400 ms.
+    const lock = db.transaction().execute(async (trx) => {
+      await sql`LOCK TABLE item IN ACCESS EXCLUSIVE MODE`.execute(trx)
+      locked()
+      await held
+    })
+    try {
+      await isLocked
+      const started = performance.now()
+      const res = await short.inject({
+        method: 'GET',
+        url: `/v1/workspaces/${WS}/folders/${F.home}/view/data?version=${String(version)}`,
+        headers: await cookie('sara'),
+      })
+      const ms = performance.now() - started
+      expect(res.statusCode, res.body).toBe(200)
+      const home = viewDataSchema.parse(res.json())
+      expect(
+        Object.values(home.blocks).every((b) => b.status === 'error' && b.error === 'timeout'),
+      ).toBe(true)
+      // About the deadline, never a deadline per block or per statement.
+      expect(ms).toBeLessThan(1_500)
+    } finally {
+      release()
+      await lock
+      await short.close()
+    }
+  }, 30_000)
+
   it('answers error timeout for every block past the deadline', async () => {
     const late = buildApp({ db: appDb, viewDataDeadlineMs: 0 })
     try {
@@ -354,6 +395,53 @@ describe('blocks that can no longer run (these tests change data)', () => {
       ['in-review', 1],
       ['in-qa', 1],
       ['done', 24],
+    ])
+  })
+
+  it('counts work done before the sprint once, however many days it was done on', async () => {
+    // 400 more sprint-24 tasks of 1 point, done on 400 different days before the sprint: more
+    // done-on dates than the 366 day buckets an aggregate keeps.
+    const sprint = await db
+      .selectFrom('item')
+      .select('id')
+      .where('workspace_id', '=', WS)
+      .where(sql<boolean>`values ->> ${A.title} = 'Sprint 24'`)
+      .executeTakeFirstOrThrow()
+    await sql`
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+      SELECT ${WS}::text, 'early-' || n, ${HUB}::text, ${F.backlog}::text, 6000 + n,
+             jsonb_build_object(${A.title}::text, 'Early ' || n, ${A.points}::text, 1,
+                                ${A.sprint}::text, jsonb_build_array(${sprint.id}::text),
+                                ${A.doneOn}::text, to_char(date '2020-01-01' + n, 'YYYY-MM-DD')),
+             ${DEV}::text
+      FROM generate_series(1, 400) n
+    `.execute(db)
+    await sql`
+      INSERT INTO item_index (workspace_id, attribute_id, item_id, ord, num, txt, ts)
+      SELECT ${WS}::text, a.attribute, 'early-' || n, 0, a.num, a.txt, a.ts
+      FROM generate_series(1, 400) n,
+           LATERAL (VALUES
+             (${A.points}::text, 1::double precision, NULL::text, NULL::timestamptz),
+             (${A.sprint}::text, NULL, ${sprint.id}::text, NULL),
+             (${A.doneOn}::text, NULL, NULL, (date '2020-01-01' + n)::timestamp AT TIME ZONE 'UTC')
+           ) AS a(attribute, num, txt, ts)
+    `.execute(db)
+    const home = await data('sara', F.home, '&blocks=burndown')
+    const burndown = ok(home.blocks['burndown'])
+    if (burndown.kind !== 'burndown') throw new Error(burndown.kind)
+    // The 400 points were done before the sprint: the curve within it is unchanged.
+    expect(burndown.total).toBe(434)
+    expect(burndown.days.map((d) => d.remaining)).toEqual([
+      34,
+      26,
+      23,
+      23,
+      18,
+      18,
+      null,
+      null,
+      null,
+      null,
     ])
   })
 

@@ -8,7 +8,6 @@ import {
   MAX_VIEW_DATA_ITEMS,
   VIEW_DATA_DEADLINE_MS,
   walkBlocks,
-  type AggregateGroup,
   type Attribute,
   type Block,
   type BlockData,
@@ -88,6 +87,17 @@ interface Run {
 
 const elapsedOut = (run: Run) => performance.now() >= run.deadline
 
+/**
+ * Before each statement of a block: a timeout once the request's deadline has passed, else the
+ * statement timeout re-armed to what is left of it, so no statement can run past the deadline
+ * however many a block runs (a board runs one per column).
+ */
+async function beforeStatement(run: Run): Promise<void> {
+  const left = Math.floor(run.deadline - performance.now())
+  if (left <= 0) throw new HttpError('timeout', 'The view data deadline has passed')
+  await sql`SELECT set_config('statement_timeout', ${String(left)}, true)`.execute(run.trx)
+}
+
 async function attributesOf(run: Run, folderId: string): Promise<readonly Attribute[]> {
   const known = run.attributes.get(folderId)
   if (known) return known
@@ -134,8 +144,9 @@ async function items(
   run: Run,
   binding: SetBinding,
   where: Filter | null,
-  options: { limit: number; expand?: string[] },
+  options: { limit: number; expand?: string[]; count?: boolean },
 ) {
+  await beforeStatement(run)
   const page = await queryItems(
     run.trx,
     run.workspaceId,
@@ -146,7 +157,7 @@ async function items(
       sort: binding.sort,
       limit: options.limit,
       cursor: null,
-      count: true,
+      count: options.count ?? true,
       ...(options.expand && options.expand.length > 0 && { expand: options.expand }),
     },
     {},
@@ -162,6 +173,7 @@ async function aggregated(
   measures: Measure[],
   groupBy?: { attribute: string; bucket?: 'day' | 'week' | 'month' | undefined },
 ) {
+  await beforeStatement(run)
   const left = Math.max(1, Math.floor(run.deadline - performance.now()))
   return aggregate(
     run.trx,
@@ -194,6 +206,7 @@ function calendarDay(value: unknown, tz: string): string | null {
   try {
     return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(at)
   } catch {
+    console.warn(`time zone ${JSON.stringify(tz)} is known to Postgres but not to Intl; using UTC`)
     return at.toISOString().slice(0, 10)
   }
 }
@@ -226,8 +239,6 @@ function countDays(start: string, end: string, days: 'weekdays' | 'calendar'): n
   for (let t = a + Math.floor(all / 7) * 7 * DAY_MS; t <= b; t += DAY_MS) if (isWeekday(t)) n++
   return n
 }
-
-const valueOf = (groups: AggregateGroup[], i = 0) => Number(groups[0]?.values[i] ?? 0)
 
 async function linkedFor(
   run: Run,
@@ -287,6 +298,15 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
         attributes,
         fields.map((f) => f.attribute),
       )
+      // Every column's total from one grouped count; then each column's first cards.
+      const totals = await aggregated(run, binding.folderId, where ?? null, [{ fn: 'count' }], {
+        attribute: column.attribute,
+      })
+      const totalOf = new Map(
+        totals.groups.flatMap((g) =>
+          g.key.kind === 'value' ? [[String(g.key.value), Number(g.values[0] ?? 0)] as const] : [],
+        ),
+      )
       const columns: { option: string; items: Item[]; total: number }[] = []
       const linked: Record<string, LinkedItem> = {}
       for (const { option } of column.options) {
@@ -294,10 +314,10 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
           run,
           binding,
           both(where, { attribute: column.attribute, op: 'eq', value: option }),
-          { limit: binding.limit, expand },
+          { limit: binding.limit, expand, count: false },
         )
         Object.assign(linked, page.linked ?? {})
-        columns.push({ option, items: page.items, total: page.total ?? page.items.length })
+        columns.push({ option, items: page.items, total: totalOf.get(option) ?? 0 })
       }
       return { kind: 'board', columns, ...(expand.length > 0 && { linked }) }
     }
@@ -342,10 +362,32 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
       const measure: Measure = config.points
         ? { fn: 'sum', attribute: config.points }
         : { fn: 'count' }
-      const total = valueOf(
-        (await aggregated(run, binding.folderId, where ?? null, [measure])).groups,
+      // The total and what was done before the range in one statement; the range itself by
+      // day. Only the range is bucketed (at most `dayList`'s 366 days), so however many other
+      // done-on dates the set has, no day of the range can fold into `other`.
+      const doneOnAttr = (await attributesOf(run, binding.folderId)).find(
+        (a) => a.id === config.doneOn,
       )
-      const done = await aggregated(run, binding.folderId, where ?? null, [measure], {
+      const withTime = doneOnAttr?.type === 'date' && doneOnAttr.config.includeTime
+      // A date with time compares as the instant of that day's start in UTC (an approximation
+      // for readers far from UTC; calendar dates, as the seed uses, are exact).
+      const bound = (day: string) => (withTime ? `${day}T00:00:00.000Z` : day)
+      const before: Filter = { attribute: config.doneOn, op: 'lt', value: bound(start) }
+      const inRange: Filter = {
+        and: [
+          { attribute: config.doneOn, op: 'gte', value: bound(start) },
+          { attribute: config.doneOn, op: 'lt', value: bound(toDay(toTime(end) + DAY_MS)) },
+        ],
+      }
+      const [sums] = (
+        await aggregated(run, binding.folderId, where ?? null, [
+          measure,
+          { ...measure, where: before },
+        ])
+      ).groups
+      const total = Number(sums?.values[0] ?? 0)
+      const doneBefore = Number(sums?.values[1] ?? 0)
+      const done = await aggregated(run, binding.folderId, both(where, inRange), [measure], {
         attribute: config.doneOn,
         bucket: 'day',
       })
@@ -356,7 +398,7 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
       )
       const days = dayList(start, end, config.days, MAX_DATE_BUCKETS).map((date) => {
         if (date > run.today) return { date, remaining: null }
-        const doneBy = doneOn.reduce((n, [day, v]) => (day <= date ? n + v : n), 0)
+        const doneBy = doneOn.reduce((n, [day, v]) => (day <= date ? n + v : n), doneBefore)
         return { date, remaining: total - doneBy }
       })
       return { kind: 'burndown', start, end, today: run.today, total, days }
@@ -367,6 +409,7 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
       const expand = item
         ? relationFields(await attributesOf(run, item.folderId), block.config.fields)
         : []
+      if (expand.length > 0) await beforeStatement(run)
       const linked = item ? await linkedFor(run, item, expand) : undefined
       return { kind: 'item', item, ...(linked && { linked }) }
     }
@@ -379,6 +422,7 @@ async function blockData(run: Run, block: Block): Promise<BlockData> {
 async function resolveItem(run: Run, binding: ItemBinding): Promise<Item | null | 'missing'> {
   if (binding.by === 'item') {
     try {
+      await beforeStatement(run)
       const item = await getItem(run.trx, run.workspaceId, binding.itemId)
       return item.folderId === binding.folderId ? item : 'missing'
     } catch (error) {
@@ -390,6 +434,7 @@ async function resolveItem(run: Run, binding: ItemBinding): Promise<Item | null 
   const [where] = await resolveReadFilters(run.trx, attributes, run.me.id, run.tz, [
     { where: binding.where, path: 'where' },
   ])
+  await beforeStatement(run)
   const page = await queryItems(
     run.trx,
     run.workspaceId,
@@ -485,8 +530,13 @@ export async function viewData(
   const blocks: Record<string, BlockStatus> = {}
 
   // Item bindings first (D83), each in its own savepoint. One that fails resolves to nothing.
+  // With `?blocks=`, only those asked for and those the asked-for blocks name.
+  const needed = wanted
+    ? new Set([...answered.map((b) => b.id), ...answered.flatMap((b) => blockDependencies(b))])
+    : null
   for (const block of dataBlocks) {
     if (bindingOf(block) !== 'item' || invalid.has(block.id)) continue
+    if (needed && !needed.has(block.id)) continue
     if (elapsedOut(run)) break
     const binding = (block.config as { binding: ItemBinding }).binding
     await limitStatements()
