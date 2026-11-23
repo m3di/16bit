@@ -21,7 +21,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 
 ## Current milestone
 
-**M4, blocks: planning** (see `team/backlog-M4.md`). M0 to M3 reports are in `docs/reports/`.
+**M4, blocks: complete, waiting for the maintainer** before M5 (see `docs/reports/M4.md`). M0 to M4 reports are in `docs/reports/`.
 
 ## Rules that always apply
 
@@ -58,6 +58,7 @@ Project scripts (Node 26 and pnpm 12; see `README.md` for setup without corepack
 - `pnpm lint` / `pnpm format`: ESLint and Prettier check / write.
 - `pnpm typecheck`: TypeScript across the workspace.
 - `pnpm test`: Vitest. Needs a running Postgres once migrations land (`docker compose up -d db`).
+- `pnpm test:budgets`: the API timing-budget tests, one file at a time (CI only; never run locally).
 - `pnpm build`: build all packages.
 - `pnpm seed`: load the demo workspaces (`demo`, `acme`), and the Parcel Tracker project hub in `demo` (M4), whose agent key goes to the gitignored `e2e/.auth/parcel-agent-key.json`. Safe to re-run. Refuses `NODE_ENV=production` without `--force`.
 - `pnpm seed:build-hub`: import this repository's GitHub issues into the Build hub in the `team` workspace (needs `gh`).
