@@ -55,6 +55,15 @@ export interface AggregateOptions {
 
 const AVG_DEFAULT_DECIMALS = 10
 
+/**
+ * `work_mem` for one aggregate statement. Postgres grants it per sort node, and since version
+ * 13 up to `hash_mem_multiplier` (2 by default) times it per hash node, so 32 to 64 MB per node.
+ * D83's limit of 4 in flight is per principal, not per process, so the bound is the API's pool
+ * size times the sort and hash nodes of a plan (a few) times 32 to 64 MB. Revisit this if the
+ * pool grows.
+ */
+const AGGREGATE_WORK_MEM = '32MB'
+
 /** A column of the per-item row `v`, built from the one item_index scan. */
 interface PivotColumn {
   name: string
@@ -275,9 +284,16 @@ export async function aggregate(
 
   // The aggregate's own timeout, for its statement only: the previous value (a role or database
   // default, or the request's) comes back after it.
-  const { rows: previous } = await sql<{ timeout: string }>`
-    SELECT current_setting('statement_timeout') AS timeout,
-           set_config('statement_timeout', ${String(options.timeoutMs ?? AGGREGATE_TIMEOUT_MS)}, true)
+  // `work_mem` too: the pivot groups a few index rows per item and per attribute (about 400,000
+  // rows for 50,000 items at the cap), which spills to disk at the default 4 MB.
+  // The old values in their own statement, before setting the new ones, so nothing depends on
+  // the order a SELECT evaluates its columns in.
+  const { rows: previous } = await sql<{ timeout: string; memory: string }>`
+    SELECT current_setting('statement_timeout') AS timeout, current_setting('work_mem') AS memory
+  `.execute(trx)
+  await sql`
+    SELECT set_config('statement_timeout', ${String(options.timeoutMs ?? AGGREGATE_TIMEOUT_MS)}, true),
+           set_config('work_mem', ${AGGREGATE_WORK_MEM}, true)
   `.execute(trx)
   try {
     if (!groupAttribute || !groupValues) {
@@ -301,7 +317,9 @@ export async function aggregate(
   } finally {
     // A failed statement aborts the transaction, which ends the setting anyway.
     const timeout = previous[0]?.timeout ?? '0'
-    await sql`SELECT set_config('statement_timeout', ${timeout}, true)`
+    const memory = previous[0]?.memory ?? '4MB'
+    await sql`SELECT set_config('statement_timeout', ${timeout}, true),
+                     set_config('work_mem', ${memory}, true)`
       .execute(trx)
       .catch(() => undefined)
   }
@@ -347,9 +365,49 @@ async function grouped(
             sql`g.gk DESC`
           : sql`g.gk`
 
-  const { rows } = await sql<
-    Record<string, unknown> & { kind: string; gk: string; r: number | null }
-  >`
+  type Row = Record<string, unknown> & { kind: string; gk: string; r: number | null }
+  const measureList = sql.join(
+    measures.map((m, i) => sql`${m.expr} AS ${sql.ref(`v${String(i)}`)}`),
+  )
+
+  // A boolean, or a select or multi-select with at most 100 options, can't have more groups
+  // than the cap (D80), so nothing ever folds into `other`: group in one pass, with `base` read
+  // once (and inlined), and rank in option order here. A select may have up to 500 options;
+  // with more than 100 it takes the ranked and folded path, which folds the rest into `other`. Each value of a multi-select is in
+  // the item's list once (core keeps the list distinct), so every (item, group) pair is one row
+  // without a DISTINCT. The ranked and folded path below is for actors, relations and dates.
+  const options =
+    (attribute.type === 'select' || attribute.type === 'multi_select') &&
+    attribute.config.options.length <= MAX_AGGREGATE_GROUPS
+      ? attribute.config.options.map((o) => o.id)
+      : attribute.type === 'boolean'
+        ? ['0', '1']
+        : null
+  if (options) {
+    const { rows } = await sql<Row>`
+      WITH base AS (${base})
+      SELECT ${kind} AS kind,
+             CASE WHEN ${kind} = 'value' THEN ${key} ELSE '' END AS gk,
+             NULL::bigint AS r,
+             ${measureList}
+      FROM base b
+      LEFT JOIN LATERAL unnest(${values}) AS u(val) ON true
+      GROUP BY 1, 2
+    `.execute(trx)
+    // Option order; a value no longer among the options (impossible today, D51 strips them)
+    // sorts after the options, by value.
+    const position = (gk: string) => {
+      const i = options.indexOf(gk)
+      return i < 0 ? options.length : i
+    }
+    rows.sort((a, b) => position(a.gk) - position(b.gk) || a.gk.localeCompare(b.gk))
+    rows.forEach((row, i) => {
+      if (row.kind === 'value') row.r = i + 1
+    })
+    return shapeGroups(trx, workspaceId, attribute, rows, measures, false)
+  }
+
+  const { rows } = await sql<Row>`
     WITH base AS (${base}),
     keyed AS (
       SELECT DISTINCT b.item, ${kind} AS gkind,
@@ -376,11 +434,23 @@ async function grouped(
              CASE WHEN r.r > ${cap} THEN NULL ELSE r.r END AS r
       FROM keyed k JOIN ranked r ON r.gkind = k.gkind AND r.gk = k.gk
     )
-    SELECT f.kind, f.gk, f.r, ${sql.join(measures.map((m, i) => sql`${m.expr} AS ${sql.ref(`v${String(i)}`)}`))}
+    SELECT f.kind, f.gk, f.r, ${measureList}
     FROM folded f JOIN base b ON b.item = f.item
     GROUP BY f.kind, f.gk, f.r
   `.execute(trx)
+  return shapeGroups(trx, workspaceId, attribute, rows, measures, isDate)
+}
 
+/** Grouped rows as the answer: value groups by rank, then `no_access`, `empty`, `other`. */
+async function shapeGroups(
+  trx: Trx,
+  workspaceId: string,
+  attribute: Attribute,
+  rows: (Record<string, unknown> & { kind: string; gk: string; r: number | null })[],
+  measures: { expr: RawBuilder<unknown>; shape: Shape }[],
+  isDate: boolean,
+): Promise<Omit<AggregateResult, 'seq'>> {
+  const isRelation = attribute.type === 'relation'
   const KIND_ORDER: Record<string, number> = { value: 0, no_access: 1, empty: 2, other: 3 }
   // Value groups by rank, but date buckets ascending (they are ranked latest first).
   const rank = (r: { r: number | null }) => (isDate ? -(r.r ?? 0) : (r.r ?? 0))
