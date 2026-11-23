@@ -107,13 +107,9 @@ export function testHost(overrides: Partial<ViewHost> = {}): TestHost {
   }
 }
 
-/** Renders `c` on the server under a host and a value context, as the hub page provides them. */
-export async function renderWith(
-  c: Component,
-  props: Record<string, unknown>,
-  host: ViewHost = testHost(),
-) {
-  const router = createRouter({
+/** The routes block links resolve against. */
+export const testRouter = () =>
+  createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/', component: { render: () => null } },
@@ -124,14 +120,25 @@ export async function renderWith(
       },
     ],
   })
-  const Host = defineComponent({
+
+/** `c` under a host and a value context, as the hub page provides them. */
+export const withHost = (c: Component, props: Record<string, unknown>, host: ViewHost) =>
+  defineComponent({
     setup() {
       provideValueContext(valueContext())
       provideViewHost(host)
       return () => h(c, props)
     },
   })
-  const app = createSSRApp(Host)
+
+/** Renders `c` on the server under a host and a value context, as the hub page provides them. */
+export async function renderWith(
+  c: Component,
+  props: Record<string, unknown>,
+  host: ViewHost = testHost(),
+) {
+  const router = testRouter()
+  const app = createSSRApp(withHost(c, props, host))
   app.use(router)
   await router.push('/w/w/hubs/bld/home')
   await router.isReady()

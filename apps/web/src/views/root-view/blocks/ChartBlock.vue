@@ -27,6 +27,9 @@ const groupAttribute = computed(() => {
 const layout = computed(() => (groupAttribute.value?.type === 'actor' ? 'inline' : 'stacked'))
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+// A measure with no value (the sum of a group with no points) is said as a dash, never a 0.
+const known = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const words = (v: unknown) => (known(v) ? formatNumber(v) : '—')
 
 const rows = computed((): BarRow[] => {
   const c = config.value
@@ -51,7 +54,7 @@ const rows = computed((): BarRow[] => {
         : {}),
       value,
       max,
-      text: of ? `${formatNumber(value)} of ${formatNumber(max)}` : formatNumber(value),
+      text: of ? `${words(g.values[0])} of ${words(g.values[1])}` : words(g.values[0]),
     }
   })
 })
@@ -67,7 +70,12 @@ const burnDays = computed(() =>
 </script>
 
 <template>
-  <div :data-view-block="block.id" data-block="chart" :data-chart="config?.kind">
+  <div
+    :data-view-block="block.id"
+    data-block="chart"
+    :data-chart="config?.kind"
+    :data-block-state="config?.kind === 'bars' ? bars.state.value : burn.state.value"
+  >
     <BarRows
       v-if="config?.kind === 'bars'"
       :rows="rows"

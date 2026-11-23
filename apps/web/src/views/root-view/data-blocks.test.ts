@@ -19,6 +19,9 @@ function parsed(input: BlockInput, siblings: BlockInput[] = []): Block {
   return block
 }
 
+const headings = (html: string) =>
+  [...html.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/g)].map((m) => plain(m[1] ?? ''))
+
 const ok = (status: BlockStatus): BlockLoad => ({
   state: 'ready',
   status,
@@ -114,6 +117,31 @@ describe('list block', () => {
     expect(text.indexOf('Retry queue')).toBeLessThan(text.indexOf('Label printer'))
     expect(html.match(/<h3/g)?.length).toBe(3)
     expect(text).toContain('New item')
+  })
+
+  it('groups by the server’s groups when the grouping has no measures', async () => {
+    const html = await renderWith(ListBlock, {
+      block: listBlock({ groupBy: { attribute: 'stage' } }),
+      load: ok({
+        status: 'ok',
+        data: {
+          kind: 'items',
+          items: backlog,
+          total: 3,
+          groups: [
+            { key: { kind: 'value', value: 'todo' }, values: [] },
+            { key: { kind: 'value', value: 'done' }, values: [] },
+          ],
+          linked,
+        },
+      }),
+      level: 3,
+    })
+    expect(headings(html)).toEqual(['To do', 'Done'])
+    const text = plain(html)
+    expect(text.indexOf('To do')).toBeLessThan(text.indexOf('Retry queue'))
+    expect(text.indexOf('Done')).toBeLessThan(text.indexOf('Label printer'))
+    expect(text.indexOf('Retry queue')).toBeLessThan(text.indexOf('Done'))
   })
 
   it('hides "New item" without `item.write`, or when the block does not offer it', async () => {
@@ -283,6 +311,7 @@ describe('chart block', () => {
             { key: { kind: 'value', value: 'p-sara' }, values: [10] },
             { key: { kind: 'value', value: 'p-unknown-agent' }, values: [4] },
             { key: { kind: 'empty' }, values: [2] },
+            { key: { kind: 'value', value: 'p-ray' }, values: [null] },
           ],
           truncated: false,
         },
@@ -293,6 +322,9 @@ describe('chart block', () => {
     expect(text).toContain('Sara')
     expect(text).toContain('10')
     expect(text).toContain('No owner')
+    // A sum over no points has no value: a dash, not 0.
+    expect(html).toContain('—')
+    expect(html).toContain('data-block-state="ready"')
   })
 
   it('draws a burndown from the remaining points per day', async () => {

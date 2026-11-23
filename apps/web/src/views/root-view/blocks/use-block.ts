@@ -35,7 +35,11 @@ export function useBlock<K extends BlockData['kind']>(
     () => (data.value as { linked?: Record<string, LinkedItem> } | null)?.linked ?? undefined,
   )
   const names: Names = {
-    actor: (id) => values?.actor(id).name ?? id.slice(0, 8),
+    // Never part of a raw ID as a name: ActorChip's unknown state says "Unknown person" too.
+    actor: (id) => {
+      const a = values?.actor(id)
+      return a?.known ? a.name : 'Unknown person'
+    },
     item: (id) => linkedLabel(id, linked.value, hubOf),
   }
 
