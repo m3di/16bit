@@ -1,4 +1,10 @@
-import { revisionPatchSchema, type Page, type RevisionEntry, type Subject } from '@16bit/core'
+import {
+  REVISION_OPS,
+  revisionPatchSchema,
+  type Page,
+  type RevisionEntry,
+  type Subject,
+} from '@16bit/core'
 import type { Transaction } from 'kysely'
 import { z } from 'zod'
 import { checkHub } from './access.ts'
@@ -41,21 +47,38 @@ export async function itemRevisions(
     .execute()
 
   const entries = rows.slice(0, page.limit).map((row): RevisionEntry => {
-    // Written by the API only, in this shape; parsed so the wire type is checked, not cast.
-    const patch = revisionPatchSchema.parse(row.patch)
-    return {
+    const base = {
       seq: row.seq,
       version: row.version,
-      op: patch.op,
-      patch,
       actor: row.actor,
       at: row.at.toISOString(),
       cause: row.cause,
     }
+    // Written by the API only, in this shape; parsed so the wire type is checked, not cast. One
+    // that no longer parses (written by an older version, say) is marked unreadable instead of
+    // failing the whole page (#222).
+    const parsed = revisionPatchSchema.safeParse(row.patch)
+    if (parsed.success) return { ...base, op: parsed.data.op, patch: parsed.data }
+    console.error(
+      `revision ${String(row.seq)} of item ${itemId} has a patch that does not parse: ` +
+        (parsed.error.issues[0]?.message ?? ''),
+    )
+    return { ...base, op: storedOp(row.patch, row.version), patch: null, unreadable: true }
   })
   const last = entries.at(-1)
   return {
     items: entries,
     nextCursor: rows.length > page.limit && last ? encodeCursor([last.version]) : null,
   }
+}
+
+/**
+ * The operation of a patch that doesn't parse: its own `op` when that is one, else what its
+ * place says (the first version is the create).
+ */
+function storedOp(patch: unknown, version: number): RevisionEntry['op'] {
+  const op = (patch as { op?: unknown } | null)?.op
+  const known: readonly unknown[] = REVISION_OPS
+  if (known.includes(op)) return op as RevisionEntry['op']
+  return version === 1 ? 'create' : 'update'
 }
