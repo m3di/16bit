@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { noNul } from '../nul.ts'
 import { type AttributeType, BASE_SUMMARIES, EMPTY_OPERATORS } from './contract.ts'
 
 export const URL_MAX_LENGTH = 2048
@@ -8,7 +9,10 @@ export const urlConfigSchema = z.strictObject({})
 export type UrlConfig = z.infer<typeof urlConfigSchema>
 
 /** Surrounding whitespace is trimmed. `javascript:`, `mailto:` and other schemes are refused. */
-export const urlValueSchema = z.url({ protocol: /^https?$/i }).max(URL_MAX_LENGTH)
+export const urlValueSchema = z
+  .url({ protocol: /^https?$/i })
+  .max(URL_MAX_LENGTH)
+  .refine(...noNul)
 
 export const urlType: AttributeType<'url', UrlConfig, string> = {
   name: 'url',

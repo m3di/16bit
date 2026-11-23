@@ -107,6 +107,17 @@ describe('item history (D63)', () => {
     expect(revisionEntrySchema.safeParse({ ...entry, op: 'move' }).success).toBe(false)
   })
 
+  it('marks a patch it cannot read, keeping the rest of the entry (#222)', () => {
+    const unreadable = { ...entry, patch: null, unreadable: true }
+    expect(revisionEntrySchema.parse(unreadable)).toEqual(unreadable)
+    expect(revisionEntrySchema.safeParse({ ...entry, patch: null }).success).toBe(false)
+    expect(revisionEntrySchema.safeParse({ ...entry, unreadable: true }).success).toBe(false)
+    expect(revisionEntrySchema.safeParse({ ...unreadable, unreadable: false }).success).toBe(false)
+    expect(
+      revisionPageSchema.parse({ items: [entry, unreadable], nextCursor: null }).items,
+    ).toEqual([entry, unreadable])
+  })
+
   it('pages like every other list', () => {
     expect(revisionPageSchema.parse({ items: [entry], nextCursor: 'abc' }).items).toHaveLength(1)
   })

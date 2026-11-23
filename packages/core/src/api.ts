@@ -11,6 +11,8 @@ import {
   timestampSchema,
   workspaceSchema,
 } from './entities.ts'
+import { timeZoneSchema } from './aggregate.ts'
+import { noNul } from './nul.ts'
 import { urlValueSchema } from './attribute-types/url.ts'
 import { decodeItemCursor, MAX_ITEM_CURSOR_LENGTH, type ItemCursorOrder } from './cursor.ts'
 import { externalKeySchema } from './external-key.ts'
@@ -70,7 +72,13 @@ export const MAX_CAUSE_EVIDENCE = 10
  */
 export const itemCauseSchema = z
   .strictObject({
-    note: z.string().trim().min(1).max(CAUSE_NOTE_MAX_LENGTH).optional(),
+    note: z
+      .string()
+      .trim()
+      .min(1)
+      .max(CAUSE_NOTE_MAX_LENGTH)
+      .refine(...noNul)
+      .optional(),
     evidence: z.array(urlValueSchema).min(1).max(MAX_CAUSE_EVIDENCE).optional(),
     causedBy: z.int().min(1).optional(),
   })
@@ -213,6 +221,8 @@ export type ItemQueryOrder = (typeof ITEM_QUERY_ORDERS)[number]
  *   records the order it was read in (`updated`, `number`, or an attribute `sort`) and is
  *   refused under another; under `number` it pages by item number.
  * - `count: true` adds `total`, the number of items that pass `where`.
+ * - `where` may use `$me` and `$now` (operands.ts, D79), checked with `checkFilterOperands`
+ *   and resolved with `resolveFilterOperands` before `compileItemQuery`. `$block` is views only.
  */
 export const itemQuerySchema = z
   .strictObject({
@@ -225,6 +235,8 @@ export const itemQuerySchema = z
     cursor: itemCursorTextSchema.nullable().default(null),
     offset: z.int().min(0).max(MAX_QUERY_OFFSET).optional(),
     count: z.boolean().default(false),
+    /** Time zone for `$now` on dates without time (D81). UTC when absent. */
+    tz: timeZoneSchema.optional(),
   })
   .superRefine((query, ctx) => {
     if (query.order !== undefined && query.sort.length > 0) {
@@ -499,16 +511,26 @@ export const revisionPatchSchema = z.discriminatedUnion('op', [
 ])
 export type RevisionPatch = z.infer<typeof revisionPatchSchema>
 
-/** One entry of an item's history (D9, D63). `actor` is the principal who wrote it. */
-export const revisionEntrySchema = z.strictObject({
+const revisionEntryFields = {
   seq: seqSchema,
   version: z.int().min(1),
   op: z.enum(REVISION_OPS),
-  patch: revisionPatchSchema,
   actor: idSchema,
   at: timestampSchema,
   cause: itemCauseSchema.nullable(),
-})
+}
+
+/**
+ * One entry of an item's history (D9, D63). `actor` is the principal who wrote it.
+ *
+ * A stored patch that no longer matches `revisionPatchSchema` (written by an older version, for
+ * example) comes back as `{ patch: null, unreadable: true }` with the rest of the entry, so one
+ * such revision never fails the whole history read (#222). `op` is still the stored operation.
+ */
+export const revisionEntrySchema = z.union([
+  z.strictObject({ ...revisionEntryFields, patch: revisionPatchSchema }),
+  z.strictObject({ ...revisionEntryFields, patch: z.null(), unreadable: z.literal(true) }),
+])
 export type RevisionEntry = z.infer<typeof revisionEntrySchema>
 
 /**
@@ -615,8 +637,23 @@ export const API_ERROR_CODES = [
    * no longer right. Adds `affected: number`, the count now (D51).
    */
   'confirm_required',
-  /** Too many attempts. The `Retry-After` header says when to try again, in seconds. */
+  /**
+   * Too many attempts. The `Retry-After` header says when to try again, in seconds. Also a
+   * fifth view-data or aggregate request in flight for one principal (429, D83).
+   */
   'rate_limited',
+  /** A view PUT whose tree fails `parseViewTree` or `checkViewTree` (422). Adds `errors`. */
+  'invalid_view',
+  /** Deleting a folder that has a stored view (409, D76): reset the view first. */
+  'has_view',
+  /** Creating an item in, or moving one into, a views-only folder (422, D76). */
+  'views_only',
+  /** View data asked with a tree `version` the stored view has moved past (409, D83). */
+  'stale',
+  /** A `tz` Postgres does not know (422, D81). */
+  'invalid_time_zone',
+  /** An aggregate past its statement timeout (503, D80). */
+  'timeout',
   'internal',
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]

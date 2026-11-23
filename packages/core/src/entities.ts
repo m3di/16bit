@@ -53,6 +53,11 @@ export const folderSchema = z.strictObject({
   idPrefix: z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/),
   itemCount: z.int().min(0),
   version: z.int().min(0),
+  /**
+   * Present, and `true`, only on a views-only folder (D76): it holds no items and only shows
+   * its root view. Set when the folder is created and never changed. Absent on other folders.
+   */
+  viewsOnly: z.literal(true).optional(),
 })
 export type Folder = z.infer<typeof folderSchema>
 
@@ -60,11 +65,17 @@ export type Folder = z.infer<typeof folderSchema>
  * A hub with its title attribute (D50): a folder with no parent (D2). `titleAttributeId` names
  * one of the hub's `text` attributes, or `null` for none, in which case items show only their
  * mono ID. It is cleared when that attribute is removed. Folder rows that are not hubs have no
- * title attribute, so only hub reads (`GET /hubs/:hubId`, `PATCH /hubs/:hubId`) carry it.
+ * title attribute, so only hub reads (`GET /hubs/:hubId`, `PATCH /hubs/:hubId`) carry it, and
+ * `opensOnFolderId` alike.
  */
 export const hubSchema = folderSchema.extend({
   parentId: z.null(),
   titleAttributeId: idSchema.nullable(),
+  /**
+   * The folder of this hub the hub opens on (D76), set by hub admins. Absent when it opens on
+   * the hub root. Cleared when that folder is deleted.
+   */
+  opensOnFolderId: idSchema.optional(),
 })
 export type Hub = z.infer<typeof hubSchema>
 

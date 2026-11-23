@@ -1,4 +1,4 @@
-import type { Backlink, HubDescription, Item, RevisionEntry } from '@16bit/core'
+import type { Backlink, HubDescription, Item, RevisionEntry, RevisionPatch } from '@16bit/core'
 import { createSSRApp, defineComponent, h, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { renderToString } from 'vue/server-renderer'
@@ -251,7 +251,7 @@ describe('BacklinksBlock', () => {
 const rev = (
   seq: number,
   version: number,
-  patch: RevisionEntry['patch'],
+  patch: RevisionPatch,
   cause: RevisionEntry['cause'] = null,
 ): RevisionEntry => ({
   seq,

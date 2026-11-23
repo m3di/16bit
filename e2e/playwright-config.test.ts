@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import config, { E2E_SIGN_IN_LIMIT_PER_IP } from './playwright.config.ts'
+import config, { builtServer, E2E_SIGN_IN_LIMIT_PER_IP, runsOnBuilt } from './playwright.config.ts'
 
 describe('playwright config', () => {
   it('runs specs from tests/ in parallel so they can be sharded', () => {
@@ -35,26 +35,55 @@ describe('playwright config', () => {
 
   it('measures the budgets on the production build, served by the API (issue 218)', () => {
     const budgets = (config.projects ?? []).find((p) => p.name === 'budgets')
-    const servers = Array.isArray(config.webServer) ? config.webServer : []
-    const built = servers.find((server) => server.name === 'built')
-    expect(built?.command).toMatch(
+    const built = builtServer
+    expect(built.command).toMatch(
       /^pnpm --filter @16bit\/web build && pnpm --filter @16bit\/api start$/,
     )
-    expect(built?.env).toMatchObject({ MIGRATION_DATABASE_URL: '' })
-    expect(built?.env?.['WEB_ROOT']).toMatch(/apps\/web\/dist$/)
-    const port = built?.env?.['PORT'] ?? ''
-    expect(built?.url).toMatch(new RegExp(`:${port}/health$`))
+    expect(built.env).toMatchObject({ MIGRATION_DATABASE_URL: '' })
+    expect(built.env.WEB_ROOT).toMatch(/apps\/web\/dist$/)
+    const port = built.env.PORT
+    expect(built.url).toMatch(new RegExp(`:${port}/health$`))
     if (!process.env['E2E_BASE_URL'] && !process.env['E2E_BUDGETS_BASE_URL'])
       expect(budgets?.use?.baseURL).toBe(`http://localhost:${port}`)
+  })
+
+  it('builds and starts the production server only for runs that use it (issue 228)', () => {
+    const cli = ['node', 'playwright', 'test']
+    // Every project runs, so both built-app projects do.
+    expect(runsOnBuilt(cli)).toBe(true)
+    expect(runsOnBuilt([...cli, '--project', 'budgets', '--no-deps'])).toBe(true)
+    expect(runsOnBuilt([...cli, '--project=production'])).toBe(true)
+    expect(runsOnBuilt([...cli, '--project', 'chromium', 'Production'])).toBe(true)
+    expect(runsOnBuilt([...cli, '--project', 'chromium', '--project', 'budgets'])).toBe(true)
+    expect(runsOnBuilt([...cli, '--project', 'bud*'])).toBe(true)
+    // Neither: chromium's only dependency is setup, so nothing pulls the built projects in.
+    expect(runsOnBuilt([...cli, '--project', 'chromium'])).toBe(false)
+    expect(runsOnBuilt([...cli, '--project=chromium', 'tests/hub-items.spec.ts'])).toBe(false)
+    expect(runsOnBuilt([...cli, '--project', 'setup', 'chromium', '-x'])).toBe(false)
+    expect(runsOnBuilt([...cli, '--project', 'chrom*'])).toBe(false)
+    // Each name in BUILT_PROJECTS is a real project, so the check cannot drift from the list.
+    const names = (config.projects ?? []).map((p) => p.name)
+    for (const name of ['budgets', 'production']) expect(names).toContain(name)
+    // And this run's config (vitest's argv has no --project) holds exactly that server.
+    const servers = Array.isArray(config.webServer) ? config.webServer : []
+    const external = process.env['E2E_BASE_URL'] ?? process.env['E2E_BUDGETS_BASE_URL']
+    expect(servers.includes(builtServer)).toBe(!external && runsOnBuilt(process.argv))
+  })
+
+  it('never measures whatever already listens on the built port (issue 228)', () => {
+    // Not even locally: an older build there would give misleading budget timings. A run
+    // rebuilds, and Playwright refuses to start while the port is taken.
+    expect(builtServer.reuseExistingServer).toBe(false)
+    expect(builtServer.command).toMatch(/^pnpm --filter @16bit\/web build && /)
   })
 
   it('raises the sign-in limit per IP on the API servers it starts, and nothing else (issue 229)', () => {
     const servers = Array.isArray(config.webServer) ? config.webServer : []
     expect(Number(E2E_SIGN_IN_LIMIT_PER_IP)).toBeGreaterThan(100)
-    for (const name of ['api', 'built']) {
-      const env = servers.find((server) => server.name === name)?.env ?? {}
-      expect(env['SIGN_IN_LIMIT_PER_IP'], name).toBe(E2E_SIGN_IN_LIMIT_PER_IP)
-      expect(env, name).not.toHaveProperty('SIGN_IN_LIMIT_PER_EMAIL')
+    const api = servers.find((server) => server.name === 'api')
+    for (const env of [api?.env ?? {}, builtServer.env]) {
+      expect(env['SIGN_IN_LIMIT_PER_IP']).toBe(E2E_SIGN_IN_LIMIT_PER_IP)
+      expect(env).not.toHaveProperty('SIGN_IN_LIMIT_PER_EMAIL')
     }
     expect(servers.find((server) => server.name === 'web')?.env ?? {}).not.toHaveProperty(
       'SIGN_IN_LIMIT_PER_IP',

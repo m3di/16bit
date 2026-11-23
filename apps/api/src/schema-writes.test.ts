@@ -302,6 +302,16 @@ describe('PATCH /hubs/:hubId', () => {
     expect(hubSchema.parse(cleared.json())).toMatchObject({ titleAttributeId: null, version: 2 })
   })
 
+  it('refuses opensOnFolderId until M4-03 stores it (D76), changing nothing', async () => {
+    for (const opensOnFolderId of ['bugs', null]) {
+      const res = await person('ha', 'PATCH', '/hubs/build', { version: 0, opensOnFolderId })
+      expect(res.statusCode, res.body).toBe(400)
+      expect(res.json()).toMatchObject({ error: 'invalid_request' })
+    }
+    const hub = await person('ha', 'GET', '/hubs/build')
+    expect(hub.json()).toMatchObject({ hub: { version: 0 } })
+  })
+
   it('refuses a title attribute that is not a text attribute of the hub', async () => {
     for (const titleAttributeId of ['stage', 'missing']) {
       const res = await person('ha', 'PATCH', '/hubs/build', { version: 0, titleAttributeId })
@@ -530,6 +540,16 @@ describe('folders', () => {
     })
     expect(taken.statusCode).toBe(409)
     expect(taken.json()).toMatchObject({ error: 'id_taken' })
+  })
+
+  it('refuses a views-only folder until M4-03 stores it (D76), and accepts viewsOnly false', async () => {
+    const body = { parentId: 'build', name: 'Home', color: 'blue' }
+    const refused = await person('ha', 'POST', '/hubs/build/folders', { ...body, viewsOnly: true })
+    expect(refused.statusCode, refused.body).toBe(400)
+    expect(refused.json()).toMatchObject({ error: 'invalid_request' })
+    const plain = await person('ha', 'POST', '/hubs/build/folders', { ...body, viewsOnly: false })
+    expect(plain.statusCode, plain.body).toBe(201)
+    expect(folderSchema.parse(plain.json()).viewsOnly).toBeUndefined()
   })
 
   it('refuses a parent outside the hub, and lower roles', async () => {

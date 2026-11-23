@@ -6,7 +6,8 @@
   "scripts": {
     "e2e": "playwright test",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "perf:burndown": "node perf/burndown-longtasks.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.65.1"

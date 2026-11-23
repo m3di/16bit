@@ -1,10 +1,10 @@
-import type { RevisionEntry } from '@16bit/core'
+import type { RevisionEntry, RevisionPatch } from '@16bit/core'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeApi, json } from '../hub/fixtures.test-utils.ts'
 import { changesOf, evidenceLink } from './history.ts'
 import { useHistory } from './useHistory.ts'
 
-const rev = (seq: number, version: number, patch: RevisionEntry['patch']): RevisionEntry => ({
+const rev = (seq: number, version: number, patch: RevisionPatch): RevisionEntry => ({
   seq,
   version,
   op: patch.op,
@@ -29,6 +29,20 @@ describe('changesOf', () => {
     ])
     expect(changesOf(entries, 1)).toEqual([
       { attributeId: 'title', after: 'B', before: { value: 'A' } },
+    ])
+  })
+
+  it('shows nothing for an unreadable entry, and no old value from behind one (issue 222)', () => {
+    const unreadable: RevisionEntry = {
+      ...rev(7, 2, { op: 'update', values: {} }),
+      patch: null,
+      unreadable: true,
+    }
+    const withGap = [entries[0], unreadable, entries[2]].filter((e) => e !== undefined)
+    expect(changesOf(withGap, 1)).toEqual([])
+    expect(changesOf(withGap, 0)).toEqual([
+      { attributeId: 'title', after: 'C', before: null },
+      { attributeId: 'stage', after: 'done', before: null },
     ])
   })
 

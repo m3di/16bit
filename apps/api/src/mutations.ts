@@ -118,7 +118,10 @@ function mayBeFirstAttempt(error: unknown): boolean {
   if ((error as { constraint?: unknown } | null)?.constraint === MUTATION_KEY) return true
   return (
     error instanceof HttpError &&
-    (error.code === 'conflict' || error.code === 'not_found' || error.code === 'id_taken')
+    (error.code === 'conflict' ||
+      error.code === 'not_found' ||
+      error.code === 'id_taken' ||
+      error.code === 'precondition_failed')
   )
 }
 

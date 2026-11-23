@@ -69,7 +69,7 @@ import {
   expandItem,
   getItem,
   itemByKey,
-  KeyRace,
+  rerunOnKeyRace,
   patchItem,
   queryItems,
   upsertItem,
@@ -141,13 +141,6 @@ const grantParams = z.object({ workspaceId: idSchema, hubId: idSchema, principal
 const folderParams = z.object({ workspaceId: idSchema, folderId: idSchema })
 const attributeParams = z.object({ workspaceId: idSchema, attributeId: idSchema })
 const keyedItemParams = z.object({ workspaceId: idSchema, hubId: idSchema, key: externalKeySchema })
-
-/**
- * Runs of an upsert by key that lose a race on the key (`KeyRace`) before it gives up with 409
- * `key_taken`. One rerun settles a race between two upserts; more means the key keeps changing
- * hands, which only deliberate churn on one key would do.
- */
-const UPSERT_ATTEMPTS = 3
 
 /** See `routerOptions` in `buildApp`. */
 const MAX_PATH_PARAM_LENGTH = EXTERNAL_KEY_MAX_LENGTH * 4
@@ -495,15 +488,9 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // (FOR SHARE) until commit, so a revoke can't land between the check and the write.
           // With a `clientMutationId`, a retry answers as the first attempt did and writes
           // nothing (D59, mutations.ts). A write's `seq` is read in its own transaction, which
-          // still holds the workspace row: it is the write's own revision.
-          // The contracts have `condition` (D66) from #199; the routes serve it from #203.
-          // Until then it is refused, never ignored: a write that skipped its condition would
-          // be silently unsafe.
-          const refuseUnserved = (body: { condition?: unknown }) => {
-            if (body.condition !== undefined) {
-              throw new HttpError('invalid_request', 'condition: not supported yet')
-            }
-          }
+          // still holds the workspace row: it is the write's own revision. A `condition` (D66)
+          // that fails is a 412 and writes nothing, so its mutation ID is not recorded and a
+          // retry is evaluated again.
 
           const run =
             (request: FastifyRequest) =>
@@ -577,7 +564,6 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.patch('/items/:itemId', async (request) => {
             const { workspaceId, itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            refuseUnserved(body)
             const actor = request.principal.id
             return idempotentWrite(
               run(request),
@@ -639,7 +625,6 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.put('/hubs/:hubId/items/by-key/:key', async (request, reply) => {
             const { workspaceId, hubId, key } = parse(keyedItemParams, request.params)
             const body = parse(upsertItemSchema, request.body)
-            refuseUnserved(body)
             const actor = request.principal.id
             const attempt = () =>
               idempotentWrite(
@@ -667,17 +652,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
                   result: await currentItem(trx, workspaceId, first),
                 }),
               )
-            for (let i = 1; ; i++) {
-              try {
-                const { created, result } = await attempt()
-                return await reply.status(created ? 201 : 200).send(result)
-              } catch (error) {
-                if (!(error instanceof KeyRace)) throw error
-                if (i === UPSERT_ATTEMPTS) {
-                  throw new HttpError('key_taken', 'The externalKey kept changing hands; retry')
-                }
-              }
-            }
+            const { created, result } = await rerunOnKeyRace(attempt)
+            return reply.status(created ? 201 : 200).send(result)
           })
 
           ws.post('/hubs/:hubId/agent-keys', async (request, reply) => {
@@ -705,10 +681,25 @@ export function buildApp(options: AppOptions): FastifyInstance {
           })
 
           // Schema writes for hub settings (#112, schema-writes.ts).
+          // The contracts have views-only folders and "Opens on" (D76) from #252; the routes
+          // store them from M4-03. Until then they are refused, never ignored: a folder asked
+          // for as views-only must not quietly become an ordinary one.
+          const refuseUnservedViews = (body: {
+            viewsOnly?: boolean
+            opensOnFolderId?: unknown
+          }) => {
+            if (body.viewsOnly === true) {
+              throw new HttpError('invalid_request', 'viewsOnly: not supported yet')
+            }
+            if (body.opensOnFolderId !== undefined) {
+              throw new HttpError('invalid_request', 'opensOnFolderId: not supported yet')
+            }
+          }
 
           ws.patch('/hubs/:hubId', async (request) => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             const body = parse(updateHubSchema, request.body)
+            refuseUnservedViews(body)
             return scoped(request, (trx) =>
               updateHub(trx, workspaceId, request.principal, hubId, body),
             )
@@ -734,6 +725,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
           ws.post('/hubs/:hubId/folders', async (request, reply) => {
             const { workspaceId, hubId } = parse(hubParams, request.params)
             const body = parse(createFolderSchema, request.body)
+            refuseUnservedViews(body)
             const folder = await scoped(request, (trx) =>
               createFolder(trx, workspaceId, request.principal, hubId, body),
             )

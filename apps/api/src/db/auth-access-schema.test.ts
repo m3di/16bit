@@ -65,6 +65,7 @@ describe('upgrading a database already migrated with 0001', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
 
     const principals = await db

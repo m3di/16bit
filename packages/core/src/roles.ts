@@ -83,6 +83,7 @@ export interface ActionScopes {
   'hub.read': HubScope
   'item.write': HubScope
   'comment.create': HubScope
+  /** Folders, attributes and root views (D78): hub admins. Agents never (D28). */
   'hub.manageSchema': HubScope
   /**
    * Point a new relation attribute at this hub from another one (crossHub, D11). Needs at

@@ -106,6 +106,22 @@ export interface FolderTable {
   version: Generated<number>
   next_seq: Generated<number>
   title_attribute_id: Generated<string | null>
+  /** Set at creation, never changed (0016, D76). */
+  views_only: Generated<boolean>
+  /** Hub rows only: the folder the hub opens on, null for the root (0016, D76). */
+  opens_on_folder_id: Generated<string | null>
+}
+
+/** A folder's root view (0016, D76): `tree` as packages/core's `parseViewTree` reads it. */
+export interface ViewTable {
+  workspace_id: string
+  id: string
+  hub_id: string
+  folder_id: string
+  tree: Json<Record<string, unknown>>
+  version: Generated<number>
+  updated_at: Generated<Timestamp>
+  updated_by: string
 }
 
 export interface AttributeTable {
@@ -211,6 +227,7 @@ export interface Database {
   access_log: AccessLogTable
   deleted_hub: DeletedHubTable
   deleted_attribute: DeletedAttributeTable
+  view: ViewTable
 }
 
 // bigint (int8) columns hold versions, counters, and sequence numbers, all far below 2^53.

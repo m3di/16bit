@@ -39,6 +39,53 @@ const externalBuiltUrl = process.env['E2E_BUDGETS_BASE_URL'] ?? externalBaseUrl
  * reused `pnpm dev` keeps its own setting (see .env.example).
  */
 export const E2E_SIGN_IN_LIMIT_PER_IP = '10000'
+/** The projects that run on the production build; the `built` server below is only for them. */
+const BUILT_PROJECTS = ['budgets', 'production']
+
+/**
+ * Whether a `playwright test` run with these arguments includes a project on the production
+ * build (issue 228). No `--project` runs every project. Matches names as Playwright 1.65.1 does
+ * (runner `filterProjects`): case-insensitive, `*` as a wildcard, `--project` taking several
+ * names until the next option. Recheck on upgrade. No other project depends on these two, so
+ * dependencies never pull them in.
+ */
+export function runsOnBuilt(argv: readonly string[]): boolean {
+  const names: string[] = []
+  for (let i = 0; i < argv.length && argv[i] !== '--'; i++) {
+    const arg = argv[i] ?? ''
+    if (arg.startsWith('--project=')) names.push(arg.slice('--project='.length))
+    else if (arg === '--project')
+      while (i + 1 < argv.length && !(argv[i + 1] ?? '').startsWith('-'))
+        names.push(argv[++i] ?? '')
+  }
+  if (names.length === 0) return true
+  return names.some((name) => {
+    const pattern = name.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    const regex = new RegExp(`^${pattern.join('.*')}$`, 'i')
+    return BUILT_PROJECTS.some((project) => regex.test(project))
+  })
+}
+
+/**
+ * For the budgets and production specs: the web app built for production, served by a second
+ * API process. Never reused, locally either: whatever already listens on the port may serve an
+ * older build and give misleading timings (issue 228), so every run builds afresh and Playwright
+ * refuses to start while the port is taken. To measure a server on purpose, set
+ * `E2E_BUDGETS_BASE_URL`.
+ */
+export const builtServer = {
+  name: 'built',
+  command: 'pnpm --filter @16bit/web build && pnpm --filter @16bit/api start',
+  env: {
+    MIGRATION_DATABASE_URL: '',
+    PORT: builtPort,
+    WEB_ROOT: webRoot,
+    SIGN_IN_LIMIT_PER_IP: E2E_SIGN_IN_LIMIT_PER_IP,
+  },
+  url: `http://${process.env['HOST'] ?? '127.0.0.1'}:${builtPort}/health`,
+  reuseExistingServer: false,
+  timeout: 180_000,
+}
 
 // Specs live in tests/*.spec.ts. Each one sets up its own items through the API, so specs can run
 // in any order, in parallel, and across shards. The database must be migrated and seeded first
@@ -115,19 +162,7 @@ export default defineConfig({
           reuseExistingServer: !ci,
           timeout: 60_000,
         },
-        // For the budgets: the web app built for production, served by a second API process.
-        {
-          name: 'built',
-          command: 'pnpm --filter @16bit/web build && pnpm --filter @16bit/api start',
-          env: {
-            MIGRATION_DATABASE_URL: '',
-            PORT: builtPort,
-            WEB_ROOT: webRoot,
-            SIGN_IN_LIMIT_PER_IP: E2E_SIGN_IN_LIMIT_PER_IP,
-          },
-          url: `http://${process.env['HOST'] ?? '127.0.0.1'}:${builtPort}/health`,
-          reuseExistingServer: !ci,
-          timeout: 180_000,
-        },
+        // Only when the run includes the budgets or production specs and no app is given for them.
+        ...(!externalBuiltUrl && runsOnBuilt(process.argv) ? [builtServer] : []),
       ],
 })
