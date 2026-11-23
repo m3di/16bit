@@ -147,6 +147,17 @@ describe('ItemBody', () => {
     expect(html).not.toMatch(/<h1[^>]*>\s*Ship it/)
   })
 
+  it('shows the external key in mono beside the ID only when the item has one (D64)', async () => {
+    const plain = await body()
+    expect(plain).not.toContain('data-external-key')
+    expect(text(plain)).not.toContain('External key')
+    const keyed = await body({
+      item: { ...item('i1', 12, { title: 'Ship it' }), externalKey: 'src/app.ts' },
+    })
+    expect(keyed).toMatch(/<span class="[^"]*font-mono[^"]*" data-external-key>src\/app\.ts</)
+    expect(keyed).toContain('aria-label="Copy external key"')
+  })
+
   it('renders an editor for every attribute of the folder, and the details', async () => {
     const html = await body()
     expect(text(html)).toContain('Title (required)')

@@ -124,6 +124,27 @@ test('a Number value is saved from the New item form, the item panel and the ite
   await expect(table(page).getByRole('row').filter({ hasText: name })).toContainText('5')
 })
 
+test('the external key set through the API shows on the item panel and page, and copies (D64)', async ({
+  api,
+  context,
+  page,
+}) => {
+  const item = await api.createItem({ values: { [title]: uniqueTitle('keyed') } })
+  const key = `src/${uniqueTitle('key').replace(/\s+/g, '-')}.ts`
+  await api.parseItem(await api.patchItem(item, { version: 1, values: {}, externalKey: key }))
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+
+  await page.goto(`${hubPath}?item=${item.id}`)
+  await expect(panel(page).locator('[data-external-key]')).toHaveText(key)
+
+  await page.goto(`/w/${demo.workspaceId}/items/${item.id}`)
+  const details = page.getByRole('complementary', { name: 'Details' })
+  await expect(details.locator('[data-external-key]')).toHaveText(key)
+  await details.getByRole('button', { name: 'Copy external key' }).click()
+  await expect(details.locator('[data-copy-status]')).toHaveText('Copied')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(key)
+})
+
 test('a new row cannot be opened until the server confirms it', async ({ page }) => {
   const name = uniqueTitle('pending')
 

@@ -16,6 +16,7 @@ import FieldEditor from '../hub/FieldEditor.vue'
 import { displayId } from '../hub/relations.ts'
 import { formatTimestamp } from '../hub/values.ts'
 import BacklinksBlock from './BacklinksBlock.vue'
+import ExternalKeyDetail from './ExternalKeyDetail.vue'
 import HistoryBlock from './HistoryBlock.vue'
 import { itemTitle } from '../hub/relations.ts'
 import { folderLink, itemFolder } from './item-page.ts'
@@ -189,6 +190,7 @@ function commit(attributeId: string, value: ItemValues[string], basedOn: number 
       <dl class="m-0 grid grid-cols-[84px_minmax(0,1fr)] gap-x-3 gap-y-2">
         <dt class="text-ink3">ID</dt>
         <dd class="m-0 font-mono text-secondary">{{ label }}</dd>
+        <ExternalKeyDetail v-if="item.externalKey !== undefined" :value="item.externalKey" />
         <dt class="text-ink3">Version</dt>
         <dd class="m-0 font-mono text-secondary" data-item-version>{{ item.version }}</dd>
         <dt class="text-ink3">Updated</dt>
