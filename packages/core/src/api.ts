@@ -12,6 +12,7 @@ import {
   workspaceSchema,
 } from './entities.ts'
 import { timeZoneSchema } from './aggregate.ts'
+import { noNul } from './nul.ts'
 import { urlValueSchema } from './attribute-types/url.ts'
 import { decodeItemCursor, MAX_ITEM_CURSOR_LENGTH, type ItemCursorOrder } from './cursor.ts'
 import { externalKeySchema } from './external-key.ts'
@@ -71,7 +72,13 @@ export const MAX_CAUSE_EVIDENCE = 10
  */
 export const itemCauseSchema = z
   .strictObject({
-    note: z.string().trim().min(1).max(CAUSE_NOTE_MAX_LENGTH).optional(),
+    note: z
+      .string()
+      .trim()
+      .min(1)
+      .max(CAUSE_NOTE_MAX_LENGTH)
+      .refine(...noNul)
+      .optional(),
     evidence: z.array(urlValueSchema).min(1).max(MAX_CAUSE_EVIDENCE).optional(),
     causedBy: z.int().min(1).optional(),
   })
