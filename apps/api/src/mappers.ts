@@ -36,12 +36,20 @@ export const toFolder = (row: Selectable<FolderTable>): Folder => ({
   idPrefix: row.id_prefix,
   itemCount: row.item_count,
   version: row.version,
+  // D76: present only on a views-only folder, never `false`.
+  ...(row.views_only && { viewsOnly: true as const }),
 })
 
-/** A hub row with its title attribute (D50). Only for rows with no parent. */
+/** A hub row with its title attribute (D50) and the folder it opens on (D76). Hub rows only. */
 export const toHub = (row: Selectable<FolderTable>): Hub => {
   if (row.parent_id !== null) throw new Error(`folder ${row.id} is not a hub`)
-  return { ...toFolder(row), parentId: null, titleAttributeId: row.title_attribute_id }
+  return {
+    ...toFolder(row),
+    parentId: null,
+    titleAttributeId: row.title_attribute_id,
+    // Absent when the hub opens on its root, never null.
+    ...(row.opens_on_folder_id !== null && { opensOnFolderId: row.opens_on_folder_id }),
+  }
 }
 
 /** Parsed, so `config` is typed by `type` and gets its defaults. */

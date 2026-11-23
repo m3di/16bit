@@ -135,7 +135,10 @@ async function hubOfAttribute(trx: Trx, workspaceId: string, attributeId: string
 // ----------------------------------------------------------------------------------------
 // Hub
 
-/** `PATCH /hubs/:hubId`: name, colour and title attribute (D50), for hub admins. */
+/**
+ * `PATCH /hubs/:hubId`: name, colour, title attribute (D50) and the folder the hub opens on
+ * (D76), for hub admins.
+ */
 export async function updateHub(
   trx: Trx,
   workspaceId: string,
@@ -146,6 +149,9 @@ export async function updateHub(
   await requireHub(trx, workspaceId, hubId)
   const hubGrant = await ownGrant(trx, workspaceId, hubId, me.id, 'share')
   enforce(can(me, 'hub.rename', { hubGrant }), 'Hub')
+  if (input.opensOnFolderId !== undefined) {
+    enforce(can(me, 'hub.manageSchema', { hubGrant }), 'Hub')
+  }
   await notifyHub(trx, workspaceId, hubId)
 
   if (input.titleAttributeId) {
@@ -166,19 +172,46 @@ export async function updateHub(
 
   const hub = await lockHubRow(trx, workspaceId, hubId)
   if (hub.version !== input.version) throw schemaConflict('hub', toHub(hub))
-  const row = await trx
-    .updateTable('folder')
-    .set({
-      ...(input.name !== undefined && { name: input.name }),
-      ...(input.color !== undefined && { color: input.color }),
-      ...(input.titleAttributeId !== undefined && { title_attribute_id: input.titleAttributeId }),
-      version: sql`version + 1`,
-    })
-    .where('workspace_id', '=', workspaceId)
-    .where('id', '=', hubId)
-    .returningAll()
-    .executeTakeFirstOrThrow()
-  return toHub(row)
+  const opensOn = input.opensOnFolderId
+  const opensOnInvalid = () =>
+    invalid('opensOnFolderId: must be a folder of this hub other than the hub itself, or null')
+  if (opensOn) {
+    // After the hub row: a folder delete holds it while it deletes, so the folder is either
+    // gone here or stays until this commits (the foreign key then holds it).
+    const folder = await trx
+      .selectFrom('folder')
+      .select('id')
+      .where('workspace_id', '=', workspaceId)
+      .where('hub_id', '=', hubId)
+      .where('id', '=', opensOn)
+      .where('parent_id', 'is not', null)
+      .executeTakeFirst()
+    if (!folder) throw opensOnInvalid()
+  }
+  try {
+    const row = await trx
+      .updateTable('folder')
+      .set({
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.color !== undefined && { color: input.color }),
+        ...(input.titleAttributeId !== undefined && {
+          title_attribute_id: input.titleAttributeId,
+        }),
+        ...(opensOn !== undefined && { opens_on_folder_id: opensOn }),
+        version: sql`version + 1`,
+      })
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', hubId)
+      .returningAll()
+      .executeTakeFirstOrThrow()
+    return toHub(row)
+  } catch (error) {
+    // folder_opens_on_folder_fkey and folder_opens_on_hub_check (0016), the backstops of the
+    // check above.
+    const state = sqlState(error)
+    if (opensOn && (state === '23503' || state === '23514')) throw opensOnInvalid()
+    throw error
+  }
 }
 
 /**
@@ -348,6 +381,8 @@ export async function createFolder(
       name: input.name,
       color: input.color,
       id_prefix: hub.id_prefix,
+      // Fixed from here on (D76, folder_views_only_fixed).
+      views_only: input.viewsOnly ?? false,
     })
     .onConflict((oc) => oc.columns(['workspace_id', 'id']).doNothing())
     .returningAll()
@@ -457,6 +492,16 @@ export async function deleteFolder(
                    WHERE f.workspace_id = ${workspaceId} AND f.parent_id = ${folderId}) AS busy
   `.execute(trx)
   if (rows[0]?.busy) throw new HttpError('not_empty', 'The folder still holds folders or items')
+  // A composed view is never lost in one click (D76): reset it first. folder_view_check (0016)
+  // checks again once the delete holds the folder row, so a view PUT that commits after this
+  // read is caught there.
+  const view = await trx
+    .selectFrom('view')
+    .select('id')
+    .where('workspace_id', '=', workspaceId)
+    .where('folder_id', '=', folderId)
+    .executeTakeFirst()
+  if (view) throw hasView()
 
   // Attached attributes first: the foreign key refuses the folder otherwise.
   await trx
@@ -464,12 +509,20 @@ export async function deleteFolder(
     .where('workspace_id', '=', workspaceId)
     .where('folder_id', '=', folderId)
     .execute()
-  await trx
-    .deleteFrom('folder')
-    .where('workspace_id', '=', workspaceId)
-    .where('id', '=', folderId)
-    .execute()
+  try {
+    await trx
+      .deleteFrom('folder')
+      .where('workspace_id', '=', workspaceId)
+      .where('id', '=', folderId)
+      .execute()
+  } catch (error) {
+    if (sqlState(error) === '16B08') throw hasView()
+    throw error
+  }
 }
+
+const hasView = () =>
+  new HttpError('has_view', 'The folder has a stored view; reset it before deleting the folder')
 
 // ----------------------------------------------------------------------------------------
 // Which attributes a folder shows

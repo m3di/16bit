@@ -48,7 +48,9 @@ agent_key        (workspace_id, principal_id, secret_hash, created_by, created_a
 access_log       (workspace_id, seq, actor, action, target, detail jsonb, at)       -- grants, roles, keys, members (D48)
 folder           (workspace_id, id, hub_id, parent_id,   -- hub: parent_id is null, hub_id = id
                   name, color, id_prefix, item_count, version, next_seq,
-                  title_attribute_id)                    -- hub rows only (D50)
+                  title_attribute_id,                    -- hub rows only (D50)
+                  views_only,                            -- subfolders only, fixed at creation (D76)
+                  opens_on_folder_id)                    -- hub rows only (D76)
 attribute        (workspace_id, id, hub_id, name, type, config jsonb, indexed bool, version)
 deleted_hub      (workspace_id, id, deleted_at, deleted_by)   -- IDs of deleted hubs (D52)
 deleted_attribute (workspace_id, id, hub_id, deleted_at, deleted_by) -- IDs of deleted attributes (#133)
@@ -57,7 +59,8 @@ item             (workspace_id, id, hub_id, folder_id, seq_id, external_key,
                   values jsonb, version bigint, updated_at, updated_by)
 item_index       (workspace_id, attribute_id, item_id, ord, num, txt, ts)   -- derived; several rows per item for multi-valued types
 link             (workspace_id, from_item, attribute_id, to_item)
-view             (workspace_id, id, hub_id, folder_id, tree jsonb, version)
+view             (workspace_id, id, hub_id, folder_id, tree jsonb, version,  -- one per folder (D76)
+                  updated_at, updated_by)
 revision         (workspace_id, seq bigint, item_id, hub_id, version, patch jsonb, actor, cause jsonb, at,
                   client_mutation_id uuid)
 comment          (workspace_id, id, item_id, parent_id, author, body jsonb, at)
@@ -153,8 +156,9 @@ Rules: indexed attributes only for filter and sort, one level of expansion, a re
 | Describe | `GET /v1/hubs/:hub` | M0 (folders and attributes) |
 | Get | `GET /v1/items/:id`, `POST /v1/items/get` | M0 |
 | Query | `POST /v1/query` | M0 (by folder), M1 (filters) |
-| Aggregate | `POST /v1/aggregate` | M4 |
-| View data | `GET /v1/views/:id/data` | M4 |
+| View | `GET /v1/workspaces/:w/folders/:folderId/view` (and `PUT`, `DELETE`) | M4 |
+| Aggregate | `POST /v1/workspaces/:w/aggregate` | M4 |
+| View data | `GET /v1/workspaces/:w/folders/:folderId/view/data?version=` | M4 |
 | Search | `GET /v1/search` | M6 |
 | Changes | `GET /v1/workspaces/:workspaceId/changes?after=seq`, and the WebSocket `GET /v1/workspaces/:workspaceId/feed` (D57) | M3 |
 | Digest | `GET /v1/views/:id/digest` | M5 |
@@ -176,6 +180,16 @@ Writes: `POST /v1/items`, `PATCH /v1/items/:id` (with expected version), `DELETE
 **Keys (#200).** `externalKey` is set on create and patch and appears in every item read, `/changes`, the feed and history, through `toItem` and the revision patch. A write that breaks `item_external_key_key` is 409 `key_taken`. The by-key routes are `GET` and `PUT /hubs/:hubId/items/by-key/:key`; the router's `maxParamLength` is raised so a 200-code-point key (up to 400 UTF-16 units) reaches `externalKeySchema`. An upsert looks the key up, then creates or patches (`upsertItem` in `items.ts`). If the key changes hands in between (a racing upsert's insert wins the unique index, or the item is deleted or re-keyed before its row is locked), it throws `KeyRace`, and the route reruns the whole write in a new transaction, up to three times, so the loser of two creates patches the winner's item. With `clientMutationId`, an upsert's retry matches a first attempt of either op, `create` or `update`, in the same hub (`mutations.ts`). The keys `.` and `..` are valid but can't be addressed by key, since URLs resolve them as dot segments.
 
 **Preconditions and `$now` (#203).** A `condition` is compiled by core's `compileItemQuery` with every attribute of the item's folder treated as indexed (`compileCondition` in `preconditions.ts`), so its operators and operand checks are a query's. It is evaluated by the same SQL as a query's `where` (`conditionSql` in `items.ts`), over the item's current values projected as `item_index` rows in an `unnest` (`conditionHolds`), so case, collation and date comparison match `POST /query` exactly. A patch evaluates it after the row lock and the version check; a failure is 412 with the item, writes nothing and records no `clientMutationId`. An upsert with no item for the key evaluates it against no values, in the create folder (412 `current: null`). A 412 is among the errors after which `idempotentWrite` looks the mutation ID up again, so a retry racing its own first attempt replays instead of failing its condition. `{ "$now": "<duration>" }` is resolved into an ordinary date before validation (`resolveClockValues`) and before compiling, from one `clock_timestamp()` per write: after the row lock on a patch, at the start of a create, which has no row to wait for. Request errors are found first with a provisional clock before the lock; the values are resolved again after it.
+
+**Root views (#254, D76 to D79).** `apps/api/src/views.ts`; contracts in `packages/core/src/views.ts`, table in migration 0016.
+
+- `GET /v1/workspaces/:w/folders/:folderId/view` (`hub.read`, one snapshot with the workspace `seq`) answers the folder's stored view, or the default (`defaultViewTree`: `page > table(this folder)`, an empty page for a views-only folder) with `stored: false`, `version: 0` and no `updatedAt` or `updatedBy`. A missing folder, or one in a hub the caller holds no grant on, is 404 (D45).
+- `PUT` with `{ version, tree }` replaces the whole tree; `DELETE ?version=` resets to the default (204; 404 when none is stored). Both need `hub.manageSchema` (D78): 403 for editors, commenters, viewers and every agent, 404 without a grant. A stale `version` is 409 `conflict` with `current`, the view as it now is. `version: 0` inserts with `ON CONFLICT (workspace_id, folder_id) DO NOTHING`, so the loser of two first PUTs gets that 409 too, never a 500.
+- PUT holds the caller's grant `FOR SHARE`, then the hub's schema lock shared (D55), then checks the tree: JSON nested at most 64 deep (core's size and NUL scans recurse), `parseViewTree`, then `checkViewTree` against the folders the tree binds to in the view's hub and the attributes they show. Every error is 422 `invalid_view` with `errors: [{ path, message }]`. The stored tree is the parsed one, defaults filled in. `validateViewTree` is the same check, exported for seeds.
+- A PUT whose folder is deleted after it was read gets 404 (the insert's foreign key, 23503); a `view_tree_size` CHECK violation is 422 `invalid_view`. Deleting a folder with a stored view is 409 `has_view`: checked under the folder's lock, and again by `folder_view_check` (16B08) for a view inserted but not yet committed. Deleting a hub takes its views.
+- Every write sends the `hub` NOTIFY. There is no view history.
+- Views-only folders (D76): `POST /hubs/:hubId/folders` takes `viewsOnly`, and folder reads carry `viewsOnly: true` only on such a folder. An item create or upsert into one is 422 `views_only` (the folder's flag is read first; `item_views_only_check`, 16B07, is the backstop). `PATCH /hubs/:hubId` takes `opensOnFolderId`, a folder of the hub other than the hub itself (400 otherwise), or `null` for the root; hub reads carry it only when set.
+- A views-only folder may hold subfolders; those are ordinary folders unless created views-only themselves. A stored tree that no longer parses (a broken upgrade) is logged and GET serves the default tree at the stored row's version, so a PUT at that version or a reset replaces it, rather than every read failing.
 
 **Changes, `seq` and mutation IDs (#170, D58, D59).**
 
