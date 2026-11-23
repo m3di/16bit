@@ -24,6 +24,7 @@ const TABLES = [
   'principal',
   'revision',
   'session',
+  'view',
   'workspace',
 ]
 // Installation-level tables sit outside workspace scope (D46).
@@ -121,6 +122,7 @@ describe('migrations', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -795,6 +797,7 @@ describe('0009_schema_writes', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -849,6 +852,7 @@ describe('0010_invite_update_owner', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -883,6 +887,7 @@ describe('0011_deleted_attribute', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
     const backfilled = await db
       .selectFrom('deleted_attribute')
@@ -945,6 +950,7 @@ describe('0012_mutation_ids', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
     // Existing revisions carry no ID.
     expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
@@ -1045,6 +1051,7 @@ describe('0013_hub_prefix_unique', () => {
       '0013_hub_prefix_unique',
       '0014_revision_cause',
       '0015_item_external_key',
+      '0016_views',
     ])
 
     expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
@@ -1124,7 +1131,11 @@ describe('0014_revision_cause', () => {
     await revision(6, `  ${long}\n`)
     await revision(7, '\u00a0 padded\t')
 
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0014_revision_cause',
+      '0015_item_external_key',
+      '0016_views',
+    ])
     const migrated = [
       [1, { note: 'from the old column' }],
       [2, null],
@@ -1159,7 +1170,11 @@ describe('0014_revision_cause', () => {
     expect(functions[0]?.n).toBe(0)
 
     // Up again gives the same causes.
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0014_revision_cause',
+      '0015_item_external_key',
+      '0016_views',
+    ])
     expect(await causes()).toEqual(migrated)
 
     // A structured cause survives down as JSON text, which up then reads as a note.
@@ -1168,7 +1183,11 @@ describe('0014_revision_cause', () => {
     expect((await migrator().migrateTo('0013_hub_prefix_unique')).error).toBeUndefined()
     const json = '{"causedBy": 1, "evidence": ["https://e.example/1"]}'
     expect((await causes())[2]).toEqual([3, json])
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0014_revision_cause',
+      '0015_item_external_key',
+      '0016_views',
+    ])
     expect((await causes())[2]).toEqual([3, { note: json }])
   })
 
@@ -1182,7 +1201,11 @@ describe('0014_revision_cause', () => {
       'revision.cause becomes a note of at most 500 characters (D63); 1 revisions have a longer one',
     )
     await sql`UPDATE revision SET cause = 'short'`.execute(db)
-    expect(await migrateToLatest(db)).toEqual(['0014_revision_cause', '0015_item_external_key'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0014_revision_cause',
+      '0015_item_external_key',
+      '0016_views',
+    ])
   })
 
   describe('on the latest schema', () => {
@@ -1251,7 +1274,7 @@ describe('0015_item_external_key', () => {
     await sql`INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
               VALUES ('w1', 'i1', 'h1', 'f1', 1, '{"a":1}', 'p1')`.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key'])
+    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key', '0016_views'])
     const keys = () =>
       db.selectFrom('item').select(['id', 'external_key', 'values']).orderBy('id').execute()
     expect(await keys()).toEqual([{ id: 'i1', external_key: null, values: { a: 1 } }])
@@ -1269,7 +1292,7 @@ describe('0015_item_external_key', () => {
       { id: 'i2' },
     ])
 
-    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key'])
+    expect(await migrateToLatest(db)).toEqual(['0015_item_external_key', '0016_views'])
     expect((await keys()).map((r) => r.external_key)).toEqual([null, null])
     await item('i3', 3, 'src/app.ts')
   })

@@ -26,6 +26,7 @@ const SCOPED = [
   'link',
   'revision',
   'hub_grant',
+  'view',
 ] as const
 type Scoped = (typeof SCOPED)[number]
 
@@ -136,6 +137,9 @@ async function fixtures(): Promise<void> {
              ('w2', 'inv', 'tok2', 'member', 'own2', now() + interval '1 day');
     INSERT INTO access_log (workspace_id, seq, actor, action, target) VALUES
       ('w1', 1, 'own', 'grant.set', 'mem'), ('w2', 1, 'own2', 'grant.set', 'mem');
+    INSERT INTO view (workspace_id, id, hub_id, folder_id, tree, updated_by) VALUES
+      ('w1', 'v1', 'h1', 'h1', '{"schemaVersion":1}', 'own'),
+      ('w2', 'v1', 'h1', 'h1', '{"schemaVersion":1}', 'own2');
   `.execute(db)
 }
 
