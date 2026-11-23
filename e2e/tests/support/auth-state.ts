@@ -19,6 +19,10 @@ export const people = {
   ivy: { id: 'ivy', email: 'ivy@example.com', name: 'Ivy Chen', role: 'viewer' },
   /** Viewer of Support. */
   noor: { id: 'noor', email: 'noor@example.com', name: 'Noor Haddad', role: 'finance' },
+  /** Editor of Parcel Tracker only (apps/api/src/project-seed.ts); owns most of its sprint. */
+  sara: { id: 'sara', email: 'sara@example.com', name: 'Sara Lind', role: 'member' },
+  /** Editor of Parcel Tracker only; owns the task in review. */
+  tomas: { id: 'tomas', email: 'tomas@example.com', name: 'Tomas Berg', role: 'member' },
 } as const
 
 export type Person = keyof typeof people
