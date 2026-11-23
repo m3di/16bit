@@ -789,12 +789,18 @@ describe('validateViewTree, for seeds', () => {
     expect(bad).toMatchObject({ ok: false })
   })
 
-  it('bounds nesting without recursion', () => {
+  it('refuses a deeply nested value through core, without overflowing', async () => {
     let deep: unknown = 1
     for (let i = 0; i < 100_000; i++) deep = [deep]
-    expect(jsonDepthPath(deep)).toBe(
-      Array.from({ length: MAX_VIEW_JSON_DEPTH }, () => '0').join('.'),
-    )
+    expect(await validateViewTree(db, WS, 'h1', deep)).toEqual({
+      ok: false,
+      errors: [
+        {
+          path: Array.from({ length: MAX_VIEW_JSON_DEPTH }, () => '0').join('.'),
+          message: `A view nests at most ${String(MAX_VIEW_JSON_DEPTH)} levels`,
+        },
+      ],
+    })
     expect(jsonDepthPath(tableTree('f1'))).toBeNull()
   })
 })

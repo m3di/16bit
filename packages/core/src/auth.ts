@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { idSchema, timestampSchema, WORKSPACE_ROLES } from './entities.ts'
+import { noNul } from './nul.ts'
 import { agentHubRoleSchema } from './roles.ts'
 
 // Sign-in, sessions and invites (D42, D43, D46). These routes are installation-level:
@@ -17,7 +18,12 @@ export const PASSWORD_MAX_LENGTH = 256
 /** For a new password. Sign-in only checks the upper bound, so old passwords keep working. */
 export const newPasswordSchema = z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH)
 
-export const accountNameSchema = z.string().trim().min(1).max(200)
+export const accountNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(...noNul)
 
 /** `POST /v1/auth/login`. A wrong email and a wrong password get the same 401. */
 export const loginRequestSchema = z.strictObject({

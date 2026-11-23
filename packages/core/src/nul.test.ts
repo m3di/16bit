@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  acceptInviteSchema,
+  accountNameSchema,
   attributeSchema,
   compileItemQuery,
   createItemSchema,
@@ -121,6 +123,22 @@ describe('NUL in names (#285)', () => {
     expect(refused(updateAttributeSchema.safeParse({ version: 0, name: nul }))).toContain('name')
     expect(refused(createAgentKeySchema.safeParse({ name: nul, hubRole: 'editor' }))).toEqual([
       'name',
+    ])
+  })
+
+  it('refuses it in an account name when accepting an invite', () => {
+    const body = { name: nul, email: 'a@example.com', password: 'a long enough password' }
+    const result = acceptInviteSchema.safeParse(body)
+    expect(result.success).toBe(false)
+    expect(accountNameSchema.safeParse(nul).success).toBe(false)
+    // A union: the issue itself is at the top (path []), and its first branch, the new-account
+    // body, names the field with the NUL message.
+    expect(result.error?.issues).toMatchObject([
+      {
+        code: 'invalid_union',
+        path: [],
+        errors: [[{ code: 'custom', path: ['name'], message: NUL_MESSAGE }], [{ path: [] }]],
+      },
     ])
   })
 

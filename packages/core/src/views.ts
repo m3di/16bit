@@ -502,16 +502,27 @@ function utf8Length(text: string): number {
  * null. Iterative, so input of any depth is safe to check.
  */
 export function jsonDepthPath(value: unknown, max: number = MAX_VIEW_JSON_DEPTH): string | null {
-  const stack: { value: unknown; depth: number; path: string[] }[] = [{ value, depth: 0, path: [] }]
-  for (let next = stack.pop(); next; next = stack.pop()) {
-    const { value: v, depth, path } = next
+  // Each node links to its parent; the path is built only for the one node that fails.
+  interface Node {
+    value: unknown
+    depth: number
+    key: string
+    parent: Node | null
+  }
+  const stack: Node[] = [{ value, depth: 0, key: '', parent: null }]
+  for (let node = stack.pop(); node; node = stack.pop()) {
+    const v = node.value
     if (typeof v !== 'object' || v === null) continue
-    if (depth + 1 > max) return path.join('.')
+    if (node.depth + 1 > max) {
+      const keys: string[] = []
+      for (let n: Node = node; n.parent; n = n.parent) keys.push(n.key)
+      return keys.reverse().join('.')
+    }
     const entries = Array.isArray(v)
       ? v.map((child, i): [string, unknown] => [String(i), child])
       : Object.entries(v)
     for (const [key, child] of entries.reverse()) {
-      stack.push({ value: child, depth: depth + 1, path: [...path, key] })
+      stack.push({ value: child, depth: node.depth + 1, key, parent: node })
     }
   }
   return null
