@@ -31,13 +31,24 @@ import { expect, expectStatus, test, uniqueTitle, type Client } from './support/
 // timing budgets on the production build (project-home-budgets.spec.ts).
 
 test.describe.configure({ mode: 'default' })
-test.use({ timezoneId: 'UTC' })
+// A step that can't happen fails within 10 s, so the tests that write always have time to put
+// the hub back.
+test.use({ timezoneId: 'UTC', actionTimeout: 10_000 })
 
 const TZ = 'UTC'
 const HUB = parcelPath()
 const { folders: F, attr: A } = PARCEL
 /** How soon after an agent's write both browsers must show it (M4-12). */
 const LIVE_MS = 2_000
+
+// The measured numbers, in the CI log as well as on the report.
+// eslint-disable-next-line no-empty-pattern -- Playwright reads the fixtures from the pattern
+test.afterEach(({}, testInfo) => {
+  const lines = testInfo.annotations
+    .filter((a) => a.description)
+    .map((a) => `  ${a.type}: ${a.description ?? ''}`)
+  if (lines.length) console.log([`[measured] ${testInfo.title}`, ...lines].join('\n'))
+})
 
 const viewData = (r: Response, folder: string) =>
   r.request().method() === 'GET' &&
@@ -166,8 +177,9 @@ test('project home: every block shows what /aggregate and /query answer, and the
   })
   // The burndown starts at the sprint's 34 points and has one row per weekday.
   const burndown = await readBlock(page, 'burndown')
-  expect(burndown).toMatchObject({ burndown: { ideal: expect.arrayContaining(['34', '0']) } })
-  if (burndown && 'burndown' in burndown) expect(burndown.burndown.left).toHaveLength(10)
+  if (!burndown || !('burndown' in burndown)) throw new Error('No burndown')
+  expect(burndown.burndown.ideal[0]).toBe('34')
+  expect(burndown.burndown.left).toHaveLength(10)
 })
 
 test('my work is each reader’s own: Sara and Tomas see their own sprint and numbers', async ({
@@ -349,9 +361,13 @@ test('an agent key’s writes over HTTP reach both browsers within 2 s', async (
   const sprint = await currentSprint(owner, TZ)
   const end = dateOf(sprint.values[A.end])
   /** Both browsers agree with the API within 2 s of the write that ended at `since`. */
-  const bothAgree = async (since: number) => {
-    await expectViewMatches(page, owner, F.home, { timeout: LIVE_MS, since })
-    await expectViewMatches(sara, as('sara'), F.work, { timeout: LIVE_MS, since })
+  const measured: string[] = []
+  const bothAgree = async (what: string, since: number) => {
+    const ms = await Promise.all([
+      expectViewMatches(page, owner, F.home, { timeout: LIVE_MS, since }),
+      expectViewMatches(sara, as('sara'), F.work, { timeout: LIVE_MS, since }),
+    ])
+    measured.push(`${what} ${ms.map((n) => n.toFixed(0)).join('/')} ms`)
   }
   const patch = async (item: Item, values: Record<string, unknown>) => {
     const res = await agent.patch(`/items/${item.id}`, { version: item.version, values })
@@ -377,13 +393,13 @@ test('an agent key’s writes over HTTP reach both browsers within 2 s', async (
     })
     await expectStatus(res, 201)
     task = (await res.json()) as Item
-    await bothAgree(Date.now())
+    await bothAgree('create', Date.now())
     expect(await numberValue(page, 'points-done')).toBe('16 of 37')
     expect(await numberValue(sara, 'my-points')).toBe('13')
 
     // A patch: the card moves to In review, the numbers follow.
     task = await patch(task, { [A.stage]: 'in-review' })
-    await bothAgree(Date.now())
+    await bothAgree('patch to In review', Date.now())
     expect(await numberValue(page, 'in-review')).toBe('3')
     expect(await readBlock(sara, 'my-board')).toMatchObject({
       columns: expect.arrayContaining([
@@ -393,7 +409,7 @@ test('an agent key’s writes over HTTP reach both browsers within 2 s', async (
 
     // Done today: points done, the burndown's today and Sara's team row move.
     task = await patch(task, { [A.stage]: 'done', [A.doneOn]: todayIn(TZ) })
-    await bothAgree(Date.now())
+    await bothAgree('done today', Date.now())
     expect(await numberValue(page, 'points-done')).toBe('19 of 37')
     expect(await readBlock(page, 'team-points')).toMatchObject({
       groups: expect.arrayContaining([
@@ -405,17 +421,21 @@ test('an agent key’s writes over HTTP reach both browsers within 2 s', async (
     // A delete: gone from both.
     await expectStatus(await agent.delete(`/items/${task.id}?version=${String(task.version)}`), 204)
     task = null
-    await bothAgree(Date.now())
+    await bothAgree('delete', Date.now())
     expect(await numberValue(page, 'points-done')).toBe('16 of 34')
     await expect(block(page, 'current-work-list')).not.toContainText(title)
 
     // Editing the sprint's dates refetches the burndown and the sprint's day count.
     sprintNow = await patch(sprint, { [A.end]: addWeekdays(end, 1) })
-    await bothAgree(Date.now())
+    await bothAgree('sprint dates', Date.now())
     expect(await numberValue(page, 'sprint-day')).toMatch(/ of 11$/)
     const burndown = await readBlock(page, 'burndown')
     if (burndown && 'burndown' in burndown) expect(burndown.burndown.left).toHaveLength(11)
   } finally {
+    test.info().annotations.push({
+      type: 'Home and My work agreed with the API after',
+      description: measured.join(', '),
+    })
     if (task) await deleteItem(owner, task.id)
     if (sprintNow.values[A.end] !== end) {
       const current = (await (await owner.get(`/items/${sprint.id}`)).json()) as Item
@@ -443,9 +463,13 @@ async function filterAsJson(form: ReturnType<typeof blockForm>, filter: unknown)
   await box.blur()
 }
 
-/** Adds a block of `type` to the page, the root of the outline, and selects it. */
+/** Selects the page, the root of the composer's outline. */
+const selectPage = (page: Page) =>
+  page.locator('[data-outline-block="page"] [data-outline-select]').first().click()
+
+/** Adds a block of `type` to the page and selects it. */
 async function addToPage(page: Page, type: string) {
-  await page.locator('[data-outline-block="page"] [data-outline-select]').first().click()
+  await selectPage(page)
   await page.getByLabel('Add to Page').selectOption({ label: type })
   await page.getByRole('button', { name: 'Add block' }).click()
   await expect(blockForm(page, type)).toBeVisible()
@@ -457,6 +481,8 @@ test('a hub admin builds My work in the composer from the default view; a stale 
   page,
   pageAs,
 }) => {
+  // Long enough that the view is always put back, whatever step fails.
+  test.setTimeout(120_000)
   const owner = as('owner')
   const seeded = await getView(owner, F.work)
   const me = [{ $me: true }]
@@ -524,8 +550,9 @@ test('a hub admin builds My work in the composer from the default view; a stale 
     const first = page
     const second = await context.newPage()
     await second.goto(`${HUB}/settings/views`)
-    await second.getByLabel('Folder').selectOption({ label: 'My work' })
+    await second.getByLabel('Folder').selectOption({ label: '– My work (views only)' })
     await expect(blockForm(second, 'Page').getByLabel('Title')).toHaveValue('My work')
+    await selectPage(first)
     await blockForm(first, 'Page').getByLabel('Title').fill('My work, first tab')
     await first.getByRole('button', { name: 'Save view' }).click()
     await expect.poll(async () => (await getView(owner, F.work)).version).toBe(saved.version + 1)

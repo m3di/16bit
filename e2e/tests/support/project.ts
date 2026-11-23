@@ -340,8 +340,13 @@ function substitute(filter: Filter | undefined, ctx: Context): Filter | undefine
   return found.unresolved ? null : out
 }
 
+/** `where` and one more condition, flattened into its `and` so the query stays shallow (D20). */
 const both = (where: Filter | undefined, condition: Filter): Filter =>
-  where ? { and: [where, condition] } : condition
+  !where
+    ? condition
+    : 'and' in where
+      ? { and: [...where.and, condition] }
+      : { and: [where, condition] }
 
 function attributeOf(ctx: Context, id: string): Attribute {
   const a = ctx.description.attributes.find((x) => x.id === id)
@@ -729,17 +734,19 @@ export async function expectedView(
   hubId: string,
   root: Block,
   tz: string,
+  only?: readonly string[],
 ): Promise<Map<string, Shown>> {
   const ctx = await context(client, hubId, tz, root)
-  const out = new Map<string, Shown>()
-  for (const block of dataBlocks(root)) out.set(block.id, await expectedBlock(ctx, block))
-  return out
+  const blocks = dataBlocks(root).filter((b) => !only || only.includes(b.id))
+  const shown = await Promise.all(blocks.map((b) => expectedBlock(ctx, b)))
+  return new Map(blocks.map((b, i) => [b.id, shown[i] as Shown]))
 }
 
 /**
  * Every data block of `folderId`'s view shows what the API answers for its binding, as
- * `client` (the person signed in on `page`) in `tz`. Waits up to `timeout` ms for each, all
- * counted from `since`, so a live update must land within it.
+ * `client` (the person signed in on `page`) in `tz`. All blocks must agree by `timeout` ms
+ * after `since` (the end of a write, so a live update must land within it; the call by
+ * default). Resolves with the milliseconds from `since` to the first look that agreed.
  */
 export async function expectViewMatches(
   page: Page,
@@ -749,21 +756,33 @@ export async function expectViewMatches(
     hubId?: string
     tz?: string
     timeout?: number
-    /** When the timeout starts (`Date.now()` of a write); the call by default. */
     since?: number
     only?: string[]
   } = {},
-): Promise<Map<string, Shown>> {
+): Promise<number> {
   const started = options.since ?? Date.now()
   const { hubId = PARCEL.hubId, tz = 'UTC', timeout = 5_000 } = options
   const view = await getView(client, folderId)
-  const expected = await expectedView(client, hubId, view.tree.root, tz)
-  for (const [id, shown] of expected) {
-    if (options.only && !options.only.includes(id)) continue
-    const left = Math.max(1, timeout - (Date.now() - started))
-    await expect
-      .poll(() => readBlock(page, id), { timeout: left, message: `block "${id}"` })
-      .toEqual(shown)
-  }
-  return expected
+  const all = await expectedView(client, hubId, view.tree.root, tz, options.only)
+  const expected = Object.fromEntries(
+    [...all].filter(([id]) => !options.only || options.only.includes(id)),
+  )
+  const ids = Object.keys(expected)
+  let agreedAt = Infinity
+  await expect
+    .poll(
+      async () => {
+        const shown = await Promise.all(ids.map((id) => readBlock(page, id)))
+        agreedAt = Date.now()
+        return Object.fromEntries(ids.map((id, i) => [id, shown[i]]))
+      },
+      {
+        // Asking the API takes time too: never less than one look.
+        timeout: Math.max(100, timeout - (Date.now() - started)),
+        intervals: [50],
+        message: `${folderId} agrees with the API`,
+      },
+    )
+    .toEqual(expected)
+  return agreedAt - started
 }
