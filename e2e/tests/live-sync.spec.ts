@@ -146,6 +146,79 @@ test('a draft being typed is kept when someone else saves, and the conflict offe
   expect(await getItem(owner, item.id)).toMatchObject({ version: 3, values: { [title]: mine } })
 })
 
+test('a rich text draft is kept when someone else saves, and the conflict offers both', async ({
+  as,
+  invite,
+  pageWithSession,
+}) => {
+  // Launch is the seeded hub with a rich text field (Notes).
+  const launchPath = `/w/${demo.workspaceId}/hubs/launch`
+  const notesId = 'launch-notes'
+  const doc = (text: string) => ({
+    type: 'doc',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+  })
+  const owner = as('owner')
+  const item = await owner.createItem('launch', {
+    'launch-title': uniqueTitle('rich draft'),
+    [notesId]: doc('Notes before'),
+  })
+  const theirs = uniqueTitle('notes theirs')
+  const mine = uniqueTitle('notes mine')
+  const { page: a } = await personOn('launch', 'editor', owner, invite, pageWithSession)
+  const { page: b, name: otherName } = await personOn(
+    'launch',
+    'editor',
+    owner,
+    invite,
+    pageWithSession,
+  )
+  /** Replaces the document in a page's Notes editor, and leaves the editor focused. */
+  async function write(page: Page, text: string) {
+    const notes = panel(page).getByRole('textbox', { name: 'Notes' })
+    await notes.click()
+    await page.keyboard.press('ControlOrMeta+A')
+    await page.keyboard.type(text)
+    await expect(notes).toHaveText(text)
+    return notes
+  }
+
+  const live = feedLive(a)
+  await a.goto(`${launchPath}?item=${item.id}`)
+  await live
+  const notes = await write(a, mine)
+
+  // Someone else saves the same field; their editor saves when it loses focus.
+  await b.goto(`${launchPath}?item=${item.id}`)
+  await write(b, theirs)
+  await panel(b).getByLabel('Title (required)').focus()
+  await expect(panel(b).locator('[data-item-version]')).toHaveText('2')
+
+  // The writer keeps the draft and is told, with the new text.
+  const note = panel(a).locator('[data-changed-while-editing]')
+  await expect(note.getByRole('status')).toContainText(
+    `Changed by ${otherName} while you were editing: “${theirs}”`,
+  )
+  await expect(notes).toHaveText(mine)
+
+  // Leaving the editor saves against the version the draft was based on: the conflict shows
+  // theirs and offers the draft back.
+  await panel(a).getByLabel('Title (required)').focus()
+  const offer = panel(a).locator('[data-refused-draft]')
+  await expect(offer).toContainText(`your Notes “${mine}” was not saved`)
+  await expect(notes).toHaveText(theirs)
+  expect((await getItem(owner, item.id)).values[notesId]).toEqual(doc(theirs))
+
+  await offer.getByRole('button', { name: 'Keep mine' }).click()
+  await expect(panel(a).locator('[data-item-version]')).toHaveText('3')
+  await expect(notes).toHaveText(mine)
+  await expect(offer).toHaveCount(0)
+  expect(await getItem(owner, item.id)).toMatchObject({
+    version: 3,
+    values: { [notesId]: doc(mine) },
+  })
+})
+
 test('a live create puts the item first and keeps focus on the row the reader left (D61)', async ({
   as,
   invite,

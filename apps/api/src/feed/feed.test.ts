@@ -483,6 +483,35 @@ describe('subscriptions (D57, D58)', () => {
     vw.socket.close()
   })
 
+  it('carries an item’s external key, and its upsert by key (D64, #200)', async () => {
+    const vw = await person('vw')
+    vw.subscribe('h1', await counter())
+    await changes(vw)
+    const created = await create('ed', 'h1', 'one', { externalKey: 'src/app.ts' })
+    expect((await changes(vw)).changes).toEqual([
+      expect.objectContaining({
+        itemId: created.id,
+        item: expect.objectContaining({ externalKey: 'src/app.ts' }) as unknown,
+      }),
+    ])
+    const upserted = await as('ed', 'PUT', '/hubs/h1/items/by-key/src%2Fapp.ts', {
+      folderId: 'h1',
+      values: { t1: 'two' },
+    })
+    expect(upserted.statusCode, upserted.body).toBe(200)
+    expect((await changes(vw)).changes).toEqual([
+      expect.objectContaining({
+        itemId: created.id,
+        item: expect.objectContaining({
+          version: 2,
+          externalKey: 'src/app.ts',
+          values: { t1: 'two' },
+        }) as unknown,
+      }),
+    ])
+    vw.socket.close()
+  })
+
   it('splits a batch of 200 maximal causes into messages well under the send limit (#197)', async () => {
     const cause = {
       note: 'n'.repeat(500),
