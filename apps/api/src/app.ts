@@ -1,6 +1,7 @@
 import {
   can,
   changeMemberRoleSchema,
+  batchRequestSchema,
   changesQuerySchema,
   createAgentKeySchema,
   createAttributeSchema,
@@ -25,12 +26,12 @@ import {
   updateFolderSchema,
   updateHubSchema,
   effectiveHubRole,
+  type BatchResponse,
   type ChangesPage,
   type HubDescription,
   type HubListEntry,
   type ItemQueryResult,
   type ItemRead,
-  type ItemWriteResult,
   type Page,
   type Workspace,
 } from '@16bit/core'
@@ -39,7 +40,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
-import { checkHub, folderHub, itemHub } from './access.ts'
+import { checkHub, folderHub } from './access.ts'
 import { readChanges } from './changes.ts'
 import { itemRevisions } from './revisions.ts'
 import { Feed, type FeedOptions } from './feed/feed.ts'
@@ -56,20 +57,16 @@ import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { withScope, workspaceSeq } from './db/scope.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
-import {
-  backlinks,
-  createItem,
-  deleteItem,
-  expandItem,
-  getItem,
-  itemByKey,
-  rerunOnKeyRace,
-  patchItem,
-  queryItems,
-  upsertItem,
-} from './items.ts'
+import { backlinks, expandItem, getItem, itemByKey, rerunOnKeyRace, queryItems } from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
-import { idempotentWrite, type KnownMutation } from './mutations.ts'
+import { runBatch } from './batch.ts'
+import {
+  createWrite,
+  deleteWrite,
+  patchWrite,
+  upsertWrite,
+  type WriteContext,
+} from './item-writes.ts'
 import {
   changeMemberRole,
   createHub,
@@ -276,18 +273,6 @@ export function buildApp(options: AppOptions): FastifyInstance {
               fn,
               { snapshot: true },
             )
-          /**
-           * A retry's answer for create and patch (D59): the item as it is now, or 404 if it
-           * has been deleted since, with the `seq` read before it.
-           */
-          const currentItem = async (
-            trx: Transaction<Database>,
-            workspaceId: string,
-            first: KnownMutation,
-          ): Promise<ItemWriteResult> => {
-            const seq = await workspaceSeq(trx, workspaceId)
-            return { ...(await getItem(trx, workspaceId, first.itemId)), seq }
-          }
 
           // A workspace exists for the caller only if the caller is a principal in it.
           ws.addHook('preHandler', async (request) => {
@@ -481,23 +466,23 @@ export function buildApp(options: AppOptions): FastifyInstance {
             <R>(fn: (trx: Transaction<Database>) => Promise<R>) =>
               scoped(request, fn)
 
+          /** The caller and its scope, for the item writes in item-writes.ts. */
+          const writer = (request: FastifyRequest): WriteContext => ({
+            run: run(request),
+            workspaceId: parse(workspaceParams, request.params).workspaceId,
+            principal: request.principal,
+          })
+
           ws.post('/items', async (request, reply) => {
-            const { workspaceId } = parse(workspaceParams, request.params)
             const body = parse(createItemSchema, request.body)
-            const actor = request.principal.id
-            const item = await idempotentWrite(
-              run(request),
-              { workspaceId, actor, clientMutationId: body.clientMutationId },
-              { op: 'create', itemId: body.id, folderId: body.folderId },
-              async (trx): Promise<ItemWriteResult> => {
-                const hubId = await folderHub(trx, workspaceId, body.folderId)
-                await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Folder')
-                const created = await createItem(trx, workspaceId, actor, body)
-                return { ...created, seq: await workspaceSeq(trx, workspaceId) }
-              },
-              (trx, first) => currentItem(trx, workspaceId, first),
-            )
-            return reply.status(201).send(item)
+            return reply.status(201).send(await createWrite(writer(request), body))
+          })
+
+          // Batch writes (D65, batch.ts): the body is checked whole, then each operation runs on
+          // its own, in order, and answers as its route would.
+          ws.post('/items/batch', async (request): Promise<BatchResponse> => {
+            const { operations } = parse(batchRequestSchema, request.body)
+            return { results: await runBatch(writer(request), operations) }
           })
 
           ws.get('/changes', async (request): Promise<ChangesPage> => {
@@ -546,40 +531,17 @@ export function buildApp(options: AppOptions): FastifyInstance {
           })
 
           ws.patch('/items/:itemId', async (request) => {
-            const { workspaceId, itemId } = parse(itemParams, request.params)
+            const { itemId } = parse(itemParams, request.params)
             const body = parse(patchItemSchema, request.body)
-            const actor = request.principal.id
-            return idempotentWrite(
-              run(request),
-              { workspaceId, actor, clientMutationId: body.clientMutationId },
-              { op: 'update', itemId },
-              async (trx): Promise<ItemWriteResult> => {
-                const hubId = await itemHub(trx, workspaceId, itemId)
-                await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
-                const patched = await patchItem(trx, workspaceId, actor, itemId, body)
-                return { ...patched, seq: await workspaceSeq(trx, workspaceId) }
-              },
-              (trx, first) => currentItem(trx, workspaceId, first),
-            )
+            return patchWrite(writer(request), itemId, body)
           })
 
           ws.delete('/items/:itemId', async (request, reply) => {
-            const { workspaceId, itemId } = parse(itemParams, request.params)
+            const { itemId } = parse(itemParams, request.params)
             const { version, clientMutationId } = parse(deleteItemQuerySchema, request.query)
             const { cause } = parse(deleteItemBodySchema, request.body)
-            const actor = request.principal.id
-            await idempotentWrite(
-              run(request),
-              { workspaceId, actor, clientMutationId },
-              { op: 'delete', itemId },
-              async (trx) => {
-                const hubId = await itemHub(trx, workspaceId, itemId)
-                await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Item')
-                await deleteItem(trx, workspaceId, actor, itemId, version, clientMutationId, cause)
-              },
-              // The first delete answered 204; so does its retry.
-              () => Promise.resolve(),
-            )
+            // The first delete answered 204; so does its retry.
+            await deleteWrite(writer(request), itemId, { version, clientMutationId, cause })
             return reply.status(204).send()
           })
 
@@ -607,36 +569,11 @@ export function buildApp(options: AppOptions): FastifyInstance {
           // the winner's item and patches it. A retry with a known `clientMutationId` answers
           // as its first attempt did, whichever of the two that was (D59).
           ws.put('/hubs/:hubId/items/by-key/:key', async (request, reply) => {
-            const { workspaceId, hubId, key } = parse(keyedItemParams, request.params)
+            const { hubId, key } = parse(keyedItemParams, request.params)
             const body = parse(upsertItemSchema, request.body)
-            const actor = request.principal.id
-            const attempt = () =>
-              idempotentWrite(
-                run(request),
-                { workspaceId, actor, clientMutationId: body.clientMutationId },
-                { op: 'upsert', hubId, externalKey: key, folderId: body.folderId },
-                async (trx) => {
-                  await checkHub(trx, workspaceId, request.principal, hubId, 'item.write', 'Hub')
-                  const { item, created } = await upsertItem(
-                    trx,
-                    workspaceId,
-                    actor,
-                    hubId,
-                    key,
-                    body,
-                  )
-                  const result: ItemWriteResult = {
-                    ...item,
-                    seq: await workspaceSeq(trx, workspaceId),
-                  }
-                  return { created, result }
-                },
-                async (trx, first) => ({
-                  created: first.op === 'create',
-                  result: await currentItem(trx, workspaceId, first),
-                }),
-              )
-            const { created, result } = await rerunOnKeyRace(attempt)
+            const { created, result } = await rerunOnKeyRace(() =>
+              upsertWrite(writer(request), hubId, key, body),
+            )
             return reply.status(created ? 201 : 200).send(result)
           })
 
