@@ -17,6 +17,7 @@ import {
   idSchema,
   principalSchema,
 } from './entities.ts'
+import { noNul } from './nul.ts'
 import { paletteColorSchema } from './palette.ts'
 import { hubRoleSchema } from './roles.ts'
 
@@ -33,7 +34,12 @@ import { hubRoleSchema } from './roles.ts'
 // attributes (for the `PUT` of a folder's attributes only), or the attribute.
 
 /** A name for a hub, folder or attribute. Trimmed; the stored shapes take 1 to 200 characters. */
-export const schemaNameSchema = z.string().trim().min(1).max(200)
+export const schemaNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(...noNul)
 
 /** The version the client last saw. Folders start at 0 (`folderSchema`). */
 const folderVersionSchema = z.int().min(0)

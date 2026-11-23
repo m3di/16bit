@@ -161,6 +161,8 @@ export interface ItemTable {
 /** Derived typed copies of indexed values (D6). Exactly one of num, txt, ts is set. */
 export interface ItemIndexTable {
   workspace_id: string
+  /** The item's hub (0017); filled from the item when a writer leaves it out. */
+  hub_id: Generated<string>
   attribute_id: string
   item_id: string
   ord: Generated<number>
