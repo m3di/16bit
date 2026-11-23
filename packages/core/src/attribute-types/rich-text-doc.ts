@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { hasNul, NUL_MESSAGE } from '../nul.ts'
 
 // The closed node set for rich text values (D44). The shape is ProseMirror JSON, so the
 // Tiptap editor (docs/ARCHITECTURE.md) reads and writes it directly once it is limited to
@@ -116,7 +117,7 @@ function attrs(node: Record<string, unknown>, path: Path, required: boolean) {
 }
 
 function isLinkHref(href: unknown): href is string {
-  if (typeof href !== 'string' || href.length > 2048) return false
+  if (typeof href !== 'string' || href.length > 2048 || hasNul(href)) return false
   try {
     return (RICH_TEXT_LINK_PROTOCOLS as readonly string[]).includes(new URL(href).protocol)
   } catch {
@@ -148,6 +149,7 @@ function checkText(node: Record<string, unknown>, path: Path, marksAllowed: bool
   if (typeof node.text !== 'string' || node.text === '') {
     throw new Invalid([...path, 'text'], 'Expected a non-empty string')
   }
+  if (hasNul(node.text)) throw new Invalid([...path, 'text'], NUL_MESSAGE)
   const seen = new Set<string>()
   for (const [i, mark] of list(node, 'marks', path, false).entries()) {
     const type = checkMark(mark, [...path, 'marks', i])

@@ -231,6 +231,12 @@ describe('hub actions (ROLES.md "Hub actions")', () => {
       [Y, F, F, F],
     ],
     [
+      // D78: editing root views is hub.manageSchema; reading them is hub.read (row above).
+      'edit root views',
+      (g) => check(actor, 'hub.manageSchema', { hubGrant: g }),
+      [Y, F, F, F],
+    ],
+    [
       'grant access on this hub',
       (g) => check(actor, 'grant.set', { hubGrant: g, target: other('member'), role: 'viewer' }),
       [Y, F, F, F],

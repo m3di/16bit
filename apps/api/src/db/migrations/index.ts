@@ -14,6 +14,7 @@ import * as m0012 from './0012_mutation_ids.ts'
 import * as m0013 from './0013_hub_prefix_unique.ts'
 import * as m0014 from './0014_revision_cause.ts'
 import * as m0015 from './0015_item_external_key.ts'
+import * as m0016 from './0016_views.ts'
 
 // Listed explicitly instead of read from disk, so migrations survive bundling into the image.
 // Names sort in run order.
@@ -33,4 +34,5 @@ export const migrations: Record<string, Migration> = {
   '0013_hub_prefix_unique': m0013,
   '0014_revision_cause': m0014,
   '0015_item_external_key': m0015,
+  '0016_views': m0016,
 }

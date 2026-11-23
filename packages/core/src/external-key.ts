@@ -19,6 +19,11 @@ const FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cs}]/u
  * counts them), no control characters, no whitespace at either end. Compared exactly: case,
  * accents and Unicode normalisation all count. Unique per hub; a key another item of the hub
  * holds is 409 `key_taken`. Sent URL-encoded as the last path segment of the by-key routes.
+ *
+ * `.` and `..` are refused: URLs resolve them as dot segments, encoded (`%2E`) or not, so the
+ * by-key routes could never reach such an item. This is a rule of the API, not of the data, so
+ * the database's `item_external_key_check` (0015) does not repeat it; only the API writes keys,
+ * and it checks them here first.
  */
 export const externalKeySchema = z
   .string()
@@ -31,6 +36,9 @@ export const externalKeySchema = z
   })
   .refine((key) => !SURROUNDING_WHITESPACE.test(key), {
     message: 'No whitespace at the start or end',
+  })
+  .refine((key) => key !== '.' && key !== '..', {
+    message: 'Not "." or "..": URLs resolve them as dot segments',
   })
 export type ExternalKey = z.infer<typeof externalKeySchema>
 

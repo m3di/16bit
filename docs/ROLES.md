@@ -48,10 +48,11 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 
 | Action | hub admin | editor | commenter | viewer |
 |---|---|---|---|---|
-| Describe the hub, read and query items | ✓ | ✓ | ✓ | ✓ |
+| Describe the hub, read and query items, read root views and their data | ✓ | ✓ | ✓ | ✓ |
 | Create, edit and delete items | ✓ | ✓ | — | — |
 | Comment (when comments exist) | ✓ | ✓ | ✓ | — |
 | Rename the hub, manage folders and attributes | ✓ | — | — | — |
+| Edit root views (compose, save, reset; D78) | ✓ | — | — | — |
 | List who holds a grant on this hub | ✓ | — | — | — |
 | Grant or revoke access on this hub | ✓ ³ | — | — | — |
 | Create and revoke agent keys for this hub | ✓ | — | — | — |
@@ -63,7 +64,7 @@ A person's **effective hub role** is their hub grant, capped by their workspace 
 
 - Scoped to one hub, with role `editor`, `commenter` or `viewer`. Never `hub admin` (D28).
 - A key's role is at most its creator's effective hub role on that hub (least privilege). An owner holding a viewer grant can only create viewer keys.
-- They can never manage members, grants, keys, folders or attributes, and never touch billing.
+- They can never manage members, grants, keys, folders, attributes or root views, and never touch billing.
 - They see their own workspace's ID, name and creation date (every path needs the ID), never its member list.
 - Shown once when created and stored hashed. They can be revoked, and an optional expiry date can be set. Creating or revoking a key is recorded in `access_log`.
 - Writes are recorded with the key's principal as `updated_by`.

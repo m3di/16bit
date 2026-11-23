@@ -584,7 +584,7 @@ describe('races on a key', () => {
       folderId: (created as { folderId: string }).folderId,
     })
     expect(rows[0]?.version).toBe(2)
-    const ops = (await history(rows[0]?.id ?? '')).map((p) => p.op)
+    const ops = (await history(rows[0]?.id ?? '')).map((p) => p?.op)
     expect(ops).toEqual(['update', 'create'])
     const hub = await db.selectFrom('folder').select('item_count').where('id', '=', 'h1').execute()
     expect(hub[0]?.item_count).toBe(1)
@@ -683,18 +683,26 @@ describe('keys in the URL path', () => {
     expect((await upsert('ed', 'h1', '😀'.repeat(201), { folderId: 'h1' })).statusCode).toBe(400)
   })
 
-  it('cannot address the keys `.` and `..`, which URLs treat as dot segments', async () => {
-    // Valid keys (D64), readable by ID, but a path ending in `/.` or `/..` (encoded or not) is
-    // resolved before routing. Reported on #200 for the maintainer.
+  it('refuses the keys `.` and `..`, which URLs treat as dot segments', async () => {
+    // A path ending in `/.` or `/..` (encoded or not) is resolved before routing, so no by-key
+    // route could reach such an item; core refuses them (raised in the review of #200).
     for (const key of ['.', '..']) {
-      const item = await create('ed', { folderId: 'h1', externalKey: key, values: {} })
-      expect(item.externalKey).toBe(key)
+      const created = await as('ed', 'POST', '/items', { folderId: 'h1', externalKey: key })
+      expect(created.statusCode, created.body).toBe(400)
+      expect(errorOf(created.json()).error).toBe('invalid_request')
+      const item = await create('ed', { folderId: 'h1', values: {} })
+      const patched = await as('ed', 'PATCH', `/items/${item.id}`, {
+        version: item.version,
+        externalKey: key,
+      })
+      expect(patched.statusCode, patched.body).toBe(400)
       for (const segment of [key, key.replaceAll('.', '%2E')]) {
-        // `/by-key/` (an empty key, 400) or the hub's `items` path (404), never the item.
-        const res = await as('ed', 'GET', `/hubs/h1/items/by-key/${segment}`)
+        // `/by-key/` (an empty key, 400) or the hub's `items` path (404), never an upsert.
+        const res = await as('ed', 'PUT', `/hubs/h1/items/by-key/${segment}`, { folderId: 'h1' })
         expect([400, 404], `${segment}: ${res.body}`).toContain(res.statusCode)
       }
     }
+    expect((await itemRows()).map((r) => r.external_key)).not.toContain('.')
   })
 
   it('round-trips every key over HTTP, as the server and the image serve it', async () => {

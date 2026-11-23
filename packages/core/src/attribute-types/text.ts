@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { noNul } from '../nul.ts'
 import { type AttributeType, BASE_SUMMARIES, EMPTY_OPERATORS } from './contract.ts'
 
 export const TEXT_MAX_LENGTH = 10_000
@@ -11,7 +12,11 @@ export type TextConfig = z.infer<typeof textConfigSchema>
 export const textType: AttributeType<'text', TextConfig, string> = {
   name: 'text',
   configSchema: textConfigSchema,
-  valueSchema: (config) => z.string().max(config.maxLength ?? TEXT_MAX_LENGTH),
+  valueSchema: (config) =>
+    z
+      .string()
+      .max(config.maxLength ?? TEXT_MAX_LENGTH)
+      .refine(...noNul),
   readOnly: false,
   isEmpty: (value) => value === '',
   indexProjection: 'txt',

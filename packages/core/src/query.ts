@@ -10,6 +10,7 @@ import {
   type ItemValue,
 } from './attribute-types/index.ts'
 import { idSchema, type Attribute } from './entities.ts'
+import { noNul } from './nul.ts'
 
 // The `where` and `sort` parts of the query shape in docs/ARCHITECTURE.md (D19, D20).
 // Shape checks live in the schemas; `compileItemQuery` checks them against the folder's
@@ -189,7 +190,11 @@ function operand(attribute: Attribute, input: unknown): Operand {
   }
 }
 
-const searchTextSchema = z.string().min(1).max(TEXT_MAX_LENGTH)
+const searchTextSchema = z
+  .string()
+  .min(1)
+  .max(TEXT_MAX_LENGTH)
+  .refine(...noNul)
 
 function resolve(
   byId: ReadonlyMap<string, Attribute>,

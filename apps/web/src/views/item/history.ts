@@ -14,17 +14,20 @@ export interface HistoryChange {
  * patch holds only the new values, so the old value comes from the nearest older loaded entry
  * that wrote the same attribute. When the item's create is loaded and nothing before wrote it,
  * the attribute was empty. Otherwise the old value is not known and is left out, never guessed.
+ * An entry whose stored patch the server could not read (`unreadable`, issue 222) changed
+ * nothing shown, and an older one hides what came before it, so the old value is unknown.
  */
 export function changesOf(entries: readonly RevisionEntry[], index: number): HistoryChange[] {
-  const entry = entries[index]
-  if (!entry || entry.patch.op === 'delete') return []
-  const createLoaded = entries.some((e) => e.patch.op === 'create')
+  const patch = entries[index]?.patch
+  if (!patch || patch.op === 'delete') return []
+  const createLoaded = entries.some((e) => e.patch?.op === 'create')
   return (
-    Object.entries(entry.patch.values)
-      .filter(([, after]) => entry.patch.op !== 'create' || !isEmpty(after))
+    Object.entries(patch.values)
+      .filter(([, after]) => patch.op !== 'create' || !isEmpty(after))
       .map(([attributeId, after]): HistoryChange => {
-        if (entry.patch.op === 'create') return { attributeId, after, before: null }
+        if (patch.op === 'create') return { attributeId, after, before: null }
         for (const older of entries.slice(index + 1)) {
+          if (older.patch === null) return { attributeId, after, before: null }
           if (older.patch.op === 'delete') continue
           if (Object.hasOwn(older.patch.values, attributeId)) {
             return { attributeId, after, before: { value: older.patch.values[attributeId] } }
