@@ -124,6 +124,8 @@ export interface AppOptions {
   maxLinkedItems?: number
   /** Cap on the `hidden` count of backlinks. Defaults to `MAX_HIDDEN_BACKLINKS`; lowered in tests. */
   maxHiddenBacklinks?: number
+  /** Bytes of one `GET /changes` page. Defaults to `MAX_CHANGES_PAGE_BYTES`; lowered in tests. */
+  maxChangesPageBytes?: number
   /** Directory of the built web app. When set, the API also serves the dashboard (D34). */
   webRoot?: string
   /** Session lifetimes. Defaults to 30 days absolute, 7 days idle. */
@@ -586,6 +588,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
                 principalId: request.principal.id,
                 after,
                 limit,
+                maxBytes: options.maxChangesPageBytes,
               }),
             )
           })
