@@ -73,3 +73,17 @@ export function signInLimitsFromEnv(env: NodeJS.ProcessEnv): SignInLimits {
     loginPerIp: read('SIGN_IN_LIMIT_PER_IP', DEFAULT_SIGN_IN_LIMIT_PER_IP),
   }
 }
+
+/**
+ * The warning the server logs at start when a production process takes its sign-in limits
+ * from the environment, or null. Those variables are for the end-to-end servers; on a
+ * deployment they are a mistake worth seeing in the log.
+ */
+export function signInLimitsWarning(env: NodeJS.ProcessEnv, limits: SignInLimits): string | null {
+  if (env['NODE_ENV'] !== 'production') return null
+  if (!env['SIGN_IN_LIMIT_PER_IP'] && !env['SIGN_IN_LIMIT_PER_EMAIL']) return null
+  return (
+    `sign-in limits set from the environment: ${String(limits.loginPerIp.max)} per IP, ` +
+    `${String(limits.loginPerEmail.max)} per email, per 15 minutes. Meant for tests only.`
+  )
+}

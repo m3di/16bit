@@ -1,5 +1,5 @@
 import { buildApp } from './app.ts'
-import { signInLimitsFromEnv, type SignInLimits } from './auth/rate-limit.ts'
+import { signInLimitsFromEnv, signInLimitsWarning, type SignInLimits } from './auth/rate-limit.ts'
 import { createDb } from './db/database.ts'
 import { unsafeRoleReason } from './db/scope.ts'
 import { devPasswordRefused } from './dev-accounts.ts'
@@ -33,15 +33,8 @@ try {
   console.error(`api: ${(error as Error).message}`)
   process.exit(1)
 }
-if (
-  process.env['NODE_ENV'] === 'production' &&
-  (process.env['SIGN_IN_LIMIT_PER_IP'] || process.env['SIGN_IN_LIMIT_PER_EMAIL'])
-) {
-  console.warn(
-    `api: sign-in limits set from the environment: ${String(signInLimits.loginPerIp.max)} per IP, ` +
-      `${String(signInLimits.loginPerEmail.max)} per email, per 15 minutes. Meant for tests only.`,
-  )
-}
+const limitsWarning = signInLimitsWarning(process.env, signInLimits)
+if (limitsWarning) console.warn(`api: ${limitsWarning}`)
 const app = buildApp({
   db,
   ...signInLimits,

@@ -4,7 +4,28 @@ import {
   DEFAULT_SIGN_IN_LIMIT_PER_IP,
   RateLimiter,
   signInLimitsFromEnv,
+  signInLimitsWarning,
 } from './rate-limit.ts'
+
+describe('signInLimitsWarning (#229)', () => {
+  const warning = (env: NodeJS.ProcessEnv) => signInLimitsWarning(env, signInLimitsFromEnv(env))
+
+  it('warns a production process that takes its limits from the environment', () => {
+    expect(warning({ NODE_ENV: 'production', SIGN_IN_LIMIT_PER_IP: '10000' })).toBe(
+      'sign-in limits set from the environment: 10000 per IP, 10 per email, per 15 minutes. Meant for tests only.',
+    )
+    expect(warning({ NODE_ENV: 'production', SIGN_IN_LIMIT_PER_EMAIL: '50' })).toMatch(
+      /100 per IP, 50 per email/,
+    )
+  })
+
+  it('stays quiet with the defaults, or outside production', () => {
+    expect(warning({ NODE_ENV: 'production' })).toBeNull()
+    expect(warning({ NODE_ENV: 'production', SIGN_IN_LIMIT_PER_IP: '' })).toBeNull()
+    expect(warning({ SIGN_IN_LIMIT_PER_IP: '10000' })).toBeNull()
+    expect(warning({ NODE_ENV: 'test', SIGN_IN_LIMIT_PER_IP: '10000' })).toBeNull()
+  })
+})
 
 describe('signInLimitsFromEnv (#229)', () => {
   it('keeps the production defaults when nothing is set, or set empty', () => {
