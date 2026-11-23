@@ -1,5 +1,6 @@
 import {
   can,
+  aggregateRequestSchema,
   changeMemberRoleSchema,
   batchRequestSchema,
   changesQuerySchema,
@@ -26,8 +27,10 @@ import {
   updateFolderSchema,
   updateHubSchema,
   effectiveHubRole,
+  type AggregateResult,
   type BatchResponse,
   type ChangesPage,
+  type Filter,
   type HubDescription,
   type HubListEntry,
   type ItemQueryResult,
@@ -40,6 +43,8 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import { sql, type Kysely, type Transaction } from 'kysely'
 import { z } from 'zod'
 import { createAgentKey, listAgentKeys, revokeAgentKey } from './agent-keys.ts'
+import { aggregate } from './aggregate.ts'
+import { checkTimeZone, hasObjectOperands, resolveReadFilters } from './read-operands.ts'
 import { checkHub, folderHub } from './access.ts'
 import { readChanges } from './changes.ts'
 import { itemRevisions } from './revisions.ts'
@@ -63,7 +68,15 @@ import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { withScope, workspaceSeq } from './db/scope.ts'
 import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
-import { backlinks, expandItem, getItem, itemByKey, rerunOnKeyRace, queryItems } from './items.ts'
+import {
+  backlinks,
+  expandItem,
+  folderDefinitions,
+  getItem,
+  itemByKey,
+  rerunOnKeyRace,
+  queryItems,
+} from './items.ts'
 import { toAttribute, toFolder, toFolderAttribute, toHub } from './mappers.ts'
 import { runBatch } from './batch.ts'
 import {
@@ -124,6 +137,8 @@ export interface AppOptions {
    * answers 404, and the app opens no connection outside the pool.
    */
   feed?: FeedOptions
+  /** Statement timeout of `POST /aggregate`. Defaults to `AGGREGATE_TIMEOUT_MS`; lowered in tests. */
+  aggregateTimeoutMs?: number
 }
 
 /** Default cap on folders and attributes returned by a hub description. */
@@ -147,7 +162,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const { db } = options
   const maxHubEntries = options.maxHubEntries ?? MAX_HUB_ENTRIES
   const faCap = maxHubEntries * 10
-  const { maxLinkedItems, maxHiddenBacklinks } = options
+  const { maxLinkedItems, maxHiddenBacklinks, aggregateTimeoutMs } = options
   const app = Fastify({
     logger: false,
     // A path parameter's longest decoded form, in UTF-16 code units. A valid external key
@@ -463,8 +478,37 @@ export function buildApp(options: AppOptions): FastifyInstance {
             return snapshot(request, async (trx): Promise<ItemQueryResult> => {
               const hubId = await folderHub(trx, workspaceId, query.from)
               await checkHub(trx, workspaceId, request.principal, hubId, 'hub.read', 'Folder')
-              const result = await queryItems(trx, workspaceId, request.principal, query, {
-                maxLinkedItems,
+              if (query.tz !== undefined) await checkTimeZone(trx, query.tz)
+              // `$me` and `$now` (D79) resolve before the query is compiled.
+              let where: Filter | null | undefined = query.where
+              if (hasObjectOperands(where)) {
+                const definitions = await folderDefinitions(trx, workspaceId, query.from)
+                ;[where] = await resolveReadFilters(
+                  trx,
+                  definitions.map((d) => d.attribute),
+                  request.principal.id,
+                  query.tz ?? 'UTC',
+                  [{ where, path: 'where' }],
+                )
+              }
+              const result = await queryItems(
+                trx,
+                workspaceId,
+                request.principal,
+                { ...query, where: where ?? null },
+                { maxLinkedItems },
+              )
+              return { ...result, seq: await workspaceSeq(trx, workspaceId) }
+            })
+          })
+
+          // Aggregates (D80, aggregate.ts): as the caller, in the request's snapshot.
+          ws.post('/aggregate', async (request) => {
+            const { workspaceId } = parse(workspaceParams, request.params)
+            const body = parse(aggregateRequestSchema, request.body)
+            return snapshot(request, async (trx): Promise<AggregateResult> => {
+              const result = await aggregate(trx, workspaceId, request.principal, body, {
+                timeoutMs: aggregateTimeoutMs,
               })
               return { ...result, seq: await workspaceSeq(trx, workspaceId) }
             })
