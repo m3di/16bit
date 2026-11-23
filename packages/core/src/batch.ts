@@ -34,7 +34,7 @@ export const batchDeleteSchema = z.strictObject({
   cause: itemCauseSchema.optional(),
 })
 
-/** `PUT /hubs/:hubId/items/by-key/:key`, as an operation: the path's parts are `hubId` and `key`. */
+/** `PUT /hubs/:hubId/items/by-key/:key`, as an operation: the path's parts are `hubId`, `key`. */
 export const batchUpsertSchema = upsertItemSchema.extend({
   op: z.literal('upsert'),
   hubId: idSchema,

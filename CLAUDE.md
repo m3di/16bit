@@ -21,7 +21,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 
 ## Current milestone
 
-**M3, sync: complete, waiting for the maintainer** before M4 (see `docs/reports/M3.md`). M0 to M3 reports are in `docs/reports/`.
+**M4, blocks: planning** (see `team/backlog-M4.md`). M0 to M3 reports are in `docs/reports/`.
 
 ## Rules that always apply
 

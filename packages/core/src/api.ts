@@ -12,7 +12,7 @@ import {
   workspaceSchema,
 } from './entities.ts'
 import { urlValueSchema } from './attribute-types/url.ts'
-import { decodeItemCursor, type ItemCursorOrder } from './cursor.ts'
+import { decodeItemCursor, MAX_ITEM_CURSOR_LENGTH, type ItemCursorOrder } from './cursor.ts'
 import { externalKeySchema } from './external-key.ts'
 import { paletteColorSchema } from './palette.ts'
 import { boundedFilterSchema, expandSchema, sortSchema } from './query.ts'
@@ -28,6 +28,12 @@ export const MAX_PAGE_LIMIT = 200
 
 /** An opaque cursor from a previous page's `nextCursor`. */
 export const cursorSchema = z.string().min(1).max(512)
+
+/**
+ * An item query cursor (`POST /query`): longer than a list cursor, since it carries the last
+ * row's sort values, each text one cut to `SORT_TEXT_PREFIX` characters (#185).
+ */
+export const itemCursorTextSchema = z.string().min(1).max(MAX_ITEM_CURSOR_LENGTH)
 
 /**
  * A position in the workspace's change history: `revision.seq`, which only grows (D58). `0`
@@ -216,7 +222,7 @@ export const itemQuerySchema = z
     order: z.enum(ITEM_QUERY_ORDERS).optional(),
     expand: expandSchema.default([]),
     limit: z.int().min(1).max(MAX_PAGE_LIMIT),
-    cursor: cursorSchema.nullable().default(null),
+    cursor: itemCursorTextSchema.nullable().default(null),
     offset: z.int().min(0).max(MAX_QUERY_OFFSET).optional(),
     count: z.boolean().default(false),
   })
@@ -284,6 +290,7 @@ export const MAX_LINKED_ITEMS = 1000
  * ask again with a lower `limit`.
  */
 export const itemQueryResultSchema = itemPageSchema.extend({
+  nextCursor: itemCursorTextSchema.nullable(),
   linked: z.record(idSchema, linkedItemSchema).optional(),
   linkedTruncated: z.boolean().optional(),
   /** With `count: true`: the items that pass `where`, over all pages (D61). */
@@ -416,8 +423,8 @@ export type PatchItem = z.infer<typeof patchItemSchema>
  * - `folderId` must be a folder of the hub, whether the upsert creates or patches, so a wrong
  *   one fails at once rather than only once the item is gone: 404 `not_found`, as for a missing
  *   folder.
- * - No item holds the key: creates one in `folderId` with the key, and answers 201. With a `version` it creates nothing and answers 404: a version
- *   names an item the client has seen.
+ * - No item holds the key: creates one in `folderId` with the key, and answers 201. With a
+ *   `version` it creates nothing and answers 404: a version names an item the client has seen.
  * - An item holds the key: patches it where it is and answers 200. Items never move, so
  *   `folderId` is used only on create, and an item in another folder of the hub is patched in
  *   its own folder (decided by the maintainer, #199). With `version`, a stale one is 409
