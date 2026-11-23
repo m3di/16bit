@@ -63,10 +63,15 @@ const CONFLICT = {
   hub: 'Someone else changed this hub while you were editing. It now shows their version; your change was not saved.',
 } as const
 
-/** The fields of the hub that general settings change (`PATCH /hubs/:hubId`). */
-export type HubChange = Partial<Pick<Hub, 'name' | 'color' | 'titleAttributeId'>>
+/**
+ * The fields of the hub that general settings change (`PATCH /hubs/:hubId`). `opensOnFolderId`
+ * null is the hub root, which the hub shows as the field left out.
+ */
+export type HubChange = Partial<Pick<Hub, 'name' | 'color' | 'titleAttributeId'>> & {
+  opensOnFolderId?: string | null
+}
 type HubField = keyof HubChange
-const HUB_FIELDS: readonly HubField[] = ['name', 'color', 'titleAttributeId']
+const HUB_FIELDS: readonly HubField[] = ['name', 'color', 'titleAttributeId', 'opensOnFolderId']
 
 /** Why a hub write or delete was refused, in words. */
 export function hubRefusal(error: ApiRequestError, what: 'change' | 'delete'): string {
@@ -375,7 +380,14 @@ export function useHubSettings(
 
   function setHubFields(change: HubChange) {
     const d = data()
-    if (d) d.hub = { ...d.hub, ...change }
+    if (!d) return
+    const { opensOnFolderId, ...rest } = change
+    const next = { ...d.hub, ...rest }
+    if ('opensOnFolderId' in change) {
+      if (opensOnFolderId) next.opensOnFolderId = opensOnFolderId
+      else delete next.opensOnFolderId
+    }
+    d.hub = next
   }
 
   /**
@@ -390,7 +402,7 @@ export function useHubSettings(
     const seq = ++hubSeq
     const epoch = hubEpoch
     for (const f of fields) {
-      if (!confirmedHub.has(f)) confirmedHub.set(f, d.hub[f])
+      if (!confirmedHub.has(f)) confirmedHub.set(f, d.hub[f] ?? null)
       latestHub.set(f, seq)
     }
     setHubFields(change)
@@ -415,19 +427,15 @@ export function useHubSettings(
           if (latestHub.get(f) === seq) {
             latestHub.delete(f)
             confirmedHub.delete(f)
-            Object.assign(shown, { [f]: saved[f] })
+            Object.assign(shown, { [f]: saved[f] ?? null })
           } else {
-            confirmedHub.set(f, saved[f])
+            confirmedHub.set(f, saved[f] ?? null)
           }
         }
+        setHubFields(shown)
         const latest = data()
         if (latest) {
-          latest.hub = {
-            ...latest.hub,
-            ...shown,
-            version: saved.version,
-            itemCount: saved.itemCount,
-          }
+          latest.hub = { ...latest.hub, version: saved.version, itemCount: saved.itemCount }
         }
         return { ok: true, data: saved }
       } catch (raw) {

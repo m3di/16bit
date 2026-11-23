@@ -8,6 +8,8 @@ export interface RootViewContext {
   load(blockId: string): BlockLoad | undefined
   /** A name for a data block that has no title of its own: its label, else its folder's name. */
   nameOf(block: Block): string
+  /** A data block the composer's preview has no data for until the view is saved. */
+  unsaved?(blockId: string): boolean
 }
 
 const key: InjectionKey<RootViewContext> = Symbol('root view')

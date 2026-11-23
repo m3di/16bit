@@ -6,6 +6,7 @@ import {
   BaseDialog,
   BaseInput,
   BaseSelect,
+  CheckboxField,
   FormNotice,
   PALETTE_COLORS,
   PalettePicker,
@@ -42,6 +43,7 @@ const formId = useId()
 const name = ref('')
 const color = ref<PaletteColor | null>(null)
 const parent = ref('')
+const viewsOnly = ref(false)
 const nameError = ref('')
 const error = ref('')
 const busy = ref(false)
@@ -55,6 +57,7 @@ watch(
     name.value = f?.name ?? ''
     color.value = f?.color ?? nextFolderColor(description, PALETTE_COLORS)
     parent.value = f?.parentId ?? parentId ?? description.hub.id
+    viewsOnly.value = false
     nameError.value = ''
     error.value = ''
   },
@@ -91,7 +94,12 @@ async function submit() {
     }
     result = await model.updateFolder(f, change)
   } else {
-    result = await model.createFolder({ parentId: parent.value, name: trimmed, color: color.value })
+    result = await model.createFolder({
+      parentId: parent.value,
+      name: trimmed,
+      color: color.value,
+      ...(viewsOnly.value ? { viewsOnly: true } : {}),
+    })
   }
   busy.value = false
   if (result.ok) {
@@ -123,6 +131,14 @@ async function submit() {
       />
       <BaseSelect v-model="parent" label="Inside" :options="parents" data-folder-parent />
       <PalettePicker v-model="color" label="Colour" size="sm" />
+      <!-- Fixed when the folder is created (D76), so only a new folder offers it. -->
+      <CheckboxField
+        v-if="!folderId"
+        v-model="viewsOnly"
+        label="Views only"
+        hint="Holds no items and only shows its root view, like a home page. This cannot be changed later."
+        data-folder-views-only
+      />
       <FormNotice v-if="error" data-folder-error>{{ error }}</FormNotice>
     </form>
     <template #footer>

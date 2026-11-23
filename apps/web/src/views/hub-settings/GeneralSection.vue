@@ -11,12 +11,15 @@ import {
 } from '../../ui/index.ts'
 import { createCommitter } from '../workspace/members.ts'
 import { GENERAL_READ_ONLY, itemTotal, titleChoices } from './access.ts'
+import { settingsTree } from './schema.ts'
 import type { HubSettings } from './useHubSettings.ts'
 
-const { description, manages, model } = defineProps<{
+const { description, manages, managesSchema, model } = defineProps<{
   description: HubDescription
   /** `hub.rename`: otherwise the values show read-only, with the reason. */
   manages: boolean
+  /** `hub.manageSchema`: "Opens on" (D76). Otherwise it shows read-only. */
+  managesSchema?: boolean
   model: HubSettings
 }>()
 
@@ -56,6 +59,9 @@ function commitName() {
 const committer = createCommitter<string>((field, value) => {
   if (field === 'color') {
     if (value !== hub.value.color) void model.updateHub({ color: value as PaletteColor })
+  } else if (field === 'opensOn') {
+    const id = value === hub.value.id ? null : value
+    if (id !== (hub.value.opensOnFolderId ?? null)) void model.updateHub({ opensOnFolderId: id })
   } else {
     const id = value === '' ? null : value
     if (id !== hub.value.titleAttributeId) void model.updateHub({ titleAttributeId: id })
@@ -103,6 +109,32 @@ const titleHint = computed(() =>
     ? 'The hub has no text attribute yet. Add one under Attributes to title its items.'
     : 'Items are titled with this text attribute in links, the relation picker and their page.',
 )
+
+// The folder the hub opens on (D76): the hub root, or any folder of it. Views-only folders such
+// as Home are the usual choice.
+const opensOn = ref(hub.value.opensOnFolderId ?? hub.value.id)
+watch(
+  () => hub.value.opensOnFolderId,
+  (saved) => {
+    opensOn.value = saved ?? hub.value.id
+  },
+)
+function onOpensOn(value: string) {
+  opensOn.value = value
+  committer.choose('opensOn', value)
+}
+const opensOnOptions = computed(() =>
+  settingsTree(description).map((entry) => ({
+    value: entry.folder.id,
+    label: `${'– '.repeat(entry.depth)}${entry.folder.id === hub.value.id ? `${entry.folder.name} (hub root)` : entry.folder.name}${entry.folder.viewsOnly ? ' (views only)' : ''}`,
+  })),
+)
+const opensOnName = computed(() => {
+  const id = hub.value.opensOnFolderId
+  return (
+    (id && description.folders.find((f) => f.id === id)?.name) || `${hub.value.name} (hub root)`
+  )
+})
 
 // The prefix is chosen when the hub is created; the hub update has no field for it.
 const prefixNote = computed(
@@ -169,6 +201,21 @@ const saveState = computed(() =>
           <span class="text-secondary text-ink3">Item title</span>
           <span>{{ titleName || 'None: items show their ID only' }}</span>
         </div>
+      </div>
+
+      <BaseSelect
+        v-if="managesSchema"
+        :model-value="opensOn"
+        label="Opens on"
+        :options="opensOnOptions"
+        hint="The folder people land on when they open this hub. Compose its view under Root views."
+        data-opens-on
+        @update:model-value="onOpensOn"
+        @blur="committer.flush('opensOn')"
+      />
+      <div v-else class="flex flex-col gap-1" data-opens-on-read-only>
+        <span class="text-secondary text-ink3">Opens on</span>
+        <span>{{ opensOnName }}</span>
       </div>
 
       <!-- Read-only for everyone: the hub update has no field for it. -->

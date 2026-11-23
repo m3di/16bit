@@ -7,7 +7,7 @@ import {
   type ViewData,
 } from '@16bit/core'
 import { inject, provide, type InjectionKey } from 'vue'
-import { getJson, type Fetch } from '../../api/client.ts'
+import { getJson, noContent, putJson, sendJson, type Fetch } from '../../api/client.ts'
 
 // Where a folder's root view and its data come from (D76, D83). The page only talks to a
 // `ViewSource`, so the routes plug in without touching the renderer.
@@ -49,8 +49,19 @@ export function viewDataQuery(request: ViewDataRequest): string {
   return query.toString()
 }
 
-/** The view routes: `GET …/folders/:folderId/view` and `GET …/view/data`. */
-export function httpViewSource(workspaceId: string, fetchFn: Fetch): ViewSource {
+/** The composer's writes (D76, D78): hub admins only. Each throws an `ApiRequestError`. */
+export interface ViewWrites {
+  /**
+   * `PUT …/view`: replaces the whole tree at `version` (0 when none is stored). 409 `conflict`
+   * with `current`, 422 `invalid_view` with `errors`.
+   */
+  put(folderId: string, version: number, tree: unknown): Promise<RawView>
+  /** `DELETE …/view?version=`: back to the default. 409 `conflict`; 404 when none is stored. */
+  reset(folderId: string, version: number): Promise<void>
+}
+
+/** The view routes: `GET …/folders/:folderId/view`, `GET …/view/data`, PUT and DELETE. */
+export function httpViewSource(workspaceId: string, fetchFn: Fetch): ViewSource & ViewWrites {
   return {
     view: (folderId) =>
       getJson(workspacePath(workspaceId, folderId), { parse: parseRawView }, fetchFn),
@@ -58,6 +69,21 @@ export function httpViewSource(workspaceId: string, fetchFn: Fetch): ViewSource 
       getJson(
         `${workspacePath(workspaceId, folderId)}/data?${viewDataQuery(request)}`,
         viewDataSchema,
+        fetchFn,
+      ),
+    put: (folderId, version, tree) =>
+      putJson(
+        workspacePath(workspaceId, folderId),
+        { version, tree },
+        { parse: parseRawView },
+        fetchFn,
+      ),
+    reset: (folderId, version) =>
+      sendJson(
+        'DELETE',
+        `${workspacePath(workspaceId, folderId)}?version=${String(version)}`,
+        undefined,
+        noContent,
         fetchFn,
       ),
   }
