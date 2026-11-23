@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   MAX_EXPAND_ATTRIBUTES,
+  type Block,
   type Folder,
   type HubDescription,
   type Item,
@@ -17,7 +18,15 @@ import { viewerOf } from '../hub-settings/access.ts'
 import ShellUser from '../../session/ShellUser.vue'
 import ConnectionStatus from '../../sync/ConnectionStatus.vue'
 import { useLiveHub } from '../../sync/live.ts'
-import { AppShell, BaseButton, FormNotice, ItemPanel } from '../../ui/index.ts'
+import {
+  AppShell,
+  BaseButton,
+  FormNotice,
+  ItemPanel,
+  NoViewYet,
+  PageHeader,
+  StateBlock,
+} from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import FolderSidebar from './FolderSidebar.vue'
 import HubState from './HubState.vue'
@@ -32,6 +41,9 @@ import { opensHubSettings } from '../home/hubSettings.ts'
 import { canWriteItems } from './newItem.ts'
 import { canSort, inHub, useItems, valueErrors } from './useItems.ts'
 import { usePrincipals } from './usePrincipals.ts'
+import { defaultViewSource, useViewSource } from '../root-view/source.ts'
+import { useRootView } from '../root-view/useRootView.ts'
+import ViewRenderer from '../root-view/ViewRenderer.vue'
 
 const { workspaceId, hubId, folderId, itemId } = defineProps<{
   workspaceId: string
@@ -112,7 +124,9 @@ provideValueContext({
     params: {
       workspaceId,
       hubId: item.hubId,
-      ...(item.folderId === item.hubId ? {} : { folderId: item.folderId }),
+      ...(item.folderId === item.hubId && !opensElsewhere(item.hubId)
+        ? {}
+        : { folderId: item.folderId }),
     },
     query: { item: item.id },
   }),
@@ -178,7 +192,18 @@ const opensSettings = computed(() => {
   return opensHubSettings(viewer, description.value?.hubRole ?? null)
 })
 
-const openFolderId = computed(() => folderId ?? hubId)
+// Without a folder in the route the hub opens on its "Opens on" folder (D76), or its root. Until
+// the hub is read that is not known, and nothing is shown for it yet.
+const openFolderId = computed(() => {
+  if (folderId) return folderId
+  const d = description.value
+  const opensOn = d?.hub.opensOnFolderId
+  return opensOn && d.folders.some((f) => f.id === opensOn) ? opensOn : hubId
+})
+// Links to the hub root name it when the hub opens elsewhere.
+const opensElsewhere = (id: string) =>
+  id === hubId && description.value?.hub.opensOnFolderId !== undefined
+
 const folder = computed(() => {
   const d = description.value
   if (!d) return null
@@ -186,6 +211,32 @@ const folder = computed(() => {
     ? d.hub
     : (d.folders.find((f) => f.id === openFolderId.value) ?? null)
 })
+// The open folder's root view (D76): today's folder screen when it has none stored, "No view
+// yet" for a views-only folder with none, else the view. The source becomes the view routes
+// once the API has them; until then every folder answers its default.
+const viewSource = useViewSource(() => defaultViewSource(() => description.value))
+const rootView = useRootView({
+  source: viewSource,
+  store: items.store,
+  hubId: () => hubId,
+  folderId: () => (description.value && folder.value ? openFolderId.value : null),
+  description: () => description.value,
+})
+const viewMode = rootView.mode
+// A root view shows the live dot in its header instead of ConnectionStatus, never both.
+const headerShowsLive = computed(() => viewMode.value === 'view' || viewMode.value === 'none')
+const liveStatus = computed(() => {
+  const status = items.store.status.value
+  return status === 'idle' ? null : status
+})
+const nameOfBlock = (block: Block) => {
+  const config = block.config as { label?: string; binding?: { folderId?: string } }
+  if (config.label) return config.label
+  const id = config.binding?.folderId
+  const d = description.value
+  const f = d && id ? (d.hub.id === id ? d.hub : d.folders.find((x) => x.id === id)) : undefined
+  return f?.name ?? 'Items'
+}
 const columns = computed(() =>
   description.value ? folderColumns(description.value, openFolderId.value) : [],
 )
@@ -231,15 +282,20 @@ async function openFolder(id: string) {
   const sortable = d ? shown.filter(canSort).map((a) => a.id) : undefined
   await items.openFolder(id, expand, sortable)
 }
-async function retryHub() {
-  await loadHub()
-  void openFolder(openFolderId.value)
-}
+// Once the hub is read again, the watch below opens the folder.
+const retryHub = () => void loadHub()
+void loadHub()
+// Only today's folder screen lists the folder's items here; a root view reads its own data.
+let shown: { id: string; mode: string } | null = null
 watch(
-  openFolderId,
-  (id) => {
-    creating.value = false
-    void openFolder(id)
+  [openFolderId, viewMode],
+  ([id, mode]) => {
+    const before = shown
+    shown = { id, mode }
+    if (before?.id !== id) creating.value = false
+    if (mode === 'default' && (before?.id !== id || before.mode !== 'default')) {
+      void openFolder(id)
+    }
   },
   { immediate: true },
 )
@@ -325,7 +381,7 @@ async function submitCreate(values: ItemValues) {
         data-hub-settings-link
         >Hub settings</RouterLink
       >
-      <ConnectionStatus :status="items.store.status.value" />
+      <ConnectionStatus v-if="!headerShowsLive" :status="items.store.status.value" />
       <ShellUser />
     </template>
     <template #sidebar>
@@ -365,7 +421,48 @@ async function submitCreate(values: ItemValues) {
           :folder-found="folder !== null"
           @retry="retryHub()"
         >
-          <template v-if="folder && hub.state === 'ready'">
+          <StateBlock
+            v-if="folder && viewMode === 'loading'"
+            state="loading"
+            :title="`Loading ${folder.name}`"
+            :rows="6"
+          />
+          <StateBlock
+            v-else-if="folder && viewMode === 'error' && rootView.viewError.value?.isNoPermission"
+            state="no-permission"
+            title="You do not have access to this folder's view"
+          />
+          <StateBlock
+            v-else-if="folder && viewMode === 'error' && rootView.viewError.value?.isNotFound"
+            state="not-found"
+            title="This folder's view is not available"
+            message="It may not exist, or it may not be shared with you."
+          />
+          <StateBlock
+            v-else-if="folder && viewMode === 'error'"
+            state="error"
+            title="This view could not be loaded"
+            :message="rootView.viewError.value?.message ?? ''"
+          >
+            <template #action>
+              <BaseButton size="sm" @click="rootView.reload()">Try again</BaseButton>
+            </template>
+          </StateBlock>
+          <template v-else-if="folder && viewMode === 'none'">
+            <PageHeader :title="folder.name" :live="liveStatus" />
+            <NoViewYet />
+          </template>
+          <ViewRenderer
+            v-else-if="folder && viewMode === 'view'"
+            :page="rootView.rendered.value?.page ?? null"
+            :folder-name="folder.name"
+            :live="liveStatus"
+            :blocks="rootView.blocks.value"
+            :problem="rootView.problem.value"
+            :name-of="nameOfBlock"
+            @retry="rootView.retry()"
+          />
+          <template v-else-if="folder && hub.state === 'ready'">
             <div class="flex flex-wrap items-end justify-between gap-3">
               <div class="flex min-w-0 flex-col gap-1">
                 <h1 class="m-0 font-display text-page-title font-medium tracking-[-0.01em]">

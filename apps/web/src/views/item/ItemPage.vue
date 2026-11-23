@@ -182,7 +182,7 @@ async function confirmDelete() {
   deleting.value = false
   if (result.ok) {
     confirming.value = false
-    void router.replace(folderLink(workspaceId, item))
+    void router.replace(folderLink(workspaceId, item, description.value?.hub.opensOnFolderId))
   } else {
     deleteError.value = result.message
   }

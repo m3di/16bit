@@ -29,13 +29,22 @@ export const itemPageLink = (workspaceId: string, item: Pick<Item, 'id'>): Route
   params: { workspaceId, itemId: item.id },
 })
 
-/** Where an item's folder opens in its hub, with the item selected in the table. */
-export const folderLink = (workspaceId: string, item: Item): RouteLocationRaw => ({
+/**
+ * Where an item's folder opens in its hub. The hub's own route opens on its "Opens on" folder
+ * (D76), so with one set the hub root is named explicitly.
+ */
+export const folderLink = (
+  workspaceId: string,
+  item: Pick<Item, 'hubId' | 'folderId'>,
+  opensOnFolderId?: string,
+): RouteLocationRaw => ({
   name: 'hub',
   params: {
     workspaceId,
     hubId: item.hubId,
-    ...(item.folderId === item.hubId ? {} : { folderId: item.folderId }),
+    ...(item.folderId === item.hubId && opensOnFolderId === undefined
+      ? {}
+      : { folderId: item.folderId }),
   },
 })
 

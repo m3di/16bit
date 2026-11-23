@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Folder } from '@16bit/core'
+import type { Folder, Hub } from '@16bit/core'
 import { computed } from 'vue'
 import { StateBlock } from '../../ui/index.ts'
 import type { SidebarAction, SidebarActionKey } from '../hub-settings/schema.ts'
@@ -27,12 +27,17 @@ const entries = computed(() => (props.tree.state === 'ready' ? props.tree.data :
 const root = computed(() => entries.value.find((e) => e.folder.id === e.folder.hubId) ?? null)
 const folders = computed(() => entries.value.filter((e) => e !== root.value))
 
+// The hub's own route opens on its "Opens on" folder (D76); with one set, the root's link names
+// the root so its items stay one click away.
+const opensElsewhere = computed(
+  () => (root.value?.folder as Partial<Hub> | undefined)?.opensOnFolderId !== undefined,
+)
 const linkTo = (entry: FolderEntry) => ({
   name: 'hub',
   params: {
     workspaceId: props.workspaceId,
     hubId: entry.folder.hubId,
-    folderId: entry === root.value ? undefined : entry.folder.id,
+    folderId: entry === root.value && !opensElsewhere.value ? undefined : entry.folder.id,
   },
 })
 const currentOf = (entry: FolderEntry) =>
@@ -73,6 +78,7 @@ const actionsOf = (entry: FolderEntry): readonly SidebarAction[] =>
               :label="entry.folder.name"
               :color="entry.folder.color"
               :count="entry.ownCount"
+              :views-only="entry.folder.viewsOnly === true"
               :current="currentOf(entry)"
               :indent="8 + entry.depth * 12"
               :actions="actionsOf(entry)"
