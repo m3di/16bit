@@ -27,11 +27,16 @@ afterEach(() => {
 
 describe('one broken block never breaks the page', () => {
   it('replaces only the block that threw, in the browser', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const errors: unknown[] = []
+    vi.spyOn(console, 'error').mockImplementation((e: unknown) => errors.push(e))
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     registerBlock('number', Throws)
+    // Rows are router links, and this mount has no router: the list and board stay loading.
     const blocks: Record<string, BlockLoad> = Object.fromEntries(
-      Object.entries(homeData().blocks).map(([id, status]) => [id, { state: 'ready', status }]),
+      Object.entries(homeData().blocks).map(([id, status]): [string, BlockLoad] => [
+        id,
+        id === 'backlog' || id === 'in-sprint' ? { state: 'loading' } : { state: 'ready', status },
+      ]),
     )
     const { root } = mount(ViewRenderer, {
       page: readTree(homeTree).page,
@@ -40,6 +45,8 @@ describe('one broken block never breaks the page', () => {
       nameOf: () => 'Items',
     })
     await nextTick()
+    // Only the block made to throw failed; nothing else did.
+    expect(errors.map(String).filter((e) => !e.includes('A block went wrong'))).toEqual([])
     const broken = findAll(root, (n) => n.props['data-block-broken'] !== undefined)
     expect(broken.map((n) => n.props['data-view-block'])).toEqual(['open', 'day'])
     const text = textOf(root)

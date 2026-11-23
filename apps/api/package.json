@@ -12,7 +12,8 @@
     "seed:large": "node --env-file-if-exists=../../.env src/seed-large.ts",
     "account:reset-password": "node --env-file-if-exists=../../.env src/account-reset-password.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:budgets": "vitest run --config vitest.budgets.config.ts"
   },
   "dependencies": {
     "@16bit/core": "workspace:*",

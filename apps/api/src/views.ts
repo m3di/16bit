@@ -100,7 +100,7 @@ export async function validateViewTree(
  * data block (`MAX_VIEW_DATA_BLOCKS`), so this stays bounded. Folders of other hubs, and folders
  * the caller can't see, are left out, which `checkViewTree` reports.
  */
-async function viewContext(
+export async function viewContext(
   db: Db,
   workspaceId: string,
   hubId: string,
@@ -129,14 +129,14 @@ async function viewContext(
   return { folders }
 }
 
-interface FolderRef {
+export interface FolderRef {
   id: string
   hub_id: string
   views_only: boolean
 }
 
 /** The folder, or 404 when it is missing or the caller can't see it. */
-async function folderRef(db: Db, workspaceId: string, folderId: string): Promise<FolderRef> {
+export async function folderRef(db: Db, workspaceId: string, folderId: string): Promise<FolderRef> {
   const row = await db
     .selectFrom('folder')
     .select(['id', 'hub_id', 'views_only'])
@@ -148,7 +148,7 @@ async function folderRef(db: Db, workspaceId: string, folderId: string): Promise
 }
 
 /** The folder's stored view, or its default (D76), without `seq`. */
-async function readView(
+export async function readView(
   db: Db,
   workspaceId: string,
   folder: FolderRef,

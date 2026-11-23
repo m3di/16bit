@@ -1,5 +1,5 @@
-import type { Change } from '@16bit/core'
-import { effectScope, nextTick } from 'vue'
+import type { Change, HubDescription } from '@16bit/core'
+import { effectScope, nextTick, shallowRef } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiRequestError } from '../../api/client.ts'
 import { createWorkspaceStore, type StoreEvents, type WorkspaceStore } from '../../sync/store.ts'
@@ -9,6 +9,8 @@ import {
   fakeSource,
   homeData,
   homeTree,
+  ok,
+  page,
   rawView,
   viewData,
   type FakeSource,
@@ -19,14 +21,25 @@ import { REFRESH_DEBOUNCE, REFRESH_INTERVAL, useRootView } from './useRootView.t
 
 type Listeners = { [K in keyof StoreEvents]: StoreEvents[K][] }
 
-/** A store with no feed whose events the test sends, and `noteRead` recorded. */
+/** A store with no feed whose events the test sends, and `noteRead` and holds recorded. */
 function testStore() {
   const base = createWorkspaceStore('w', null)
   const listeners: Listeners = { change: [], hub: [], accessLost: [], resync: [] }
   const noteRead = vi.fn()
+  /** Hubs held now, once per hold. */
+  const held: string[] = []
   const store: WorkspaceStore = {
     ...base,
     noteRead,
+    hold: (hubId) => {
+      held.push(hubId)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        held.splice(held.indexOf(hubId), 1)
+      }
+    },
     on: (event, fn) => {
       ;(listeners[event] as unknown[]).push(fn)
       return () => {
@@ -47,12 +60,17 @@ function testStore() {
       for (const fn of listeners.resync) fn(hubId)
     },
   }
-  return { store, emit, noteRead, listeners }
+  return { store, emit, noteRead, listeners, held }
 }
 
 const START = Date.UTC(2026, 10, 23, 12, 0, 0)
 
-function setup(folderId: string | null, source: ViewSource, timeZone = 'Europe/Berlin') {
+function setup(
+  folderId: string | null | (() => string | null),
+  source: ViewSource,
+  timeZone = 'Europe/Berlin',
+  hub: HubDescription = description,
+) {
   const t = testStore()
   const scope = effectScope()
   const view = scope.run(() =>
@@ -60,8 +78,8 @@ function setup(folderId: string | null, source: ViewSource, timeZone = 'Europe/B
       source,
       store: t.store,
       hubId: () => 'bld',
-      folderId: () => folderId,
-      description: () => description,
+      folderId: typeof folderId === 'function' ? folderId : () => folderId,
+      description: () => hub,
       queue: createRequestQueue(),
       timeZone,
     }),
@@ -408,5 +426,144 @@ describe('useRootView: a stored view and its data (D83)', () => {
     expect(listeners.change).toHaveLength(0)
     expect(listeners.hub).toHaveLength(0)
     await nextTick()
+  })
+})
+
+describe('useRootView: follow-ups', () => {
+  it('does not hold a new folder’s first data back for the last folder’s once-a-second limit', async () => {
+    const source = fakeSource([rawView('home', homeTree), rawView('sp', homeTree)])
+    const open = shallowRef<string | null>('home')
+    const { stop } = setup(() => open.value, source)
+    await settle()
+    expect(source.requests).toHaveLength(1)
+    open.value = 'sp'
+    await settle()
+    expect(source.requests.map((r) => r.folderId)).toEqual(['home', 'sp'])
+    stop()
+  })
+
+  it('remembers which folders it saw with a stored view', async () => {
+    const source = fakeSource([rawView('home', homeTree)])
+    const open = shallowRef<string | null>('home')
+    const { view, stop } = setup(() => open.value, source)
+    expect(view.knownStored('home')).toBe(false)
+    await settle()
+    expect(view.knownStored('home')).toBe(true)
+    open.value = 'b'
+    await settle()
+    expect(view.knownStored('b')).toBe(false)
+    // The view was reset: the next visit reads the folder's items alongside the view again.
+    source.views = []
+    open.value = 'home'
+    await settle()
+    expect(view.knownStored('home')).toBe(false)
+    stop()
+  })
+
+  describe('a midnight slept through', () => {
+    let doc: EventTarget & { visibilityState: string }
+    beforeEach(() => {
+      doc = Object.assign(new EventTarget(), { visibilityState: 'hidden' })
+      vi.stubGlobal('document', doc)
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+    const show = () => {
+      doc.visibilityState = 'visible'
+      doc.dispatchEvent(new Event('visibilitychange'))
+    }
+
+    it('reads the blocks that use today again when the page is shown on another day', async () => {
+      vi.setSystemTime(Date.UTC(2026, 10, 23, 22, 0, 0))
+      const source = fakeSource([rawView('home', homeTree)])
+      const { stop } = setup('home', source, 'UTC')
+      await settle()
+      // The clock moves on while the machine sleeps; no timer has fired yet.
+      vi.setSystemTime(Date.UTC(2026, 10, 24, 7, 0, 0))
+      show()
+      await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE)
+      expect(source.requests).toHaveLength(2)
+      expect(source.requests[1]?.request.blocks).toEqual(['day'])
+      stop()
+    })
+
+    it('reads nothing again when the page is shown on the same day', async () => {
+      const source = fakeSource([rawView('home', homeTree)])
+      const { stop } = setup('home', source, 'UTC')
+      await settle()
+      vi.setSystemTime(START + 60 * 60_000)
+      show()
+      await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL)
+      expect(source.requests).toHaveLength(1)
+      stop()
+    })
+  })
+
+  describe('a relation target in another hub', () => {
+    const withTarget: HubDescription = {
+      ...description,
+      attributes: [
+        ...description.attributes,
+        {
+          ...description.attributes[0],
+          id: 'client',
+          type: 'relation',
+          config: { targetHubId: 'crm', crossHub: true, multiple: false },
+        } as (typeof description.attributes)[number],
+      ],
+    }
+    const clients = rawView(
+      'sp',
+      page([
+        {
+          id: 'by-client',
+          type: 'list',
+          config: {
+            binding: { folderId: 'b', sort: [], limit: 50 },
+            fields: [{ attribute: 'client' }],
+            create: false,
+          },
+        },
+      ]),
+    )
+    /** Hubs held beside the view's own. */
+    const others = (held: string[]) => held.filter((h) => h !== 'bld')
+
+    it('is followed from the data’s `seq` while a block shows it, and let go after', async () => {
+      const s = fakeSource([rawView('home', homeTree), clients])
+      s.answer((folderId, request) =>
+        folderId === 'sp'
+          ? viewData({ 'by-client': ok() }, { folderId })
+          : homeData(request.blocks),
+      )
+      const open = shallowRef<string | null>('sp')
+      const { held, noteRead, stop } = setup(() => open.value, s, 'UTC', withTarget)
+      await settle()
+      expect(others(held)).toEqual(['crm'])
+      expect(noteRead).toHaveBeenCalledWith('crm', 41)
+      // Home shows no relation from another hub.
+      open.value = 'home'
+      await settle()
+      expect(others(held)).toEqual([])
+      stop()
+    })
+
+    it('reads the labelling block again on a change or a resync there', async () => {
+      const s = fakeSource([clients])
+      s.answer((folderId) => viewData({ 'by-client': ok() }, { folderId }))
+      const { emit, held, stop } = setup('sp', s, 'UTC', withTarget)
+      await settle()
+      vi.advanceTimersByTime(REFRESH_INTERVAL)
+      emit.change({ seq: 60, hubId: 'crm', itemId: 'c1', item: null })
+      await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE)
+      expect(s.requests).toHaveLength(2)
+      vi.advanceTimersByTime(REFRESH_INTERVAL)
+      emit.resync('crm')
+      await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE)
+      expect(s.requests).toHaveLength(3)
+      stop()
+      expect(held).toEqual([])
+    })
   })
 })

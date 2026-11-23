@@ -1,4 +1,4 @@
-import { createRenderer, h, type Component } from 'vue'
+import { createRenderer, h, type Component, type Plugin } from 'vue'
 
 // Mounts a component without a DOM, for tests that need its event handlers to run. Nodes are
 // plain objects; an element's props and listeners both receive the events fired at it, as in a
@@ -136,9 +136,15 @@ export function type(el: FakeNode, value: string, init: Record<string, unknown> 
   fire(el, 'input', init)
 }
 
-export function mount(component: Component, props: Record<string, unknown>) {
+/** `plugins` are installed before mounting, such as a router for components with links. */
+export function mount(
+  component: Component,
+  props: Record<string, unknown>,
+  plugins: readonly Plugin[] = [],
+) {
   const root = node('root')
   const app = createApp({ render: () => h(component, props) })
+  for (const plugin of plugins) app.use(plugin)
   app.mount(root)
   return {
     root,
