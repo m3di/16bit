@@ -91,6 +91,10 @@ const EXTERNAL_KEY_KEY = 'item_external_key_key'
 const keyTaken = () =>
   new HttpError('key_taken', 'Another item of this hub already has this externalKey')
 
+/** D76: a views-only folder holds no items. */
+const viewsOnly = () =>
+  new HttpError('views_only', 'This folder only shows views and holds no items')
+
 /** Runs an item INSERT or UPDATE, answering a key another item holds with 409 `key_taken`. */
 async function keyed<T>(write: Promise<T>): Promise<T> {
   try {
@@ -537,11 +541,14 @@ export async function createItem(
   return inTransaction(db, async (trx) => {
     const folder = await trx
       .selectFrom('folder')
-      .select(['id', 'hub_id'])
+      .select(['id', 'hub_id', 'views_only'])
       .where('workspace_id', '=', workspaceId)
       .where('id', '=', input.folderId)
       .executeTakeFirst()
     if (!folder) throw notFound('Folder')
+    // Fixed at creation (D76), so no lock is needed; item_views_only_check (0016) is the
+    // backstop underneath.
+    if (folder.views_only) throw viewsOnly()
     await checkCause(trx, workspaceId, input.cause)
     // Before reading the attributes, so a schema write that strips values can't commit
     // between this validation and the insert (schema-lock.ts).

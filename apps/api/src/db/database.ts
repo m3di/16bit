@@ -120,7 +120,7 @@ export interface ViewTable {
   folder_id: string
   tree: Json<Record<string, unknown>>
   version: Generated<number>
-  updated_at: Generated<Timestamp>
+  updated_at: Timestamp
   updated_by: string
 }
 
