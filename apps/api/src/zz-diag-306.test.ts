@@ -5,7 +5,7 @@ import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { withScope } from './db/scope.ts'
 import { createTestDatabase } from './db/test-database.ts'
-import { sessionCookie } from './db/test-session.ts'
+import { createSession, DEFAULT_SESSION_POLICY, SESSION_COOKIE } from './auth/session.ts'
 import { DEV_OWNER } from './dev-accounts.ts'
 import {
   applyProjectSeed,
@@ -62,7 +62,14 @@ afterAll(async () => {
 
 async function round(label: string) {
   const app = buildApp({ db: logged })
-  const headers = await sessionCookie(db, DEV_OWNER.id)
+  const row = await db
+    .selectFrom('principal')
+    .select('account_id')
+    .where('workspace_id', '=', 'large')
+    .where('id', '=', DEV_OWNER.id)
+    .executeTakeFirstOrThrow()
+  const token = await createSession(db, row.account_id ?? '', DEFAULT_SESSION_POLICY)
+  const headers = { cookie: `${SESSION_COOKIE}=${token}` }
   for (const block of ['team-points', 'epic-bars', 'burndown', 'points-done']) {
     slow.length = 0
     const started = performance.now()
