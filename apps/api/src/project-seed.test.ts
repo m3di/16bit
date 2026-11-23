@@ -1,7 +1,7 @@
 import { hubDescriptionSchema, viewSchema } from '@16bit/core'
 import type { FastifyInstance } from 'fastify'
 import type { Kysely } from 'kysely'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from './app.ts'
 import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
@@ -37,7 +37,9 @@ let drop: () => Promise<void>
 let app: FastifyInstance
 let first: ProjectSeedResult
 
-beforeEach(async () => {
+// Seeded once for the file (the demo seed alone takes seconds); tests that write run last and
+// write only what later tests expect.
+beforeAll(async () => {
   const test = await createTestDatabase()
   drop = test.drop
   db = createDb(test.url)
@@ -46,9 +48,9 @@ beforeEach(async () => {
   await applySeed(db)
   first = await applyProjectSeed(db, { today: TODAY })
   app = buildApp({ db: appDb })
-})
+}, 180_000)
 
-afterEach(async () => {
+afterAll(async () => {
   await app.close()
   await appDb.destroy()
   await db.destroy()

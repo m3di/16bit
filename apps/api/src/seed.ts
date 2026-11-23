@@ -61,12 +61,21 @@ try {
     )
     console.log(`seed: ${PARCEL_HUB.name} people: ${project.accounts.join(', ')}`)
     if (project.agentKey) {
-      // Never printed: a file for e2e, outside git.
-      await mkdir(dirname(PROJECT_AGENT_KEY_FILE), { recursive: true })
-      await writeFile(PROJECT_AGENT_KEY_FILE, `${JSON.stringify(project.agentKey, null, 2)}\n`, {
-        mode: 0o600,
-      })
-      console.log(`seed: ${PARCEL_HUB.name} agent key written to ${PROJECT_AGENT_KEY_FILE}`)
+      // For e2e, in a file outside git. Where it can't be written (the container image), shown
+      // once instead, like the demo key.
+      try {
+        await mkdir(dirname(PROJECT_AGENT_KEY_FILE), { recursive: true })
+        await writeFile(PROJECT_AGENT_KEY_FILE, `${JSON.stringify(project.agentKey, null, 2)}\n`, {
+          mode: 0o600,
+        })
+        console.log(`seed: ${PARCEL_HUB.name} agent key written to ${PROJECT_AGENT_KEY_FILE}`)
+      } catch (error) {
+        console.log(
+          `seed: could not write ${PROJECT_AGENT_KEY_FILE} (${(error as Error).message}). ` +
+            `${PARCEL_HUB.name} agent key, shown once, not stored; copy it now:`,
+        )
+        console.log(project.agentKey.secret)
+      }
     } else {
       console.log(
         `seed: the ${PARCEL_HUB.name} agent key exists already; its secret is in ` +
