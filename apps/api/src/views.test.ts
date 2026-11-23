@@ -1,5 +1,7 @@
 import {
   batchResponseSchema,
+  jsonDepthPath,
+  MAX_VIEW_JSON_DEPTH,
   createdAgentKeySchema,
   defaultViewTree,
   invalidViewErrorSchema,
@@ -17,7 +19,7 @@ import { createDb, migrateToLatest, type Database } from './db/database.ts'
 import { createTestDatabase } from './db/test-database.ts'
 import { sessionCookie } from './db/test-session.ts'
 import { createItem } from './items.ts'
-import { jsonDeeperThan, MAX_VIEW_JSON_DEPTH, validateViewTree } from './views.ts'
+import { validateViewTree } from './views.ts'
 
 // The root view API (M4-03, D76 to D79) against a real Postgres, through the API's role under
 // row-level security. Contracts: packages/core/src/views.ts. Migration: 0016.
@@ -787,12 +789,18 @@ describe('validateViewTree, for seeds', () => {
     expect(bad).toMatchObject({ ok: false })
   })
 
-  it('bounds nesting without recursion', () => {
+  it('refuses a deeply nested value through core, without overflowing', async () => {
     let deep: unknown = 1
     for (let i = 0; i < 100_000; i++) deep = [deep]
-    expect(jsonDeeperThan(deep, MAX_VIEW_JSON_DEPTH)).toBe(true)
-    expect(jsonDeeperThan(tableTree('f1'), MAX_VIEW_JSON_DEPTH)).toBe(false)
-    expect(jsonDeeperThan([[1]], 2)).toBe(false)
-    expect(jsonDeeperThan([[[1]]], 2)).toBe(true)
+    expect(await validateViewTree(db, WS, 'h1', deep)).toEqual({
+      ok: false,
+      errors: [
+        {
+          path: Array.from({ length: MAX_VIEW_JSON_DEPTH }, () => '0').join('.'),
+          message: `A view nests at most ${String(MAX_VIEW_JSON_DEPTH)} levels`,
+        },
+      ],
+    })
+    expect(jsonDepthPath(tableTree('f1'))).toBeNull()
   })
 })

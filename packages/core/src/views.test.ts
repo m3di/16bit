@@ -14,6 +14,8 @@ import {
   hubSchema,
   itemQuerySchema,
   MAX_VIEW_BYTES,
+  jsonDepthPath,
+  MAX_VIEW_JSON_DEPTH,
   parseViewTree,
   resolveFilterOperands,
   updateHubSchema,
@@ -1007,5 +1009,44 @@ describe('view data and folder contracts (D76, D83)', () => {
       version: 1,
       opensOnFolderId: null,
     })
+  })
+})
+
+describe('nesting (#285)', () => {
+  const nested = (depth: number): unknown => {
+    let v: unknown = 1
+    for (let i = 0; i < depth; i++) v = [v]
+    return v
+  }
+
+  it('refuses a tree nested past MAX_VIEW_JSON_DEPTH with a path, without overflowing', () => {
+    const raw = {
+      schemaVersion: 1,
+      root: { id: 'p', type: 'page', config: { title: nested(100_000) } },
+    }
+    const result = parseViewTree(raw)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0]?.message).toBe(
+      `A view nests at most ${String(MAX_VIEW_JSON_DEPTH)} levels`,
+    )
+    // root (1), config (2), title and the arrays inside it: the 65th level is under `title`.
+    expect(result.errors[0]?.path.startsWith('root.config.title.0.0')).toBe(true)
+    expect(result.errors[0]?.path.split('.')).toHaveLength(MAX_VIEW_JSON_DEPTH)
+  })
+
+  it('finds the first level past the cap, and none within it', () => {
+    expect(jsonDepthPath(nested(MAX_VIEW_JSON_DEPTH))).toBeNull()
+    expect(jsonDepthPath(nested(MAX_VIEW_JSON_DEPTH + 1))).toBe(
+      Array.from({ length: MAX_VIEW_JSON_DEPTH }, () => '0').join('.'),
+    )
+    expect(jsonDepthPath({ a: { b: [1] } }, 2)).toBe('a.b')
+    expect(jsonDepthPath(tree(currentSprint))).toBeNull()
+  })
+
+  it('counts a value nested past the cap as too big, and refuses it from the size scan alone', () => {
+    expect(viewTreeBytes(nested(100_000))).toBe(Number.POSITIVE_INFINITY)
+    expect(viewTreeBytes(nested(MAX_VIEW_JSON_DEPTH))).toBe(2 * MAX_VIEW_JSON_DEPTH + 1)
   })
 })

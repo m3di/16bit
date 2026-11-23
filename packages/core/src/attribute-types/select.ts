@@ -1,10 +1,15 @@
 import { z } from 'zod'
+import { noNul } from '../nul.ts'
 import { paletteColorSchema } from '../palette.ts'
 import { type AttributeType, BASE_SUMMARIES, EMPTY_OPERATORS } from './contract.ts'
 
 export const selectOptionSchema = z.strictObject({
   id: z.string().min(1).max(64),
-  label: z.string().min(1).max(200),
+  label: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine(...noNul),
   color: paletteColorSchema.optional(),
 })
 export type SelectOption = z.infer<typeof selectOptionSchema>
