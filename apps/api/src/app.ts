@@ -71,7 +71,7 @@ import { registerAuthRoutes, registerInviteRoutes } from './auth/routes.ts'
 import { DEFAULT_SESSION_POLICY, type SessionPolicy } from './auth/session.ts'
 import type { Database } from './db/database.ts'
 import { withScope, workspaceSeq } from './db/scope.ts'
-import { decodeCursor, encodeCursor, HttpError, notFound, parse } from './http.ts'
+import { decodeCursor, encodeCursor, HttpError, notFound, nulRefusal, parse } from './http.ts'
 import {
   backlinks,
   expandItem,
@@ -213,8 +213,11 @@ export function buildApp(options: AppOptions): FastifyInstance {
     app.addHook('preClose', () => feed.close())
   }
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof HttpError) return reply.status(error.status).send(error.body())
+    // U+0000 in a field the core schemas don't check (#221).
+    const nul = nulRefusal(error, `${request.method} ${request.routeOptions.url ?? '(no route)'}`)
+    if (nul) return reply.status(nul.status).send(nul.body())
     // Fastify's own client errors keep their status: 400 malformed JSON, 413 body too large,
     // 415 unsupported content type, and so on.
     const status = (error as { statusCode?: number }).statusCode
