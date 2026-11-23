@@ -300,6 +300,18 @@ describe('ItemDetails', () => {
     expect(html).toContain('value="Ship"')
   })
 
+  it('shows the external key beside the ID only when the item has one (D64)', async () => {
+    expect(await render(ItemDetails, { item: item('i', 1), columns })).not.toContain(
+      'data-external-key',
+    )
+    const html = await render(ItemDetails, {
+      item: { ...item('i', 1), externalKey: 'ticket 42' },
+      columns,
+    })
+    expect(html).toMatch(/data-item-id[^>]*>i<\/dd>(<!--\[-->)?<dt[^>]*>External key<\/dt>/)
+    expect(html).toMatch(/data-external-key>ticket 42</)
+  })
+
   it('disables the editors while the item is not confirmed', async () => {
     const html = await render(ItemDetails, { item: item('i', 1), columns, disabled: true })
     expect(html.match(/<(input|select)[^>]* disabled/g)).toHaveLength(columns.length)

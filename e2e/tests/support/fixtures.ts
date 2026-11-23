@@ -61,7 +61,12 @@ export class Api {
   /** Sends the PATCH and returns the raw response, so a spec can check a 409. */
   patchItem(
     item: Pick<Item, 'id' | 'workspaceId'>,
-    body: { version: number; values: Record<string, unknown>; cause?: ItemCause },
+    body: {
+      version: number
+      values: Record<string, unknown>
+      cause?: ItemCause
+      externalKey?: string | null
+    },
   ): Promise<APIResponse> {
     return this.#request.patch(
       this.path(item.workspaceId, `/items/${encodeURIComponent(item.id)}`),

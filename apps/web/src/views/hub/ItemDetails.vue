@@ -3,6 +3,7 @@ import type { FolderAttributeDefinition, Item, ItemValues } from '@16bit/core'
 import { validateItemValues } from '@16bit/core'
 import { computed, ref, useId } from 'vue'
 import { nameFor, useOptionalValueContext } from './context.ts'
+import ExternalKeyDetail from '../item/ExternalKeyDetail.vue'
 import FieldEditor from './FieldEditor.vue'
 import { formatTimestamp } from './values.ts'
 
@@ -88,6 +89,7 @@ function commit(attributeId: string, value: ItemValues[string], basedOn: number 
       <dl class="m-0 grid grid-cols-[84px_minmax(0,1fr)] gap-x-3 gap-y-2">
         <dt class="text-ink3">ID</dt>
         <dd class="m-0 font-mono text-secondary break-all" data-item-id>{{ item.id }}</dd>
+        <ExternalKeyDetail v-if="item.externalKey !== undefined" :value="item.externalKey" />
         <dt class="text-ink3">Version</dt>
         <dd class="m-0 font-mono text-secondary" data-item-version>{{ item.version }}</dd>
         <dt class="text-ink3">Updated</dt>
