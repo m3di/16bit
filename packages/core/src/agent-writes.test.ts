@@ -56,6 +56,17 @@ describe('external key (D64)', () => {
     expect(ok(null)).toBe(false)
   })
 
+  it('refuses the dot segments "." and "..", which no URL can reach (#200 review)', () => {
+    expect(ok('.')).toBe(false)
+    expect(ok('..')).toBe(false)
+    expect(externalKeySchema.safeParse('.').error?.issues[0]?.message).toBe(
+      'Not "." or "..": URLs resolve them as dot segments',
+    )
+    for (const fine of ['...', '.a', 'a.', './a', '../a', '. ', '%2E']) {
+      expect(ok(fine), fine).toBe(fine !== '. ')
+    }
+  })
+
   it('is kept exactly as sent: never trimmed or folded', () => {
     expect(externalKeySchema.parse('Src/App.ts')).toBe('Src/App.ts')
     expect(externalKeySchema.parse('a b')).toBe('a b')
