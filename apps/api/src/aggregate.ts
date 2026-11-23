@@ -56,8 +56,11 @@ export interface AggregateOptions {
 const AVG_DEFAULT_DECIMALS = 10
 
 /**
- * `work_mem` for one aggregate statement. Per sort or hash node, per statement, and at most 4
- * requests in flight per principal (D83), so a few aggregates at once stay well within a pod.
+ * `work_mem` for one aggregate statement. Postgres grants it per sort node, and since version
+ * 13 up to `hash_mem_multiplier` (2 by default) times it per hash node, so 32 to 64 MB per node.
+ * D83's limit of 4 in flight is per principal, not per process, so the bound is the API's pool
+ * size times the sort and hash nodes of a plan (a few) times 32 to 64 MB. Revisit this if the
+ * pool grows.
  */
 const AGGREGATE_WORK_MEM = '32MB'
 
@@ -283,10 +286,13 @@ export async function aggregate(
   // default, or the request's) comes back after it.
   // `work_mem` too: the pivot groups a few index rows per item and per attribute (about 400,000
   // rows for 50,000 items at the cap), which spills to disk at the default 4 MB.
+  // The old values in their own statement, before setting the new ones, so nothing depends on
+  // the order a SELECT evaluates its columns in.
   const { rows: previous } = await sql<{ timeout: string; memory: string }>`
-    SELECT current_setting('statement_timeout') AS timeout,
-           current_setting('work_mem') AS memory,
-           set_config('statement_timeout', ${String(options.timeoutMs ?? AGGREGATE_TIMEOUT_MS)}, true),
+    SELECT current_setting('statement_timeout') AS timeout, current_setting('work_mem') AS memory
+  `.execute(trx)
+  await sql`
+    SELECT set_config('statement_timeout', ${String(options.timeoutMs ?? AGGREGATE_TIMEOUT_MS)}, true),
            set_config('work_mem', ${AGGREGATE_WORK_MEM}, true)
   `.execute(trx)
   try {
@@ -364,13 +370,15 @@ async function grouped(
     measures.map((m, i) => sql`${m.expr} AS ${sql.ref(`v${String(i)}`)}`),
   )
 
-  // A select, multi-select or boolean can't have more groups than the cap (at most 100
-  // options; two values), so nothing ever folds into `other`: group in one pass, with `base`
-  // read once (and inlined), and rank in option order here. Each value of a multi-select is in
+  // A boolean, or a select or multi-select with at most 100 options, can't have more groups
+  // than the cap (D80), so nothing ever folds into `other`: group in one pass, with `base` read
+  // once (and inlined), and rank in option order here. A select may have up to 500 options;
+  // with more than 100 it takes the ranked and folded path, which folds the rest into `other`. Each value of a multi-select is in
   // the item's list once (core keeps the list distinct), so every (item, group) pair is one row
   // without a DISTINCT. The ranked and folded path below is for actors, relations and dates.
   const options =
-    attribute.type === 'select' || attribute.type === 'multi_select'
+    (attribute.type === 'select' || attribute.type === 'multi_select') &&
+    attribute.config.options.length <= MAX_AGGREGATE_GROUPS
       ? attribute.config.options.map((o) => o.id)
       : attribute.type === 'boolean'
         ? ['0', '1']

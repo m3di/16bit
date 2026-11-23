@@ -349,6 +349,48 @@ describe('POST /aggregate', () => {
     ])
   })
 
+  it('caps a select of more than 100 options at 100 groups in option order (D80)', async () => {
+    // A select and a multi-select of 105 options (core allows 500), one item on each option.
+    const ids = Array.from({ length: 105 }, (_, i) => `o${String(i).padStart(3, '0')}`)
+    const opts = JSON.stringify({ options: ids.map((id) => ({ id, label: id })) })
+    await sql`
+      INSERT INTO attribute (workspace_id, id, hub_id, name, type, config, indexed) VALUES
+        ('w1', 'many', 'h1', 'Many', 'select', ${sql.lit(opts)}, true),
+        ('w1', 'manym', 'h1', 'Many tags', 'multi_select', ${sql.lit(opts)}, true);
+      INSERT INTO folder_attribute (workspace_id, hub_id, folder_id, attribute_id, position) VALUES
+        ('w1', 'h1', 'f1', 'many', 20), ('w1', 'h1', 'f1', 'manym', 21);
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+      SELECT 'w1', 'm' || n, 'h1', 'f1', 1000 + n, '{}', 'own' FROM generate_series(0, 104) n;
+      INSERT INTO item_index (workspace_id, attribute_id, item_id, txt)
+      SELECT 'w1', a, 'm' || n, 'o' || lpad(n::text, 3, '0')
+      FROM generate_series(0, 104) n, unnest(ARRAY['many', 'manym']) a;
+      -- One more item holding two options that fold: it is in 'other' once.
+      INSERT INTO item (workspace_id, id, hub_id, folder_id, seq_id, values, updated_by)
+        VALUES ('w1', 'two', 'h1', 'f1', 2000, '{}', 'own');
+      INSERT INTO item_index (workspace_id, attribute_id, item_id, ord, txt)
+        VALUES ('w1', 'manym', 'two', 0, 'o103'), ('w1', 'manym', 'two', 1, 'o104');
+    `.execute(db)
+    for (const attribute of ['many', 'manym']) {
+      const { groups, truncated } = await agg('ed', {
+        groupBy: { attribute },
+        measures: [{ fn: 'count' }],
+      })
+      expect(truncated, attribute).toBe(true)
+      const values = groups.filter((g) => g.key.kind === 'value')
+      expect(
+        values.map((g) => keys([g])[0]),
+        attribute,
+      ).toEqual(ids.slice(0, 100))
+      expect(values.every((g) => g.values[0] === 1)).toBe(true)
+      expect(keys(groups).slice(-2)).toEqual(['empty', 'other'])
+      // o100 to o104: five items, and for the multi-select `two` as well, once.
+      expect(groups.at(-1), attribute).toEqual({
+        key: { kind: 'other' },
+        values: [attribute === 'many' ? 5 : 6],
+      })
+    }
+  })
+
   it('folds groups past 100 into one other group, each item once', async () => {
     // 104 items, each linking to the one before it (the first to i5) and to i0: 105 targets,
     // i0 in every one of the 104, every other target in exactly one. Each has 1 point.
