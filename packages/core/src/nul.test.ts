@@ -4,7 +4,14 @@ import {
   compileItemQuery,
   createItemSchema,
   itemCauseSchema,
+  createAgentKeySchema,
+  createAttributeSchema,
+  createFolderSchema,
+  createHubSchema,
   NUL_MESSAGE,
+  updateAttributeSchema,
+  updateFolderSchema,
+  updateHubSchema,
   validateItemValues,
   type Attribute,
 } from './index.ts'
@@ -80,5 +87,47 @@ describe('NUL in causes and filters (#221)', () => {
     expect(compile('contains', 'a\u0000')).toBe(false)
     expect(compile('eq', 'a\u0000')).toBe(false)
     expect(compile('contains', 'a')).toBe(true)
+  })
+})
+
+describe('NUL in names (#285)', () => {
+  const nul = 'a\u0000b'
+  const refused = (result: { success: boolean; error?: { issues: { path: PropertyKey[] }[] } }) => {
+    expect(result.success).toBe(false)
+    return result.error?.issues.map((i) => i.path.join('.'))
+  }
+
+  it('refuses it in hub, folder, attribute, option and agent key names, at the field', () => {
+    expect(
+      refused(createHubSchema.safeParse({ name: nul, color: 'blue', idPrefix: 'NUL' })),
+    ).toEqual(['name'])
+    expect(refused(updateHubSchema.safeParse({ version: 0, name: nul }))).toContain('name')
+    expect(
+      refused(createFolderSchema.safeParse({ parentId: 'h', name: nul, color: 'blue' })),
+    ).toEqual(['name'])
+    expect(refused(updateFolderSchema.safeParse({ version: 0, name: nul }))).toContain('name')
+    expect(
+      refused(createAttributeSchema.safeParse({ name: nul, type: 'text', config: {} })),
+    ).toContain('name')
+    expect(
+      refused(
+        createAttributeSchema.safeParse({
+          name: 'Stage',
+          type: 'select',
+          config: { options: [{ id: 'a', label: nul }] },
+        }),
+      ),
+    ).toContain('config.options.0.label')
+    expect(refused(updateAttributeSchema.safeParse({ version: 0, name: nul }))).toContain('name')
+    expect(refused(createAgentKeySchema.safeParse({ name: nul, hubRole: 'editor' }))).toEqual([
+      'name',
+    ])
+  })
+
+  it('still takes ordinary names', () => {
+    expect(createHubSchema.safeParse({ name: 'Hub', color: 'blue', idPrefix: 'HUB' }).success).toBe(
+      true,
+    )
+    expect(createAgentKeySchema.safeParse({ name: 'bot', hubRole: 'editor' }).success).toBe(true)
   })
 })

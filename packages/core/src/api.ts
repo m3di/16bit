@@ -135,7 +135,12 @@ export const hubPageSchema = pageSchema(hubListEntrySchema)
  */
 export const createHubSchema = z.strictObject({
   id: idSchema.optional(),
-  name: z.string().trim().min(1).max(200),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .refine(...noNul),
   color: paletteColorSchema,
   idPrefix: folderSchema.shape.idPrefix,
 })
@@ -525,7 +530,8 @@ const revisionEntryFields = {
  *
  * A stored patch that no longer matches `revisionPatchSchema` (written by an older version, for
  * example) comes back as `{ patch: null, unreadable: true }` with the rest of the entry, so one
- * such revision never fails the whole history read (#222). `op` is still the stored operation.
+ * such revision never fails the whole history read (#222). `op` is the stored operation when it
+ * names one; otherwise a fallback: `create` for version 1, `update` after it.
  */
 export const revisionEntrySchema = z.union([
   z.strictObject({ ...revisionEntryFields, patch: revisionPatchSchema }),
@@ -564,7 +570,12 @@ export type AgentKey = z.infer<typeof agentKeySchema>
  * creator's effective hub role. `expiresAt`, if set, must be in the future.
  */
 export const createAgentKeySchema = z.strictObject({
-  name: z.string().trim().min(1).max(200),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .refine(...noNul),
   hubRole: agentHubRoleSchema,
   expiresAt: timestampSchema.nullable().default(null),
 })

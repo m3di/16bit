@@ -35,6 +35,12 @@ export const MAX_VIEW_DEPTH = 8
 export const MAX_VIEW_DATA_BLOCKS = 20
 /** The stored tree as JSON, in UTF-8 bytes (D76; also a CHECK on `view.tree`). */
 export const MAX_VIEW_BYTES = 128 * 1024
+/**
+ * JSON nesting (objects and arrays) a tree may reach. A valid tree nests far less (8 block
+ * levels at 2 each, plus a config with a 3-level filter); the cap keeps every scan of untrusted
+ * input below it (size, NUL, the schema) from overflowing the stack (#285).
+ */
+export const MAX_VIEW_JSON_DEPTH = 64
 export const MAX_COLUMNS = 4
 /** Fields after the title on a list row or board card (D77). */
 export const MAX_ROW_FIELDS = 4
@@ -492,18 +498,42 @@ function utf8Length(text: string): number {
 }
 
 /**
+ * The path (`root.children.0` ...) of the first object or array nested deeper than `max`, or
+ * null. Iterative, so input of any depth is safe to check.
+ */
+export function jsonDepthPath(value: unknown, max: number = MAX_VIEW_JSON_DEPTH): string | null {
+  const stack: { value: unknown; depth: number; path: string[] }[] = [{ value, depth: 0, path: [] }]
+  for (let next = stack.pop(); next; next = stack.pop()) {
+    const { value: v, depth, path } = next
+    if (typeof v !== 'object' || v === null) continue
+    if (depth + 1 > max) return path.join('.')
+    const entries = Array.isArray(v)
+      ? v.map((child, i): [string, unknown] => [String(i), child])
+      : Object.entries(v)
+    for (const [key, child] of entries.reverse()) {
+      stack.push({ value: child, depth: depth + 1, path: [...path, key] })
+    }
+  }
+  return null
+}
+
+/** Thrown by `jsonbText` past `MAX_VIEW_JSON_DEPTH`. */
+class TooDeep extends Error {}
+
+/**
  * JSON as Postgres prints `jsonb`: a space after every `,` and `:` between members. Key order
  * differs from Postgres's, which leaves the length alone. Values JSON can't hold are dropped
- * as `JSON.stringify` drops them.
+ * as `JSON.stringify` drops them. Recursive, so it refuses to go past `MAX_VIEW_JSON_DEPTH`.
  */
-function jsonbText(value: unknown): string | undefined {
+function jsonbText(value: unknown, depth = 0): string | undefined {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (depth + 1 > MAX_VIEW_JSON_DEPTH) throw new TooDeep()
   if (Array.isArray(value)) {
-    return `[${value.map((v) => jsonbText(v) ?? 'null').join(', ')}]`
+    return `[${value.map((v) => jsonbText(v, depth + 1) ?? 'null').join(', ')}]`
   }
   const members: string[] = []
   for (const [k, v] of Object.entries(value)) {
-    const text = jsonbText(v)
+    const text = jsonbText(v, depth + 1)
     if (text !== undefined) members.push(`${JSON.stringify(k)}: ${text}`)
   }
   return `{${members.join(', ')}}`
@@ -513,7 +543,15 @@ function jsonbText(value: unknown): string | undefined {
  * The size `view.tree` counts against `MAX_VIEW_BYTES`: the UTF-8 length of the tree as
  * Postgres prints it, which the `view_tree_size` CHECK measures with `octet_length(tree::text)`.
  */
-export const viewTreeBytes = (tree: unknown): number => utf8Length(jsonbText(tree) ?? '')
+export function viewTreeBytes(tree: unknown): number {
+  try {
+    return utf8Length(jsonbText(tree) ?? '')
+  } catch (error) {
+    // Nested past `MAX_VIEW_JSON_DEPTH`: no tree that deep is stored, so it counts as too big.
+    if (error instanceof TooDeep) return Number.POSITIVE_INFINITY
+    throw error
+  }
+}
 
 /** The structural rules of D14 and D77, on a tree whose blocks already parsed. */
 function checkStructure(root: Block): QueryError[] {
@@ -636,6 +674,12 @@ export type ParseViewTreeResult = { ok: true; tree: ViewTree } | { ok: false; er
  * as the `view_tree_size` CHECK counts it, and holds no U+0000.
  */
 export function parseViewTree(raw: unknown): ParseViewTreeResult {
+  // First, so every scan after it (size, NUL, the schema) works on a bounded depth.
+  const deep = jsonDepthPath(raw)
+  if (deep !== null) {
+    const message = `A view nests at most ${String(MAX_VIEW_JSON_DEPTH)} levels`
+    return { ok: false, errors: [{ path: deep, message }] }
+  }
   const tooBig = { path: '', message: `A view is at most ${String(MAX_VIEW_BYTES / 1024)} KiB` }
   // Before parsing, so an oversized body costs no more than this; and after, below.
   if (viewTreeBytes(raw) > MAX_VIEW_BYTES) return { ok: false, errors: [tooBig] }
@@ -673,6 +717,8 @@ export function parseViewTree(raw: unknown): ParseViewTreeResult {
 function nulPath(value: unknown, path: string[]): string | null {
   if (typeof value === 'string') return hasNul(value) ? path.join('.') : null
   if (typeof value !== 'object' || value === null) return null
+  // `parseViewTree` refused deeper input already; never recurse past it.
+  if (path.length >= MAX_VIEW_JSON_DEPTH) return null
   const entries: [string, unknown][] = Array.isArray(value)
     ? value.map((v, i): [string, unknown] => [String(i), v])
     : Object.entries(value)

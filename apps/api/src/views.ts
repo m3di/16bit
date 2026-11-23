@@ -44,32 +44,12 @@ import { lockHubSchema } from './schema-lock.ts'
 type Db = Kysely<Database>
 type Trx = Transaction<Database>
 
-/**
- * JSON nesting a sent tree may reach before `parseViewTree` reads it. A valid tree nests far
- * less (8 block levels at 2 each, plus a config with a 3-level filter), but core's size and NUL
- * scans recurse, so a body nested thousands deep would overflow the stack (500) instead of
- * answering 422.
- */
-export const MAX_VIEW_JSON_DEPTH = 64
-
-/** True if `value` nests arrays and objects more than `max` deep. Iterative, so it can't overflow. */
-export function jsonDeeperThan(value: unknown, max: number): boolean {
-  const stack: [unknown, number][] = [[value, 0]]
-  while (stack.length > 0) {
-    const [v, depth] = stack.pop() as [unknown, number]
-    if (typeof v !== 'object' || v === null) continue
-    if (depth + 1 > max) return true
-    for (const child of Array.isArray(v) ? v : Object.values(v)) stack.push([child, depth + 1])
-  }
-  return false
-}
-
 export type ViewValidation =
   { ok: true; tree: ViewTree } | { ok: false; errors: { path: string; message: string }[] }
 
 /**
  * Everything PUT checks about a tree, for the routes and for seeds (M4-06), so a seed can never
- * store a tree PUT would refuse: nesting, then `parseViewTree` (shape, structure, caps, size, NUL),
+ * store a tree PUT would refuse: `parseViewTree` (nesting, size, NUL, shape, structure, caps),
  * then `checkViewTree` against the folders the tree binds to in `hubId` and the attributes they
  * show. A route calls it holding the hub's schema lock shared; `db` reads as its caller, so a
  * folder the caller can't see is not a folder of the hub. The returned tree is the form to store.
@@ -80,12 +60,6 @@ export async function validateViewTree(
   hubId: string,
   raw: unknown,
 ): Promise<ViewValidation> {
-  if (jsonDeeperThan(raw, MAX_VIEW_JSON_DEPTH)) {
-    return {
-      ok: false,
-      errors: [{ path: '', message: `A view nests at most ${String(MAX_VIEW_JSON_DEPTH)} levels` }],
-    }
-  }
   const parsed = parseViewTree(raw)
   if (!parsed.ok) return parsed
   const errors = checkViewTree(parsed.tree, await viewContext(db, workspaceId, hubId, parsed.tree))
