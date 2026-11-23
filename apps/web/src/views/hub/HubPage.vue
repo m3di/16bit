@@ -44,6 +44,7 @@ import { usePrincipals } from './usePrincipals.ts'
 import { defaultViewSource, useViewSource } from '../root-view/source.ts'
 import { useRootView } from '../root-view/useRootView.ts'
 import ViewRenderer from '../root-view/ViewRenderer.vue'
+import { provideViewHost } from '../root-view/host.ts'
 
 const { workspaceId, hubId, folderId, itemId } = defineProps<{
   workspaceId: string
@@ -221,6 +222,9 @@ const rootView = useRootView({
   hubId: () => hubId,
   folderId: () => (description.value && folder.value ? openFolderId.value : null),
   description: () => description.value,
+  onLinked: (item) => {
+    items.rememberLinked(item)
+  },
 })
 const viewMode = rootView.mode
 // A root view shows the live dot in its header instead of ConnectionStatus, never both.
@@ -228,6 +232,26 @@ const headerShowsLive = computed(() => viewMode.value === 'view' || viewMode.val
 const liveStatus = computed(() => {
   const status = items.store.status.value
   return status === 'idle' ? null : status
+})
+// What a view's data blocks read from this page (M3 store, panel, "New item").
+provideViewHost({
+  description: () => description.value,
+  current: (item) => {
+    const store = items.store
+    if (store.isDeleted(item.id)) return undefined
+    // Hidden while a delete of the reader's own is on its way.
+    return store.view(item.id) ?? (store.get(item.id) ? undefined : item)
+  },
+  itemLink: (item) => ({ query: { item: item.id } }),
+  canCreate: (id) => {
+    const d = description.value
+    const f = d?.hub.id === id ? d.hub : d?.folders.find((x) => x.id === id)
+    return canWrite.value && !!f && !f.viewsOnly
+  },
+  create: (id, values) => {
+    startCreate({ folderId: id, values })
+  },
+  me: () => principals.self.value?.id ?? null,
 })
 const nameOfBlock = (block: Block) => {
   const config = block.config as { label?: string; binding?: { folderId?: string } }
@@ -347,20 +371,34 @@ const closePanel = () => {
   void router.push({ query: {} })
 }
 
-function startCreate() {
+// Where "New item" creates: the open folder, or a view block's binding folder with its presets
+// filled in (D77).
+const createIn = ref<{ folderId: string; values: ItemValues }>({ folderId: '', values: {} })
+const createColumns = computed(() =>
+  description.value ? folderColumns(description.value, createIn.value.folderId) : [],
+)
+function startCreate(target: { folderId: string; values: ItemValues } | null = null) {
   if (!canWrite.value) return
+  createIn.value = target ?? { folderId: openFolderId.value, values: {} }
   createErrors.value = {}
   creating.value = true
   if (itemId) void router.push({ query: {} })
 }
 async function submitCreate(values: ItemValues) {
   createBusy.value = true
-  const result = await items.create(values)
+  const target = createIn.value.folderId
+  const result = await items.create(values, target === openFolderId.value ? undefined : target)
   createBusy.value = false
   if (result.ok) {
     creating.value = false
-    // The new item opens on its own page, where the rest of it can be filled in.
-    void router.push({ name: 'item', params: { workspaceId, itemId: result.item.id } })
+    if (viewMode.value === 'view') {
+      // From a view, the new item opens in the panel and the page stays; its block reads again
+      // when the feed brings the create.
+      void router.push({ query: { item: result.item.id } })
+    } else {
+      // The new item opens on its own page, where the rest of it can be filled in.
+      void router.push({ name: 'item', params: { workspaceId, itemId: result.item.id } })
+    }
   } else if (readOnly.value) {
     // The hub refused the write: the form cannot succeed, the notice says why.
     creating.value = false
@@ -453,16 +491,25 @@ async function submitCreate(values: ItemValues) {
             <PageHeader :title="folder.name" :live="liveStatus" />
             <NoViewYet />
           </template>
-          <ViewRenderer
-            v-else-if="folder && viewMode === 'view'"
-            :page="rootView.rendered.value?.page ?? null"
-            :folder-name="folder.name"
-            :live="liveStatus"
-            :blocks="rootView.blocks.value"
-            :problem="rootView.problem.value"
-            :name-of="nameOfBlock"
-            @retry="rootView.retry()"
-          />
+          <template v-else-if="folder && viewMode === 'view'">
+            <FormNotice v-if="notice" data-notice>
+              {{ notice }}
+              <template #action>
+                <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                  >Dismiss</BaseButton
+                >
+              </template>
+            </FormNotice>
+            <ViewRenderer
+              :page="rootView.rendered.value?.page ?? null"
+              :folder-name="folder.name"
+              :live="liveStatus"
+              :blocks="rootView.blocks.value"
+              :problem="rootView.problem.value"
+              :name-of="nameOfBlock"
+              @retry="rootView.retry()"
+            />
+          </template>
           <template v-else-if="folder && hub.state === 'ready'">
             <div class="flex flex-wrap items-end justify-between gap-3">
               <div class="flex min-w-0 flex-col gap-1">
@@ -482,7 +529,7 @@ async function submitCreate(values: ItemValues) {
                 variant="primary"
                 :disabled="list.state !== 'ready'"
                 data-new-item-button
-                @click="startCreate"
+                @click="startCreate()"
                 >New item</BaseButton
               >
             </div>
@@ -513,7 +560,7 @@ async function submitCreate(values: ItemValues) {
               @retry="openFolder(openFolderId)"
               @windows="items.showWindows($event)"
               @retry-windows="items.retryWindows()"
-              @create="startCreate"
+              @create="startCreate()"
               @sort="items.setSort($event)"
             />
           </template>
@@ -528,7 +575,9 @@ async function submitCreate(values: ItemValues) {
         @close="closePanel"
       >
         <NewItemForm
-          :columns="columns"
+          :key="createIn.folderId + JSON.stringify(createIn.values)"
+          :columns="createColumns"
+          :initial="createIn.values"
           :busy="createBusy"
           :server-errors="createErrors"
           @submit="submitCreate"

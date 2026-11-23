@@ -32,10 +32,7 @@ export function useBlock<K extends BlockData['kind']>(
     return typeof found === 'object' ? found : null
   }
   const linked = computed(
-    () =>
-      ((data.value as { linked?: Record<string, LinkedItem> } | null)?.linked ?? undefined) as
-        | Readonly<Record<string, LinkedItem>>
-        | undefined,
+    () => (data.value as { linked?: Record<string, LinkedItem> } | null)?.linked ?? undefined,
   )
   const names: Names = {
     actor: (id) => values?.actor(id).name ?? id.slice(0, 8),

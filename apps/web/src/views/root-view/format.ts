@@ -132,8 +132,9 @@ export function groupLabel(
         const d = new Date(`${key.value.slice(0, 10)}T00:00:00Z`)
         return Number.isNaN(d.getTime()) ? key.value : dateOnly.format(d)
       }
-      if (typeof key.value === 'boolean') return key.value ? attribute.name : `Not ${attribute.name.toLowerCase()}`
-      return formatValue(attribute, key.value as ItemValues[string]) || String(key.value)
+      if (typeof key.value === 'boolean')
+        return key.value ? attribute.name : `Not ${attribute.name.toLowerCase()}`
+      return formatValue(attribute, key.value) || String(key.value)
     }
   }
 }
@@ -141,7 +142,7 @@ export function groupLabel(
 /** A select option's colour for a group, if it has one. */
 export function groupColor(key: AggregateGroupKey, attribute: Attribute | undefined) {
   if (key.kind !== 'value' || !attribute) return undefined
-  return selectedOption(attribute, key.value as ItemValues[string])?.color
+  return selectedOption(attribute, key.value)?.color
 }
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { Block, FieldValue } from '@16bit/core'
+import type { Block } from '@16bit/core'
 import { computed } from 'vue'
 import { BoardView, type BoardColumnData } from '../../../ui/index.ts'
+import type { FieldValue } from '../../../ui/blocks.ts'
 import { attributeOf, rowValues, titleOf } from '../format.ts'
 import type { BlockLoad } from '../useRootView.ts'
 import { newItemPresets } from './presets.ts'

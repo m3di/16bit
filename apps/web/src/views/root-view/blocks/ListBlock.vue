@@ -2,14 +2,7 @@
 import type { Block, Item } from '@16bit/core'
 import { computed } from 'vue'
 import { GroupedList, type ListRow } from '../../../ui/index.ts'
-import {
-  attributeOf,
-  groupPreset,
-  listFields,
-  listGroups,
-  rowValues,
-  titleOf,
-} from '../format.ts'
+import { attributeOf, groupPreset, listFields, listGroups, rowValues, titleOf } from '../format.ts'
 import type { BlockLoad } from '../useRootView.ts'
 import { newItemPresets } from './presets.ts'
 import { useBlock } from './use-block.ts'
@@ -68,7 +61,11 @@ const creatable = computed(
 function create(groupId: string) {
   const c = config.value
   if (!c) return
-  const group = groupPreset(groupId, c.groupBy ? b.data.value?.groups : undefined, groupAttribute.value)
+  const group = groupPreset(
+    groupId,
+    c.groupBy ? b.data.value?.groups : undefined,
+    groupAttribute.value,
+  )
   b.host.create(
     c.binding.folderId,
     newItemPresets(b.description(), c.binding.folderId, c.binding.where, b.host.me(), group),
