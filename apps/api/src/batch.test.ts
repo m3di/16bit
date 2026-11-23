@@ -1,4 +1,5 @@
 import {
+  createdAgentKeySchema,
   batchResponseSchema,
   type BatchOperation,
   type BatchResult,
@@ -333,6 +334,42 @@ describe('POST /items/batch', () => {
     expect(statuses(await batch('none', operations))).toEqual([404, 404, 404, 404])
     expect((await itemRows()).map((r) => r.id)).toEqual(['a'])
   })
+
+  it('lets an agent key write in its own hub, and finds nothing in another (D47)', async () => {
+    await batch('own', [
+      { op: 'create', id: 'other', folderId: 'h2', values: { t2: 'In h2' } },
+      { op: 'upsert', hubId: 'h2', key: 'k2', folderId: 'h2' },
+    ])
+    const made = await as('own', 'POST', '/hubs/h1/agent-keys', { name: 'Bot', hubRole: 'editor' })
+    expect(made.statusCode, made.body).toBe(201)
+    const { secret } = createdAgentKeySchema.parse(made.json())
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/workspaces/${WS}/items/batch`,
+      headers: { authorization: `Bearer ${secret}` },
+      payload: {
+        operations: [
+          { op: 'create', id: 'mine', folderId: 'f1', values: { t: 'Agent' } },
+          { op: 'create', folderId: 'h2', values: { t2: 'x' } },
+          { op: 'patch', id: 'other', version: 1, values: { t2: 'x' } },
+          { op: 'upsert', hubId: 'h2', key: 'k2', folderId: 'h2' },
+          { op: 'delete', id: 'other', version: 1 },
+          { op: 'upsert', hubId: 'h1', key: 'agent-key', folderId: 'f1', values: { t: 'A' } },
+        ],
+      },
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    const results = batchResponseSchema.parse(res.json()).results
+    // Its own hub succeeds; the other hub is hidden, so every operation there is 404.
+    expect(statuses(results)).toEqual([201, 404, 404, 404, 404, 201])
+    expect(itemOf(results[0]).updatedBy).not.toBe('own')
+    const other = await db
+      .selectFrom('item')
+      .select('version')
+      .where('id', '=', 'other')
+      .executeTakeFirst()
+    expect(other?.version).toBe(1)
+  })
 })
 
 describe('batch performance (D75)', () => {
@@ -344,9 +381,13 @@ describe('batch performance (D75)', () => {
     )
     let done = false
     const polls = Array.from({ length: 15 }, () => 0)
+    // Each reader's longest wait for one answer while the batch ran.
+    const longest = Array.from({ length: 15 }, () => 0)
     const readers = polls.map(async (_, r) => {
       while (!done) {
+        const asked = performance.now()
         const res = await as('vw', 'POST', '/query', { from: 'f1', limit: 50, order: 'number' })
+        longest[r] = Math.max(longest[r] ?? 0, performance.now() - asked)
         expect(res.statusCode).toBe(200)
         polls[r] = (polls[r] ?? 0) + 1
       }
@@ -359,11 +400,15 @@ describe('batch performance (D75)', () => {
 
     expect(results.every((r) => r.status === 201)).toBe(true)
     expect((await itemRows()).length).toBe(100)
-    // Every reader kept being answered while the batch ran.
-    expect(Math.min(...polls)).toBeGreaterThan(0)
+    // Every reader kept being answered while the batch ran: no read waits for the batch, since
+    // each operation commits on its own and reads never wait for writes. The bound is a small
+    // part of the batch's own time, with room for a slow runner.
+    const worst = Math.max(...longest)
     console.info(
-      `batch of 100 with 15 readers: ${elapsed.toFixed(0)} ms, polls per reader ${String(Math.min(...polls))}–${String(Math.max(...polls))}`,
+      `batch of 100 with 15 readers: ${elapsed.toFixed(0)} ms, polls per reader ${String(Math.min(...polls))}–${String(Math.max(...polls))}, longest wait ${worst.toFixed(0)} ms`,
     )
+    expect(Math.min(...polls)).toBeGreaterThan(0)
+    expect(worst).toBeLessThan(500)
     expect(elapsed).toBeLessThan(10_000)
   }, 60_000)
 })
