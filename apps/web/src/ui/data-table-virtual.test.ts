@@ -2,6 +2,7 @@
 import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { afterEach, describe, expect, it } from 'vitest'
 import { activeElement, findAll, fire, mount, setLayout, type FakeNode } from '../test/fake-dom.ts'
+import { yieldToMain } from '../api/yield.ts'
 import type { RowWindows } from './data-table.ts'
 import DataTable, { type TableColumn } from './DataTable.vue'
 
@@ -242,14 +243,32 @@ describe('DataTable virtual mode, scrolling', () => {
         })
     })
     const t = setup(50_000)
-    const scrollTo = async (top: number) => {
+    /** Scrolls the box, without waiting for the rows rendered in the task after (issue 307). */
+    const scrollOnly = async (top: number) => {
       const el = box(t.root)
       el.scrollTop = top
       fire(el, 'scroll')
       await nextTick()
     }
-    return { ...t, scrollTo }
+    const scrollTo = async (top: number) => {
+      await scrollOnly(top)
+      await yieldToMain()
+      await nextTick()
+    }
+    return { ...t, scrollOnly, scrollTo }
   }
+
+  it('renders the rows a scroll brings into view in a task of their own, and asks for their window at once', async () => {
+    const t = scrollable()
+    await nextTick()
+    await t.scrollOnly(300 * 38)
+    // The scroll's own task: the window is asked for, the old rows are still rendered.
+    expect(t.windows.at(-1)?.offsets).toEqual([200])
+    expect(t.rows()[0]?.props['data-index']).toBe(0)
+    await yieldToMain()
+    await nextTick()
+    expect(t.rows()[0]?.props['data-index']).toBe(297)
+  })
 
   it('asks for the new window when scrolling reaches it', async () => {
     const t = scrollable()
