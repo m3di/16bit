@@ -17,6 +17,8 @@ The initial plan for M5. Each new entry becomes a GitHub issue once the maintain
   - `/changes`.
 - Comments arrive in M6, not M5. So in M5 the hub can hold a task and its state, but not a discussion (Q6).
 
+**Changes after review (#317):** the SDK is v2, not v1 (Q3); the team hub gets its own stack and database, apart from the dev one (Q5); the backup dumps the whole team database (Q5); the Build hub has one Tasks folder with a Sprint relation, since items never move between folders and agents can't create folders or edit views (Q6, M5-03); per-role keys are hygiene, not a security boundary, and keys reach Claude Code through a `headersHelper` (Q7); `/mcp` refuses the trusted header and checks `Origin` and `Host` (Q3, Q4); named issues are held back for the exit run (Q8); dependencies fixed; the digest cites D83 and takes `tz` (Q2); answers are recorded as D86 onward (Q9). From the optional points: one rate-limit count per tool call (Q4); role servers declared in each agent file, not in `.mcp.json` (Q7); no `ALLOW_DEV_PASSWORD` on the team stack (Q5); wave 2 is ordered; GitHub issues are closed in one batch after a dry run (Q6).
+
 **Already decided for M5 (maintainer, 2026-11-28):**
 - From the M4 report:
   - #307, #276 and #301 move into M5, and #307 goes first (it is in progress).
@@ -37,28 +39,40 @@ Each question gives a proposal. **Decide** marks a choice the plan can't make al
 
 The contracts and migrations stay one gated PR. The trusted-header sign-in itself (#213) is gated again on its own.
 
-**Q2. The digest (D21, D69).** **Decide:** a digest is a folder's root view rendered as compact text for a model to read. It is the view data (D81) turned into Markdown, so an agent gets in one call what a person sees on the page.
-- **Route:** `GET /v1/workspaces/:w/folders/:folderId/view/digest`, keyed by folder like the view data route. The ARCHITECTURE row is amended to match.
-- **Response:** `{ seq, version, markdown, truncated }`. It goes through the same checks as view data: the 5 s deadline, the per-principal limit and row-level security.
+**Q2. The digest (D21, D69, D83).** **Decide:** a digest is a folder's root view rendered as compact text for a model to read. It is D83's view data turned into Markdown, so an agent gets in one call what a person sees on the page.
+- **Route:** `GET /v1/workspaces/:w/folders/:folderId/view/digest?version=&tz=`, keyed by folder like the view data route. The ARCHITECTURE row is amended to match.
+- **Same rules as view data (D83):**
+  - one snapshot and the 5 s deadline;
+  - the shared in-flight count of 4 per principal;
+  - 409 `stale` when `version` is given and the tree has moved;
+  - row-level security.
+- **Time zone:** `tz` as in D81, UTC when absent, and 422 for an unknown zone.
+- **Response:** `{ seq, version, markdown, truncated }`.
 - **Rendering, block by block:**
   - headings and section titles become Markdown headings;
   - a number block becomes "Points done: 16 of 34";
   - list and table rows become `- PT-12 Title · Stage: In QA · Points: 3`;
   - a board becomes one list per column;
   - a chart becomes a small table of its series;
+  - a block's error or invalid state becomes one line saying so;
   - "+N more" is kept, and a stale date gets ` (stale)` (D69).
 - **Size:** capped at 32 KiB. Past that, it cuts at a block boundary and sets `truncated`.
-- **Contract:** the digest shape goes into #205, so the gate batch stays one PR.
+- **Contract:** the digest shape goes into #205.
 
 **Q3. MCP transport and sign-in.** **Decide:**
-- **Transport:** the MCP server is part of the API process, at `POST /mcp`, over Streamable HTTP, stateless.
-  - The 2026-07-28 MCP revision makes the protocol core stateless, and the SDK has a stateless Streamable HTTP mode for API-style servers like this one.
-  - It is the official TypeScript SDK. The stable v1 line is pinned to its current release, because v2 is still in beta. The agent checks the version and its current documentation when adding it.
+- **Transport:** the MCP server is part of the API process, at `POST /mcp`, over Streamable HTTP, stateless (the 2026-07-28 revision).
+  - It uses the official TypeScript SDK v2, the current stable line: `@modelcontextprotocol/server` 2.4.0 and `@modelcontextprotocol/fastify` 2.0.1, checked on npm on 2026-11-28. v1 (`@modelcontextprotocol/sdk`) is the maintenance line and stops at the 2025-11-25 spec.
+  - Clients that still open with an `initialize` handshake, Claude Code among them, get the SDK's backward-compatible answer, and a test proves Claude Code's handshake connects.
   - There is no stdio server.
-- **Sign-in:** only agent keys, as `Authorization: Bearer`. A session cookie is refused with 401, since people use the UI. D49 still refuses both together.
-- **Limits:** the same rate limits and request limits as HTTP.
+- **Sign-in:** only agent keys, as `Authorization: Bearer`.
+  - A session cookie is refused with 401, since people use the UI. D49 still refuses both together.
+  - The trusted identity header (D72, #213) is never accepted on `/mcp`, whatever the proxy allowlist says.
+- **Origin and Host:** `/mcp` checks them as the MCP spec asks. A request with a browser `Origin` that isn't the app's own is refused, and `Host` must be one the server is configured for, against DNS rebinding.
+- **Limits:** the same request size limit as HTTP, and the rate limit counted once per tool call.
 
-**Q4. The tool set (D22).** **Decide:** one tool per route, not one generic `call` tool. Each tool runs its HTTP route in process (Fastify `inject`), so sign-in, `can()`, row-level security, limits and error bodies are exactly the HTTP ones. "Mirrored" then stays true by construction.
+**Q4. The tool set (D22).** **Decide:** one tool per route, not one generic `call` tool.
+- **How a tool runs:** through its HTTP route in process (Fastify `inject`), so `can()`, row-level security, limits and error bodies are exactly the HTTP ones. "Mirrored" then stays true by construction.
+- **The inner request** carries only headers the server builds: the caller's `Authorization`, the content type and an internal marker. No header from the outer request is copied. The marker stops a second rate-limit count, and it is accepted only from `inject`, never from the network.
 - **Wave 1 tools:** `describe_hub`, `get_items`, `get_item_by_key`, `query_items`, `aggregate`, `read_view`, `get_changes`, `create_item`, `patch_item`, `delete_item`, `upsert_item`, `batch_write`.
 - **Later in M5:** `digest`, `neighbours`, `search`, `claim_item`, `renew_claim`, `release_claim`.
 - **Inputs:**
@@ -66,29 +80,53 @@ The contracts and migrations stay one gated PR. The trusted-header sign-in itsel
   - no `workspaceId` or `hubId`, because an agent key belongs to exactly one hub (D28) and the server fills them in;
   - `clientMutationId` and `cause` are accepted on every write.
 - **Results:** the HTTP JSON as `structuredContent`, with the same text alongside. An error status is `isError: true` with the API's error body, so a 409 `conflict` or 412 `precondition_failed` reads the same as over HTTP.
-- **Contract:** the tool names and their input schemas are a core contract (`packages/core/src/mcp.ts`), so they join the #205 batch.
+- **Contract:** the tool names and input schemas are a core contract (`packages/core/src/mcp.ts`), so they join #205.
 
-**Q5. Where the team's hub lives.** **Decide:** the Build hub lives in the local Docker stack on :8080, in its Postgres volume, as the demo hubs do.
-- **Backup:** `pnpm build-hub:backup` writes a `pg_dump` of the `team` workspace to a gitignored `backups/`. The lead runs it at the end of every sprint pass, so losing the volume costs one pass at most.
-- **Running:** the stack must be running while a sprint runs. It is light while idle, and its containers keep the 2 CPU and 3 GB caps.
+**Q5. Where the team's hub lives.** **Decide:** a separate local stack just for the team, apart from the dev stack.
+- **Today's problem:** `pnpm dev` and the :8080 stack share one `db` service and volume, and `pnpm dev` runs migrations on start. An agent's worktree with an unmerged migration would migrate the team's working hub.
+- **The team stack:**
+  - its own compose project, `16bit-team`, with its own `team-db-data` volume;
+  - bound to 127.0.0.1 on :8090, with its database not published;
+  - built only from `origin/main`, by `pnpm team:up`;
+  - no `ALLOW_DEV_PASSWORD`: the maintainer signs in with a real password set by `pnpm account:reset-password`;
+  - its containers keep the 2 CPU and 3 GB caps, and it stays light while idle.
+- **Backup:** `pnpm team:backup` writes `pg_dump -Fc` of the whole team database to `backups/` (gitignored, since it holds key hashes and sessions).
+  - The lead runs it at the end of every sprint pass.
+  - `team:up` runs it before every rebuild, so a bad migration costs nothing that can't be restored.
+  - `pnpm team:restore <file>` restores it.
 - **Not chosen:** a hosted instance, which waits for deployment in M7.
 
 **Q6. What moves into the hub, and what stays on GitHub.** **Decide:**
-- **Into the hub:** each task and its state: title, role, stage, depends on, owner, reviewer, claim (Q7), the PR URL, and a "Needs maintainer" flag for gated work.
+- **The hub's shape** respects D4 (items never move between folders) and D47 and D78 (agents create no folders and edit no views):
+  - one **Tasks** folder, where every task stays for good;
+  - a **Sprints** folder, with one item per sprint and its dates;
+  - a views-only **Board** folder, whose root view finds the current sprint by a first-match rule (D79) and shows its tasks by stage, plus items needing the maintainer.
+- **Each task holds its state:** title, Sprint (a relation), role, stage, depends on (a relation), owner, reviewer, the claim (Q7), the PR URL, and a "Needs maintainer" flag for gated work.
 - **Questions:** a question to the maintainer is a write with a cause note (D63), and the lead brings it to the conversation as today.
 - **Stays on GitHub:** pull requests, CI, code review comments and QA verdicts. Without comments in M5, discussion stays on the PR.
 - **M6:** comments arrive, and the rest of the discussion moves into the hub.
-- **Existing issues:** the lead imports the open ones with `seed:build-hub`, keyed by issue number (D64). Each imported issue is then closed with a comment "Moved to the team's Build hub as BLD-n". The closing is reversible, and the issues stay public as a record.
+- **16bit never syncs with GitHub.** There is no bridge inside 16bit (D74). The lead imports with a seed script and nothing else.
+- **Existing issues:**
+  - The lead imports the open ones, keyed by issue number (D64), then shows the maintainer a dry-run list of what will be closed.
+  - After the maintainer's yes, they are closed in one batch with a comment "Moved to the team's Build hub as BLD-n". That can be undone, and the issues stay public as a record.
 - **Outside contributors:** new outside issues are still welcome (D38). The lead imports them, and the issue stays open until its PR merges.
-- **Labels and milestones:** `stage:*`, `role:*` and the milestone are no longer kept on GitHub after the switch. `needs-human` stays on PRs.
+- **Labels and milestones:** `stage:*`, `role:*` and milestones are no longer kept on GitHub after the switch. `needs-human` stays on PRs.
 
 **Q7. One identity per role.** **Decide:**
 - **Keys:** each role (lead, backend, frontend, design-system, infra, qa, reviewer) gets its own editor agent key on the Build hub, so the hub's history says who did what (D9). `pnpm build-hub:keys` creates or rotates them into gitignored `.env.build-hub`.
-- **Config:** the repository's `.mcp.json` declares one MCP server per role, such as `build-backend`, each with its key read from the environment. No key ever goes in git.
-- **Access:** each agent definition in `.claude/agents/` allows only its own server's tools, so a subagent can't write as another role.
+- **Config:** each agent file in `.claude/agents/` declares its own role's server inline (`mcpServers`, type `http`, `http://127.0.0.1:8090/mcp`). Its `headersHelper` is a small script that reads only that role's key from `.env.build-hub` and prints the `Authorization` header.
+  - Keys stay out of the process environment, and a rotated key is picked up on the next 401 without a restart.
+  - The lead's server is in the project `.mcp.json`. Declaring the role servers inline keeps the lead from loading every role's tools.
+  - Project servers need a one-time approval in Claude Code, which the maintainer gives.
+- **Not a security boundary:** this is hygiene. Every agent can run shell commands and could read `.env.build-hub`. The per-role keys make honest mistakes visible in the history and keep one agent from writing as another by accident. Against a misled agent, the protection is still D28: every key is limited to this one hub, as an editor.
 - **Claims:** a claim is D68 over two ordinary attributes, "Claimed by" (a person or agent) and "Claimed until" (a date, `freshFor` 2 hours). It is the sprint's guard against two agents taking one task.
 
-**Q8. The exit run.** **Decide:** the exit run is the last wave of M5 itself. Once the MCP server, the Build hub and the workflow switch have landed (end of wave 2), the remaining M5 issues are worked only through the hub. Agents claim, update and finish their tasks with MCP tools, and the lead runs `/standup` and `/sprint` from the hub. The M5 report shows the hub history of that run. QA's e2e (M5-05) checks the same loop against a test hub in CI.
+**Q8. The exit run.** **Decide:** a real sprint run from the hub, with work held back for it.
+- **The held-back issues:** #206 (neighbours), #209 (the stale flag UI), #212 (template settings UI), #276 and #301. They are not started before the switch, so the exit run has real backend, frontend and design-system work in it.
+- **How it runs:** after M5-04, these are worked only through the hub. Agents claim, update and finish their tasks with MCP tools, and the lead runs `/standup` and `/sprint` from the hub's Board digest.
+- **The record:** the M5 report shows that sprint's hub history. QA's e2e (M5-05) checks the same loop against a test hub in CI.
+
+**Q9. Recording the answers.** Q2 to Q8 are recorded in `docs/DECISIONS.md` as D86 onward. Q1 amends the detail of D67 and D69 to D72, as #199 did for D64 to D66.
 
 ## Issues
 
@@ -97,79 +135,96 @@ The contracts and migrations stay one gated PR. The trusted-header sign-in itsel
 ## #205 M5 contracts and migrations (already filed, extended)
 - **Role:** backend · **Gate:** needs-human
 - **Adds to the existing acceptance:**
-  - the digest response (Q2);
+  - the digest response and query (Q2);
   - `packages/core/src/mcp.ts`, with the tool names and input schemas (Q4);
   - ARCHITECTURE: the digest route, the `/mcp` endpoint and the search row (M5, D70).
+- D86 onward are recorded in the same PR.
 
 ### Backend
 
 ## M5-01 MCP server and the wave 1 tools
 - **Role:** backend · **Depends on:** #205
 - **Acceptance:**
-  - `POST /mcp` as Q3 says, with the official TypeScript SDK pinned.
-  - The 12 wave 1 tools in Q4, each run through its route by `inject`.
-  - Agent keys only; a cookie is refused; D49 holds.
+  - `POST /mcp` as Q3 says, with SDK v2 pinned.
+  - The 12 wave 1 tools in Q4, each run through its route by `inject`, with only server-built headers.
+  - Agent keys only:
+    - a cookie is refused;
+    - D49 holds;
+    - the trusted header is refused even from an allowlisted address;
+    - `Origin` and `Host` are checked.
   - Tests through the SDK's own client:
     - list the tools;
     - each tool's success and its main error statuses (404 hidden, 409, 412, 422);
     - a write's `clientMutationId` replays;
-    - a viewer key refused on writes.
+    - a viewer key refused on writes;
+    - one rate-limit count per call;
+    - an `initialize` handshake as Claude Code sends it.
   - The README says how to point an MCP client at a local stack.
   - ARCHITECTURE describes the server.
 
+## #208 Freshness: `is_stale` filter (filed) · **Depends on:** #205
+The digest marker moves to M5-02, so #208 no longer depends on the digest. The issue body is corrected.
+
 ## M5-02 Digest read and tool
-- **Role:** backend · **Depends on:** #205, M5-01
+- **Role:** backend · **Depends on:** #205, M5-01, #208
 - **Acceptance:**
   - The route and rendering in Q2, from the view data code path, so it can't disagree with the page.
   - The `digest` tool.
   - Tests:
-    - each block type renders;
+    - each block type renders, including error and invalid states;
     - "+N more" and ` (stale)` are kept;
     - the 32 KiB cut at a block boundary;
+    - `tz`, 422 and 409 `stale`;
+    - the in-flight count shared with view data;
     - a hidden folder gives 404;
     - one golden digest of the seeded Parcel Tracker home.
 
-## #206 Neighbours read and MCP tool (filed) · **Depends on:** #205, M5-01
 ## #207 Claim, renew and release MCP tools (filed) · **Depends on:** #205, M5-01
-## #208 Freshness: `is_stale` filter and digest marker (filed) · **Depends on:** #205. The digest part lands with M5-02.
 ## #210 Basic search over titles and text (filed) · **Depends on:** #205. Adds the `search` tool once M5-01 is in.
 ## #211 Hub template export and import: API (filed) · **Depends on:** #205
-## #213 Trusted-header sign-in (filed) · **Depends on:** #205 · **Gate:** needs-human, again on its own
+## #213 Trusted-header sign-in (filed) · **Depends on:** #205 · **Gate:** needs-human, again on its own. Acceptance adds: never on `/mcp`.
+## #206 Neighbours read and MCP tool (filed) · **Depends on:** #205, M5-01 · held for the exit run (Q8)
 
 ### Infra and lead
 
-## M5-03 The team's Build hub
-- **Role:** infra, with backend for the seed · **Depends on:** M5-01, #207
+## M5-03 The team stack and the Build hub
+- **Role:** infra, with backend for the seed · **Depends on:** #205, M5-01, #207, #208
 - **Acceptance:**
-  - `seed:build-hub` is reworked into the team's working hub:
-    - folders Backlog and Sprints, plus a views-only Board;
-    - the attributes in Q6 and Q7;
-    - each issue's number as its external key, so a re-run upserts instead of duplicating.
-  - A root view "Board": this sprint by stage, and items needing the maintainer.
-  - `pnpm build-hub:keys` and `pnpm build-hub:backup` (Q5, Q7).
-  - `.mcp.json` with one server per role, and `.env.build-hub.example`.
+  - The team stack in Q5: `pnpm team:up`, `team:backup` and `team:restore`.
+  - `seed:build-hub` reworked into the team's working hub:
+    - the shape in Q6, plus the Q7 claim attributes;
+    - each issue's number as its external key, so a re-run upserts instead of duplicating;
+    - a dry-run mode that lists what it would create and change.
+  - The "Board" root view.
+  - `pnpm build-hub:keys` and the `headersHelper` script (Q7).
+  - `.gitignore` re-includes `.env.build-hub.example` and ignores `backups/`.
   - CLAUDE.md commands updated.
-  - Tests: the seed is idempotent; keys rotate and the old key stops working; the backup restores into a fresh database.
+  - Tests:
+    - the seed is idempotent;
+    - keys rotate, and the old key stops working;
+    - a backup restores into a fresh database;
+    - the team stack and the dev stack share no volume.
 
 ## M5-04 Switch the team's workflow to the hub
 - **Role:** lead · **Depends on:** M5-03, M5-02
 - **Acceptance:**
   - `docs/WORKFLOW.md`, `CLAUDE.md`, `/standup` and `/sprint` read the board from the hub through MCP. The digest of "Board" is the standup.
   - Claims, stage moves and handoffs are writes with a cause.
-  - Each agent definition in `.claude/agents/` allows only its own role's MCP server (Q7).
-  - The open GitHub issues are imported and then closed as Q6 says, only after the maintainer's yes on that step.
+  - Each agent file declares its own role's server (Q7).
+  - The open GitHub issues are imported, then closed in one batch after the maintainer's yes on the dry-run list (Q6).
   - Reviewed like any PR.
 
 ### Frontend
 
-## #209 Freshness: stale flag in the table and on the item page (filed) · **Depends on:** #208
-## #212 Hub template export and import: settings UI (filed) · **Depends on:** #211
-## #307, #276 (carried over) · #307 is in progress and goes first
+## #307 (carried over) · in progress, first
+## #209 Freshness: stale flag in the table and on the item page (filed) · **Depends on:** #208 · held for the exit run (Q8)
+## #212 Hub template export and import: settings UI (filed) · **Depends on:** #211 · held for the exit run (Q8)
+## #276 (carried over) · held for the exit run (Q8)
 
 ### Design system
 
-## #301 PageHeader heading level (carried over)
-## #315 Plus icon on "New item" (in progress)
+## #301 PageHeader heading level (carried over) · held for the exit run (Q8)
+## #315 Plus icon on "New item" · done (#316)
 
 ### QA and lead
 
@@ -190,10 +245,14 @@ The contracts and migrations stay one gated PR. The trusted-header sign-in itsel
 ## Sequence (3 agents at a time)
 
 - **Wave 0:**
-  - This plan is reviewed, and the maintainer answers Q1 to Q8.
+  - This plan is reviewed, and the maintainer answers Q1 to Q9.
   - #205 is extended, built, and merged after the maintainer's yes.
-  - Already running: #307 and #315.
-- **Wave 1:** M5-01, #208, #210, #211 (backend, at most 3 at once), with #276 and #301 alongside.
-- **Wave 2:** M5-02, #206, #207, #209, #212, M5-03, and #213 once its own gate is passed.
-- **Wave 3:** M5-04 switches the team to the hub. Everything left in M5 runs through the hub (the exit run, Q8), with M5-05 as its CI check.
+  - Already running: #307.
+- **Wave 1 (backend, 3 at once):** M5-01, #208 and #210. Then #211 when one of them finishes.
+- **Wave 2, in this order:**
+  1. #207 and M5-02, which need M5-01 and #208;
+  2. #213, once its own gate is passed;
+  3. M5-03, after #207;
+  4. M5-05, after #207 and M5-02.
+- **Wave 3:** M5-04 switches the team to the hub. The exit run follows: #206, #209, #212, #276 and #301 are worked only through the hub (Q8).
 - **Wave 4:** the M5 report, then stop for the maintainer.
