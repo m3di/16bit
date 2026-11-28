@@ -6,9 +6,11 @@ import {
   onBeforeUpdate,
   onUpdated,
   ref,
+  shallowRef,
   watch,
   type ComponentPublicInstance,
 } from 'vue'
+import { yieldToMain } from '../api/yield.ts'
 import {
   DEFAULT_WINDOW_SIZE,
   VIRTUAL_HEADER_HEIGHT,
@@ -178,7 +180,39 @@ const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>(
     }
   }),
 )
-const items = computed(() => (virtual.value ? virtualizer.value.getVirtualItems() : []))
+/** The rows the virtualizer has in its range now, the kept active row, and the scroll offset. */
+const live = computed(() => ({
+  items: virtual.value ? virtualizer.value.getVirtualItems() : [],
+  // Set by `keepActive` while the items above were worked out.
+  kept,
+  offset: virtualizer.value.scrollOffset,
+}))
+/**
+ * The rows rendered. After a scroll, they follow `live` in a task of their own: a scroll
+ * event runs in the browser's frame task, before its style, layout and paint, so rendering the
+ * new rows there made one task of both, about 30 ms on a CI runner and over D61's 50 ms on a
+ * slow one (issue 307). Apart, each half stays well under it; the new rows show one frame later.
+ * Anything else (the first render, a new row count, rows moving under the active one) renders
+ * at once.
+ */
+const shown = shallowRef(live.value)
+let showing = false
+watch(
+  () => live.value,
+  (next) => {
+    if (!virtualizer.value.isScrolling || next.offset === shown.value.offset) {
+      shown.value = next
+      return
+    }
+    if (showing) return
+    showing = true
+    void yieldToMain().then(() => {
+      showing = false
+      shown.value = live.value
+    })
+  },
+)
+const items = computed(() => shown.value.items)
 const rowOf = (index: number): Row | undefined => rowAt?.(index)
 
 /** In `virtual` mode, the rows in view, loaded or not. */
@@ -215,10 +249,12 @@ const segments = computed(() => {
 
 // Ask for the windows in view whenever they change, starting with the first render. A kept
 // active row out of view is left out: its window was loaded when it was selected.
+// Read from `live`, not the rows rendered, so the reads start without waiting for the render.
 let lastWindows: RowWindows | null = null
 watch(
   () => {
-    const inView = items.value.filter((item) => item.index !== kept)
+    const { items: now, kept: keptNow } = live.value
+    const inView = now.filter((item) => item.index !== keptNow)
     const first = inView[0]
     const last = inView[inView.length - 1]
     if (!first || !last) return null
@@ -462,12 +498,14 @@ defineExpose({
             >
               <slot v-if="segment.row" name="cell" :row="segment.row" :column="column" />
               <!-- A row not loaded yet: a quiet bar per cell, and one word for screen readers.
-                   Not a live region; the block that loads announces it. -->
+                   Not a live region; the block that loads announces it. The bar does not pulse:
+                   a scrollbar drag puts a few hundred of them in view at once, and starting
+                   that many animations made scroll frames run long (issue 307). -->
               <template v-else>
                 <span v-if="c === 0" class="sr-only">Loading</span>
                 <span
                   aria-hidden="true"
-                  class="inline-block h-2.5 w-3/5 max-w-24 animate-pulse rounded-chip bg-empty align-middle motion-reduce:animate-none"
+                  class="inline-block h-2.5 w-3/5 max-w-24 rounded-chip bg-empty align-middle"
                 />
               </template>
             </component>

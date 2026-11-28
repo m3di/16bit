@@ -57,7 +57,7 @@ for (const file of process.argv.slice(2).flatMap((d) => find(d))) {
   const q = (f: number) => (all[Math.floor(f * (all.length - 1))] ?? 0).toFixed(1)
   const variant = /repeat(\d+)/.exec(file)?.[1]
   console.log(
-    `STATS ${Number(variant ?? 0) % 2 === 1 ? 'B-no-pulse' : 'A-baseline'} tasks>8ms ${String(all.length)} p50 ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} max ${q(1)} over30 ${String(all.filter((d) => d > 30).length)} over40 ${String(all.filter((d) => d > 40).length)}`,
+    `STATS fix-${variant ?? '0'} tasks>8ms ${String(all.length)} p50 ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} max ${q(1)} over30 ${String(all.filter((d) => d > 30).length)} over40 ${String(all.filter((d) => d > 40).length)}`,
   )
   console.log(`== ${file}: ${String(tasks.length)} main-thread tasks over 30 ms`)
   const t0 = onMain.reduce((m, e) => Math.min(m, e.ts), Infinity)
