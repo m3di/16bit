@@ -3,6 +3,7 @@ import { pageSchema } from './api.ts'
 import { inviteSchema } from './auth.ts'
 import {
   attributeTypes,
+  freshForSchema,
   selectConfigSchema,
   selectOptionSchema,
   type SelectConfig,
@@ -153,9 +154,13 @@ export const createAttributeSchema = z.discriminatedUnion(
 export type CreateAttribute = z.input<typeof createAttributeSchema>
 
 /**
- * `PATCH /attributes/:attributeId`: only the name and, for select and multi-select, the
- * options (D51). Nothing else is accepted: a `type` or `config` key is a 400. To change a type
- * or a relation's target, add a new attribute.
+ * `PATCH /attributes/:attributeId`: only the name, for select and multi-select the options,
+ * and for a date its `freshFor` (D51, D69). Nothing else is accepted: a `type` or `config` key
+ * is a 400. To change a type or a relation's target, add a new attribute.
+ *
+ * `freshFor` sets a date attribute's freshness, `null` clears it (#205). No value changes, so
+ * it strips nothing and needs no `confirm`; a stored view filtering `is_stale` on it answers
+ * `invalid` for that block once it is cleared (D79).
  *
  * `options` replaces the whole list (`applyAttributeUpdate`). Options may be relabelled,
  * recoloured, reordered, added or removed. If removing options would change items that hold
@@ -168,10 +173,11 @@ export const updateAttributeSchema = z
     version: attributeVersionSchema,
     name: schemaNameSchema.optional(),
     options: selectConfigSchema.shape.options.optional(),
+    freshFor: freshForSchema.nullable().optional(),
     confirm: z.int().min(0).optional(),
   })
-  .refine(atLeastOneChange(['name', 'options']), {
-    message: 'At least one of name or options is required',
+  .refine(atLeastOneChange(['name', 'options', 'freshFor']), {
+    message: 'At least one of name, options or freshFor is required',
   })
 export type UpdateAttribute = z.infer<typeof updateAttributeSchema>
 
@@ -221,7 +227,8 @@ export type ApplyAttributeUpdateResult =
 /**
  * Applies a checked `updateAttributeSchema` body to an attribute, for the server before the
  * write and for a client to know which options a change removes. Refuses `options` on a type
- * without them, and invalid options (same rules as the type's config).
+ * without them, invalid options (same rules as the type's config), and `freshFor` on anything
+ * but a date.
  */
 export function applyAttributeUpdate(
   attribute: Attribute,
@@ -244,6 +251,15 @@ export function applyAttributeUpdate(
     const config: SelectConfig = parsed.data
     const kept = new Set(config.options.map((o) => o.id))
     removedOptionIds = next.config.options.map((o) => o.id).filter((id) => !kept.has(id))
+    next = { ...next, config }
+  }
+  if (update.freshFor !== undefined) {
+    if (next.type !== 'date') {
+      return { ok: false, message: `A ${next.type} attribute has no freshFor` }
+    }
+    const config = { ...next.config }
+    if (update.freshFor === null) delete config.freshFor
+    else config.freshFor = update.freshFor
     next = { ...next, config }
   }
   return { ok: true, attribute: next, removedOptionIds }

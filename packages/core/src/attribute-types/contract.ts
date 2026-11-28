@@ -45,6 +45,11 @@ export const FILTER_OPERATORS = [
   'not_in',
   'is_empty',
   'is_not_empty',
+  /**
+   * Date attributes with a `freshFor` only (D69): no value; true when the value is empty or
+   * older than the server clock minus `freshFor`.
+   */
+  'is_stale',
 ] as const
 export type FilterOperator = (typeof FILTER_OPERATORS)[number]
 

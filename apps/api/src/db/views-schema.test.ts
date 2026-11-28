@@ -152,7 +152,11 @@ describe('0016_views up, down and up again', () => {
     const grant0009 = await folderUpdateGrant()
     await editorStillGuarded()
 
-    expect(await migrateToLatest(db)).toEqual(['0016_views', '0017_item_index_hub'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0016_views',
+      '0017_item_index_hub',
+      '0018_external_login',
+    ])
     expect(await guard()).not.toEqual(guard0009)
     expect(await folderUpdateGrant()).toEqual([...grant0009, 'opens_on_folder_id'].sort())
     const folders = await db
@@ -184,7 +188,11 @@ describe('0016_views up, down and up again', () => {
               VALUES ('w1', 'i2', 'h1', 'home', 2, '{}', 'own')`.execute(db)
     await sql`DELETE FROM item WHERE id = 'i2'`.execute(db)
 
-    expect(await migrateToLatest(db)).toEqual(['0016_views', '0017_item_index_hub'])
+    expect(await migrateToLatest(db)).toEqual([
+      '0016_views',
+      '0017_item_index_hub',
+      '0018_external_login',
+    ])
     expect(await guard()).not.toEqual(guard0009)
     await editorStillGuarded()
     expect(await code('ed', (trx) => setOpensOn('h1', 'f1').execute(trx))).toBe(DENIED)

@@ -1,5 +1,5 @@
 import {
-  attributeTypes,
+  filterOperatorsOf,
   type Attribute,
   type Filter,
   type FilterCondition,
@@ -43,8 +43,9 @@ export function build(list: ConditionList, required: boolean): Filter | undefine
   return list.mode === 'and' ? { and: list.rows } : { or: list.rows }
 }
 
+// `is_stale` only on a date attribute with `freshFor` (D69).
 export const operatorsFor = (attribute: Attribute | undefined): readonly FilterOperator[] =>
-  attribute ? attributeTypes[attribute.type].filterOperators : []
+  attribute ? filterOperatorsOf(attribute) : []
 
 /** A value to pick from a list: an option, "Me", a block, a person. */
 export interface ValueChoice {
