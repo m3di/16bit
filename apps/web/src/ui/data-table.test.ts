@@ -279,6 +279,14 @@ describe('DataTable virtual mode', () => {
     expect(header(html, 'Points')).toContain('<button type="button"')
     expect(html).toMatch(/<table[^>]*aria-busy="true"/)
   })
+
+  it('contains vertical scrolling only, so a sideways swipe still goes back (issue 310)', async () => {
+    const box = /<div class="(relative min-w-0 overflow-auto[^"]*)"/.exec(
+      await renderVirtual(),
+    )?.[1]
+    expect(box?.split(' ')).toContain('overscroll-y-contain')
+    expect(box).not.toMatch(/(^| )overscroll-(contain|none|x-)/)
+  })
 })
 
 describe('windowOffsets', () => {

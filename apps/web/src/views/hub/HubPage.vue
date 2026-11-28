@@ -424,7 +424,7 @@ async function submitCreate(values: ItemValues) {
 </script>
 
 <template>
-  <AppShell>
+  <AppShell panes>
     <template #actions>
       <!-- Hub admins, owners and admins manage the hub in its settings. -->
       <RouterLink
@@ -466,8 +466,11 @@ async function submitCreate(values: ItemValues) {
       />
     </template>
 
-    <div class="flex flex-1 flex-wrap items-stretch">
-      <main class="box-border flex min-w-0 flex-[999_1_420px] flex-col gap-6 px-4 py-6 sm:px-7">
+    <div class="flex flex-1 items-stretch md:min-h-0">
+      <main
+        class="box-border flex min-w-0 flex-[999_1_420px] flex-col gap-6 px-4 py-6 sm:px-7 md:min-h-0 md:overflow-y-auto"
+        data-main-pane
+      >
         <HubState
           :workspace-id="workspaceId"
           :hub-id="hubId"

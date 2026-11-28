@@ -105,9 +105,12 @@ watch(
   },
 )
 
-// The items area reaches down to the bottom of the viewport, whatever is above it (issue 232),
-// and the table scrolls inside it. Until it is measured, a fixed guess keeps the virtual table's
-// box bounded: a box as tall as its rows would render every row.
+// The items area fills the rest of the main pane, and the table is the only thing that scrolls
+// there (D85). From `md` up the pane has the viewport's height, so the area is a flex item that
+// takes what is left (never under 320px). Below `md` the page scrolls as one, so the area is
+// measured down to the bottom of the viewport, whatever is above it (issue 232). Until it is
+// measured, a fixed guess keeps the virtual table's box bounded: a box as tall as its rows would
+// render every row.
 const MIN_HEIGHT = 320
 const area = ref<HTMLElement | null>(null)
 const measured = useFillHeight(area, MIN_HEIGHT)
@@ -134,8 +137,8 @@ const failedRanges = computed(() => {
 <template>
   <div
     ref="area"
-    class="flex min-w-0 shrink-0 flex-col"
-    :style="{ height: areaHeight }"
+    class="flex h-(--items-area-height) min-w-0 shrink-0 flex-col md:h-auto md:min-h-80 md:flex-1 md:shrink"
+    :style="{ '--items-area-height': areaHeight }"
     data-items-area
   >
     <StateBlock v-if="list.state === 'loading'" state="loading" title="Loading items" :rows="6" />

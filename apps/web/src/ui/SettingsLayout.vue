@@ -60,9 +60,12 @@ const blocked = (s: typeof state) => s === 'not-found' || s === 'no-permission'
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col bg-bg text-ink">
+  <!-- From `md` up the top bar stays put and the content scrolls under it, as in AppShell (D85).
+       The section navigation is short, so it stays in place at the top of that scroll. -->
+  <div class="flex min-h-dvh flex-col bg-bg text-ink md:h-dvh md:overflow-hidden" data-app-shell>
     <header
-      class="flex min-h-12 flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2 sm:px-7"
+      class="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2 sm:px-7"
+      data-top-bar
     >
       <div class="flex min-w-0 flex-wrap items-center gap-2">
         <RouterLink to="/" class="flex items-center gap-2 text-ink no-underline">
@@ -82,48 +85,54 @@ const blocked = (s: typeof state) => s === 'not-found' || s === 'no-permission'
     </header>
 
     <!-- Section navigation beside the content; at phone width it stacks above it. -->
-    <div
-      class="mx-auto box-border flex w-full max-w-[1280px] flex-wrap items-start gap-10 px-4 py-7 sm:px-7"
-    >
-      <nav
-        v-if="!blocked(state)"
-        :aria-label="navLabel"
-        class="flex w-full flex-col gap-px md:w-[180px] md:shrink-0"
+    <div class="flex min-w-0 flex-1 flex-col md:min-h-0 md:overflow-y-auto" data-content-pane>
+      <div
+        class="mx-auto box-border flex w-full max-w-[1280px] flex-wrap items-start gap-10 px-4 py-7 sm:px-7"
       >
-        <RouterLink
-          v-for="s in sections"
-          :key="s.key"
-          :to="s.to"
-          :aria-current="s.key === current ? 'page' : undefined"
-          :class="[
-            'flex min-h-8 items-center rounded-control px-2.5 no-underline',
-            s.key === current ? 'bg-selected font-medium' : 'hover:bg-surface',
-            s.danger ? 'text-danger' : s.key === current ? 'text-ink' : 'text-ink2 hover:text-ink',
-          ]"
-          >{{ s.label }}</RouterLink
+        <nav
+          v-if="!blocked(state)"
+          :aria-label="navLabel"
+          class="flex w-full flex-col gap-px md:sticky md:top-7 md:w-[180px] md:shrink-0"
         >
-      </nav>
+          <RouterLink
+            v-for="s in sections"
+            :key="s.key"
+            :to="s.to"
+            :aria-current="s.key === current ? 'page' : undefined"
+            :class="[
+              'flex min-h-8 items-center rounded-control px-2.5 no-underline',
+              s.key === current ? 'bg-selected font-medium' : 'hover:bg-surface',
+              s.danger
+                ? 'text-danger'
+                : s.key === current
+                  ? 'text-ink'
+                  : 'text-ink2 hover:text-ink',
+            ]"
+            >{{ s.label }}</RouterLink
+          >
+        </nav>
 
-      <main class="flex min-w-0 flex-[1_1_560px] flex-col gap-8">
-        <div class="flex flex-wrap items-end justify-between gap-3">
-          <div class="flex min-w-0 flex-col gap-1">
-            <div class="flex items-center gap-2.5">
-              <slot name="leading" />
-              <h1 class="m-0 font-display text-page-title font-medium tracking-[-0.01em]">
-                {{ title }}
-              </h1>
+        <main class="flex min-w-0 flex-[1_1_560px] flex-col gap-8">
+          <div class="flex flex-wrap items-end justify-between gap-3">
+            <div class="flex min-w-0 flex-col gap-1">
+              <div class="flex items-center gap-2.5">
+                <slot name="leading" />
+                <h1 class="m-0 font-display text-page-title font-medium tracking-[-0.01em]">
+                  {{ title }}
+                </h1>
+              </div>
+              <p v-if="description" class="m-0 text-ink2">{{ description }}</p>
             </div>
-            <p v-if="description" class="m-0 text-ink2">{{ description }}</p>
+            <div v-if="$slots.actions && state === 'ready'" class="flex items-center gap-2">
+              <slot name="actions" />
+            </div>
           </div>
-          <div v-if="$slots.actions && state === 'ready'" class="flex items-center gap-2">
-            <slot name="actions" />
-          </div>
-        </div>
-        <slot v-if="state === 'ready'" />
-        <StateBlock v-else :state="state" :title="stateTitle" :message="stateMessage" :rows="6">
-          <template v-if="$slots['state-action']" #action><slot name="state-action" /></template>
-        </StateBlock>
-      </main>
+          <slot v-if="state === 'ready'" />
+          <StateBlock v-else :state="state" :title="stateTitle" :message="stateMessage" :rows="6">
+            <template v-if="$slots['state-action']" #action><slot name="state-action" /></template>
+          </StateBlock>
+        </main>
+      </div>
     </div>
   </div>
 </template>

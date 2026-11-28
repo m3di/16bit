@@ -361,14 +361,21 @@ describe('DataTable and ItemPanel', () => {
     expect(html).toContain('Body')
   })
 
-  it('holds its content in a box that scrolls on its own at desktop width', async () => {
+  it('is a pane from lg up and a full-screen sheet below it, scrolling on its own (D85)', async () => {
     const html = await render(ItemPanel, { title: 'BLD-4' }, () => 'Body')
     // One root, so a screen's class reaches the aside.
     expect(html).toMatch(/^<aside[^>]*>[\s\S]*<\/aside>$/)
-    expect(html).toMatch(/<aside[^>]*lg:\[contain:size\]/)
-    expect(html).toMatch(
-      /<div[^>]*lg:sticky[^>]*lg:overflow-y-auto[^>]*data-item-panel-scroll[^>]*>[\s\S]*BLD-4[\s\S]*Body/,
+    const aside = /^<aside[^>]*? class="([^"]*)"/.exec(html)?.[1]?.split(' ') ?? []
+    expect(aside).toEqual(
+      expect.arrayContaining(['lg:[contain:size]', 'max-lg:fixed', 'max-lg:inset-0', 'bg-bg']),
     )
+    const scroll = /<div class="([^"]*)" data-item-panel-scroll/.exec(html)?.[1]?.split(' ') ?? []
+    expect(scroll).toEqual(
+      expect.arrayContaining(['min-h-0', 'flex-1', 'overflow-y-auto', 'overscroll-y-contain']),
+    )
+    expect(html).toMatch(/data-item-panel-scroll[^>]*>[\s\S]*BLD-4[\s\S]*Body/)
+    // Without a browser there is no viewport to read: it renders as the pane.
+    expect(html).not.toContain('data-sheet')
   })
 })
 

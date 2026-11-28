@@ -84,20 +84,27 @@ test('the table keeps reaching the bottom with the item panel open', async ({ pa
   await expectFillsViewport(page)
 })
 
-test('at phone width with the item panel open, the table still reaches the bottom and the panel follows it', async ({
+test('at phone width the item panel opens as a full-screen sheet over the table (D85)', async ({
   page,
 }) => {
   await page.setViewportSize(PHONE)
   await open(page, BUGS, 'Bugs')
-  await page.locator('[data-item-link]').first().click()
+  const link = page.locator('[data-item-link]').first()
+  await link.click()
   const panel = page.locator('[data-item-panel]')
   await expect(panel).toBeVisible()
-  // Measured in page coordinates: opening the panel scrolls the page down to it.
+  await expect(panel).toHaveAttribute('data-sheet', '')
+  expect(await panel.boundingBox()).toEqual({ x: 0, y: 0, ...PHONE })
+  await expect(panel.locator('h2')).toBeFocused()
+  // What the sheet covers is inert; the table under it still fills the viewport.
+  expect(
+    await page.locator('[data-main-pane]').evaluate((el) => el.closest('[inert]') !== null),
+  ).toBe(true)
   await expectFillsViewport(page)
-  const panelTop = await panel.evaluate((el) => el.getBoundingClientRect().top + window.scrollY)
-  const { box } = await layout(page)
-  // The panel stacks under the items area, after main's bottom padding.
-  expect(panelTop).toBeGreaterThanOrEqual((box ?? Infinity) + PAGE_PADDING - 1)
+  // Closing it hands focus back to the link that opened it.
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveCount(0)
+  await expect(link).toBeFocused()
 })
 
 test('the table follows the window when it is resized', async ({ page }) => {
@@ -182,13 +189,21 @@ test('at desktop width, tabbing to a lower field scrolls the panel, not the page
   expect(focused).toEqual({ inPanel: true, inView: true })
 })
 
-test('at phone width, a long item still stacks under the table and the page scrolls to it', async ({
+test('at phone width, a long item scrolls inside its sheet and the page does not move', async ({
   page,
 }) => {
   await page.setViewportSize(PHONE)
   await openLongItem(page)
   await expectFillsViewport(page)
-  // No scroll box of its own: the panel is as tall as its content.
-  expect((await panelLayout(page)).panelScrolls).toBe(false)
-  expect((await layout(page)).page).toBeGreaterThan(PHONE.height)
+  const l = await panelLayout(page)
+  expect(l.panelScrolls).toBe(true)
+  expect(l.panelBottom).toBeLessThanOrEqual(PHONE.height)
+  await page.locator('[data-item-panel] h2').hover()
+  await page.mouse.wheel(0, 2000)
+  await expect.poll(async () => (await panelLayout(page)).panelScrollTop).toBeGreaterThan(0)
+  expect((await panelLayout(page)).pageScroll).toBe(0)
+  // The title row with Close stays at the top of the sheet's scroll.
+  const close = page.getByRole('button', { name: 'Close panel' })
+  expect((await close.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(0)
+  expect((await close.boundingBox())?.y ?? Infinity).toBeLessThan(80)
 })
