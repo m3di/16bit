@@ -18,10 +18,12 @@ export interface AccountTable {
   id: string
   /** Trimmed and lowercased. */
   email: string
-  /** argon2id PHC string. */
-  password_hash: string
+  /** argon2id PHC string. Null only for an account that signs in by external login (0018). */
+  password_hash: string | null
   name: string
   created_at: Timestamp
+  /** The login name a trusted gateway sends (D72), unique, compared exactly; or null. */
+  external_login: string | null
 }
 
 export interface SessionTable {
@@ -61,6 +63,8 @@ export interface InviteTable {
   created_at: Timestamp
   expires_at: Timestamp
   used_at: Timestamp | null
+  /** The external login the invite is bound to (D72, 0018), or null for a password invite. */
+  external_login: string | null
 }
 
 /** One key per agent principal; its hub and role are its single hub_grant (D47). */

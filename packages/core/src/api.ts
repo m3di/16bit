@@ -659,12 +659,25 @@ export const API_ERROR_CODES = [
   'has_view',
   /** Creating an item in, or moving one into, a views-only folder (422, D76). */
   'views_only',
-  /** View data asked with a tree `version` the stored view has moved past (409, D83). */
+  /**
+   * View data or a digest asked with a tree `version` the stored view has moved past (409, D83,
+   * D86). Adds `version`, the tree's version now (`staleErrorSchema`).
+   */
   'stale',
   /** A `tz` Postgres does not know (422, D81). */
   'invalid_time_zone',
   /** An aggregate past its statement timeout (503, D80). */
   'timeout',
+  /**
+   * A hub template import whose template fails `checkHubTemplate`, an unknown `version`
+   * included (422, D71). Adds `errors: [{ path, message }]`.
+   */
+  'invalid_template',
+  /**
+   * Accepting an external-login invite whose login another account already has (409, D72,
+   * #213).
+   */
+  'login_taken',
   'internal',
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
@@ -688,3 +701,11 @@ export const preconditionFailedErrorSchema = z.strictObject({
   current: itemSchema.nullable(),
 })
 export type PreconditionFailedError = z.infer<typeof preconditionFailedErrorSchema>
+
+/** 409 `stale` from view data and the digest (D83, D86): reload the view at `version`. */
+export const staleErrorSchema = z.strictObject({
+  error: z.literal('stale'),
+  message: z.string(),
+  version: z.int().min(0),
+})
+export type StaleError = z.infer<typeof staleErrorSchema>

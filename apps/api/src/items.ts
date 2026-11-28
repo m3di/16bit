@@ -1018,6 +1018,9 @@ export function leafPredicate(condition: CompiledCondition): {
       return no(sql`TRUE`)
     case 'is_not_empty':
       return yes(sql`TRUE`)
+    case 'is_stale':
+      // In the contract from #205 (D69); evaluated with the server clock from #208.
+      throw new HttpError('invalid_request', 'is_stale: not supported yet')
   }
 }
 

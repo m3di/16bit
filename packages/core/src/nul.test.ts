@@ -132,12 +132,16 @@ describe('NUL in names (#285)', () => {
     expect(result.success).toBe(false)
     expect(accountNameSchema.safeParse(nul).success).toBe(false)
     // A union: the issue itself is at the top (path []), and its first branch, the new-account
-    // body, names the field with the NUL message.
+    // body, names the field with the NUL message. The second is the external-login body (#205).
     expect(result.error?.issues).toMatchObject([
       {
         code: 'invalid_union',
         path: [],
-        errors: [[{ code: 'custom', path: ['name'], message: NUL_MESSAGE }], [{ path: [] }]],
+        errors: [
+          [{ code: 'custom', path: ['name'], message: NUL_MESSAGE }],
+          expect.anything(),
+          [{ path: [] }],
+        ],
       },
     ])
   })

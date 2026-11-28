@@ -110,7 +110,9 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
       .select(['id', 'password_hash'])
       .where('email', '=', email)
       .executeTakeFirst()
-    const ok = account
+    // An account with no password signs in only by external login (D72): it gets the same
+    // answer, in the same time, as an unknown email.
+    const ok = account?.password_hash
       ? await verifyPassword(password, account.password_hash)
       : await verifyDummy(password)
     if (!account || !ok) throw new HttpError('unauthorized', 'Email or password is incorrect')
@@ -147,6 +149,11 @@ export function registerAuthRoutes(v1: FastifyInstance, options: AuthRouteOption
     if (wait) return tooMany(reply, wait)
     const { token } = parse(tokenParams, request.params)
     const body = parse(acceptInviteSchema, request.body)
+    // The contract has the external-login form from #205; trusted-header sign-in serves it from
+    // #213. Until then it is refused, before the invite is looked at.
+    if ('email' in body && !('password' in body)) {
+      throw new HttpError('invalid_request', 'password: required until external logins are served')
+    }
     const tokenHash = hashToken(token)
     const signedIn = request.identity?.kind === 'person' ? request.identity : undefined
 
@@ -244,6 +251,11 @@ export function registerInviteRoutes(ws: FastifyInstance, db: Kysely<Database>):
   ws.post('/invites', async (request, reply): Promise<CreatedInvite> => {
     const { workspaceId } = parse(workspaceParams, request.params)
     const input = parse(createInviteSchema, request.body)
+    // In the contract from #205 (D72); served with trusted-header sign-in (#213). Refused, not
+    // ignored: an invite meant for one login must not become one anybody can accept.
+    if (input.externalLogin !== undefined) {
+      throw new HttpError('invalid_request', 'externalLogin: not supported yet')
+    }
     if (can(request.principal, 'member.invite', { role: input.workspaceRole }) !== 'allow') {
       throw new HttpError('forbidden', 'Your role cannot create this invite')
     }

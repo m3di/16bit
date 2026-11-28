@@ -16,6 +16,7 @@ export const OP_LABELS: Record<FilterOperator, string> = {
   not_in: 'is none of',
   is_empty: 'is empty',
   is_not_empty: 'is not empty',
+  is_stale: 'is stale',
 }
 
 export const FN_LABELS: Record<SummaryFunction, string> = {
@@ -33,5 +34,5 @@ export const FN_LABELS: Record<SummaryFunction, string> = {
   count_false: 'Count no',
 }
 
-export const NO_VALUE_OPS: readonly FilterOperator[] = ['is_empty', 'is_not_empty']
+export const NO_VALUE_OPS: readonly FilterOperator[] = ['is_empty', 'is_not_empty', 'is_stale']
 export const LIST_OPS: readonly FilterOperator[] = ['in', 'not_in']

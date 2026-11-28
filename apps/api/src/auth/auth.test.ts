@@ -622,7 +622,7 @@ describe('POST /v1/auth/invites/:token', () => {
       .where('email', '=', 'erin@example.com')
       .executeTakeFirstOrThrow()
     expect(account.name).toBe('Erin')
-    expect(await verifyPassword(newAccount.password, account.password_hash)).toBe(true)
+    expect(await verifyPassword(newAccount.password, account.password_hash ?? '')).toBe(true)
     const principal = await db
       .selectFrom('principal')
       .selectAll()
@@ -750,7 +750,7 @@ describe('POST /v1/auth/invites/:token', () => {
             .select('password_hash')
             .where('id', '=', 'dave')
             .executeTakeFirstOrThrow()
-        ).password_hash,
+        ).password_hash ?? '',
       ),
     ).toBe(true)
   })

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   attributeTypes,
   FILTER_OPERATORS,
+  freshForMs,
   TEXT_MAX_LENGTH,
   type AttributeType,
   type AttributeTypeName,
@@ -23,8 +24,8 @@ export const MAX_SORT_KEYS = 3
 export const MAX_EXPAND_ATTRIBUTES = 3
 
 /**
- * One test on an indexed attribute. `value` depends on `op`: none for `is_empty` and
- * `is_not_empty`, an array for `in` and `not_in`, a single value otherwise.
+ * One test on an indexed attribute. `value` depends on `op`: none for `is_empty`,
+ * `is_not_empty` and `is_stale`, an array for `in` and `not_in`, a single value otherwise.
  *
  * Semantics: `contains`, `not_contains` and `starts_with` ignore case; `eq` on text is exact.
  * The negative operators (`neq`, `not_contains`, `not_in`) also match items with no value.
@@ -107,7 +108,10 @@ export interface CompiledCondition {
   attributeId: string
   column: IndexColumn
   op: FilterOperator
-  /** Projected operands: none for the empty checks, one or more otherwise. */
+  /**
+   * Projected operands: none for the empty checks, one or more otherwise. `is_stale` has one,
+   * the attribute's `freshFor` in milliseconds; the server subtracts it from its own clock.
+   */
   operands: (number | string)[]
 }
 export type CompiledFilter =
@@ -137,6 +141,16 @@ export type CompileItemQueryResult =
 const TEXT_OPERATORS: readonly FilterOperator[] = ['contains', 'not_contains', 'starts_with']
 const LIST_OPERATORS: readonly FilterOperator[] = ['in', 'not_in']
 const EMPTY_CHECKS: readonly FilterOperator[] = ['is_empty', 'is_not_empty']
+
+/**
+ * The operators a condition on this attribute may use: its type's `filterOperators`, less
+ * `is_stale` on a date attribute without `freshFor` (D69).
+ */
+export function filterOperatorsOf(attribute: Attribute): readonly FilterOperator[] {
+  const all = attributeTypes[attribute.type].filterOperators
+  if (attribute.type === 'date' && attribute.config.freshFor !== undefined) return all
+  return all.filter((op) => op !== 'is_stale')
+}
 
 type Operand = { ok: true; value: number | string } | { ok: false; message: string }
 
@@ -231,12 +245,13 @@ function compileCondition(
   const resolved = resolve(byId, c.attribute, path, errors)
   if (!resolved) return null
   const { attribute, column } = resolved
-  const supported = attributeTypes[attribute.type].filterOperators
+  const supported = filterOperatorsOf(attribute)
   if (!supported.includes(c.op)) {
-    errors.push({
-      path,
-      message: `Operator "${c.op}" is not supported on ${attribute.type} attribute "${attribute.id}"; use one of ${supported.join(', ')}`,
-    })
+    const why =
+      c.op === 'is_stale' && attribute.type === 'date'
+        ? `Operator "is_stale" needs a freshFor on date attribute "${attribute.id}"`
+        : `Operator "${c.op}" is not supported on ${attribute.type} attribute "${attribute.id}"`
+    errors.push({ path, message: `${why}; use one of ${supported.join(', ')}` })
     return null
   }
   const fail = (message: string) => {
@@ -247,6 +262,14 @@ function compileCondition(
   if (EMPTY_CHECKS.includes(c.op)) {
     if (c.value !== undefined) return fail('takes no value')
     return { attributeId: attribute.id, column, op: c.op, operands: [] }
+  }
+  if (c.op === 'is_stale') {
+    if (c.value !== undefined) return fail('takes no value')
+    const freshFor = attribute.type === 'date' ? attribute.config.freshFor : undefined
+    const ms = freshFor === undefined ? null : freshForMs(freshFor)
+    // filterOperatorsOf let it through, so the stored config has a valid freshFor.
+    if (ms === null) return fail('needs a freshFor')
+    return { attributeId: attribute.id, column, op: c.op, operands: [ms] }
   }
   if (TEXT_OPERATORS.includes(c.op)) {
     const text = searchTextSchema.safeParse(c.value)

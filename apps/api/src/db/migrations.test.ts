@@ -1,6 +1,12 @@
 import { sql, type Kysely } from 'kysely'
 import { Migrator, NO_MIGRATIONS } from 'kysely/migration'
-import { attributeSchema, externalKeySchema, indexEntries, PALETTE_COLORS } from '@16bit/core'
+import {
+  attributeSchema,
+  externalKeySchema,
+  externalLoginSchema,
+  indexEntries,
+  PALETTE_COLORS,
+} from '@16bit/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createDb, migrateToLatest, type Database } from './database.ts'
 import { backfill } from './migrations/0002_item_index.ts'
@@ -124,6 +130,7 @@ describe('migrations', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     expect(await tables()).toEqual(TABLES)
   })
@@ -800,6 +807,7 @@ describe('0009_schema_writes', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     expect(await db.selectFrom('attribute').select(['id', 'version']).execute()).toEqual([
       { id: 't', version: 0 },
@@ -856,6 +864,7 @@ describe('0010_invite_update_owner', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     expect(await policy()).toMatch(/owner/)
     expect((await migrator().migrateTo('0009_schema_writes')).error).toBeUndefined()
@@ -892,6 +901,7 @@ describe('0011_deleted_attribute', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     const backfilled = await db
       .selectFrom('deleted_attribute')
@@ -956,6 +966,7 @@ describe('0012_mutation_ids', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     // Existing revisions carry no ID.
     expect(await db.selectFrom('revision').select(['seq', 'client_mutation_id']).execute()).toEqual(
@@ -1058,6 +1069,7 @@ describe('0013_hub_prefix_unique', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
 
     expect((await migrator().migrateTo('0012_mutation_ids')).error).toBeUndefined()
@@ -1142,6 +1154,7 @@ describe('0014_revision_cause', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     const migrated = [
       [1, { note: 'from the old column' }],
@@ -1182,6 +1195,7 @@ describe('0014_revision_cause', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     expect(await causes()).toEqual(migrated)
 
@@ -1196,6 +1210,7 @@ describe('0014_revision_cause', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     expect((await causes())[2]).toEqual([3, { note: json }])
   })
@@ -1215,6 +1230,7 @@ describe('0014_revision_cause', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
   })
 
@@ -1288,6 +1304,7 @@ describe('0015_item_external_key', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     const keys = () =>
       db.selectFrom('item').select(['id', 'external_key', 'values']).orderBy('id').execute()
@@ -1310,6 +1327,7 @@ describe('0015_item_external_key', () => {
       '0015_item_external_key',
       '0016_views',
       '0017_item_index_hub',
+      '0018_external_login',
     ])
     expect((await keys()).map((r) => r.external_key)).toEqual([null, null])
     await item('i3', 3, 'src/app.ts')
@@ -1410,6 +1428,135 @@ describe('0015_item_external_key', () => {
         'values',
         'version',
       ])
+    })
+  })
+})
+
+describe('0018_external_login', () => {
+  const migrator = () =>
+    new Migrator({ db, provider: { getMigrations: () => Promise.resolve(migrations) } })
+  const HASH = '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA'
+  const account = (id: string, login: string | null, hash: string | null = HASH) =>
+    sql`INSERT INTO account (id, email, password_hash, name, external_login)
+        VALUES (${id}, ${`${id}@example.com`}, ${hash}, ${id}, ${login})`.execute(db)
+  const invite = (id: string, login: string | null) =>
+    sql`INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by, expires_at,
+                            external_login)
+        VALUES ('w1', ${id}, ${`hash-${id}`}, 'member', 'p1', now() + interval '1 day',
+                ${login})`.execute(db)
+  const columns = async (table: string) => {
+    const { rows } = await sql<{ name: string; nullable: string }>`
+      SELECT column_name AS name, is_nullable AS nullable FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = ${table} ORDER BY column_name
+    `.execute(db)
+    return Object.fromEntries(rows.map((r) => [r.name, r.nullable]))
+  }
+
+  it('applies to a database migrated to 0017 with accounts and invites, and migrates down and up again', async () => {
+    expect((await migrator().migrateTo('0017_item_index_hub')).error).toBeUndefined()
+    await seedHub()
+    await sql`INSERT INTO account (id, email, password_hash, name)
+              VALUES ('a1', 'a1@example.com', ${HASH}, 'A1')`.execute(db)
+    await sql`INSERT INTO invite (workspace_id, id, token_hash, workspace_role, created_by,
+                                  expires_at)
+              VALUES ('w1', 'inv1', 'hash-inv1', 'member', 'p1', now())`.execute(db)
+
+    expect(await migrateToLatest(db)).toEqual(['0018_external_login'])
+    expect(await columns('account')).toMatchObject({ external_login: 'YES', password_hash: 'YES' })
+    expect(await columns('invite')).toMatchObject({ external_login: 'YES' })
+    expect(
+      await db.selectFrom('account').select(['id', 'external_login', 'password_hash']).execute(),
+    ).toEqual([{ id: 'a1', external_login: null, password_hash: HASH }])
+    expect(await db.selectFrom('invite').select(['id', 'external_login']).execute()).toEqual([
+      { id: 'inv1', external_login: null },
+    ])
+
+    // An account with no password can't be kept by down: it would have no way to sign in.
+    await account('a2', 'mina', null)
+    await invite('inv2', 'mina')
+    const refused = await migrator().migrateTo('0017_item_index_hub')
+    expect(String(refused.error)).toMatch(/1 account\(s\) have no password/)
+    expect(await columns('account')).toHaveProperty('external_login')
+
+    await sql`UPDATE account SET password_hash = ${HASH} WHERE id = 'a2'`.execute(db)
+    expect((await migrator().migrateTo('0017_item_index_hub')).error).toBeUndefined()
+    expect(await columns('account')).not.toHaveProperty('external_login')
+    expect(await columns('account')).toMatchObject({ password_hash: 'NO' })
+    expect(await columns('invite')).not.toHaveProperty('external_login')
+    expect(await db.selectFrom('invite').select('id').orderBy('id').execute()).toEqual([
+      { id: 'inv1' },
+      { id: 'inv2' },
+    ])
+
+    expect(await migrateToLatest(db)).toEqual(['0018_external_login'])
+    await account('a3', 'mina', null)
+  })
+
+  describe('on the latest schema', () => {
+    beforeEach(async () => {
+      await migrateToLatest(db)
+      await seedHub()
+    })
+
+    // Each login is checked by core and by both constraints, which must agree.
+    const logins: [string, string, boolean][] = [
+      ['a user name', 'mina', true],
+      ['an email-like login', 'Mina.K@corp.example', true],
+      ['a domain login', 'CORP\\mina', true],
+      ['inner spaces', 'Mina K', true],
+      ['256 code points of 2 UTF-16 units each', '😀'.repeat(256), true],
+      ['empty', '', false],
+      ['257 characters', 'a'.repeat(257), false],
+      ['a leading space', ' mina', false],
+      ['a trailing no-break space', 'mina\u00a0', false],
+      ['a trailing line separator', 'mina\u2028', false],
+      ['a tab inside', 'mi\tna', false],
+      ['a C1 control inside', 'mi\u0085na', false],
+    ]
+
+    it.each(logins)('agrees with core on %s', async (_, login, valid) => {
+      expect(externalLoginSchema.safeParse(login).success).toBe(valid)
+      for (const insert of [() => account('a1', login), () => invite('inv1', login)]) {
+        if (valid) await insert()
+        else await expect(insert()).rejects.toMatchObject({ code: '23514' })
+      }
+    })
+
+    it('makes a login unique per installation, compared exactly', async () => {
+      await account('a1', 'mina')
+      await expect(account('a2', 'mina')).rejects.toMatchObject({
+        code: '23505',
+        constraint: 'account_external_login_key',
+      })
+      await account('a3', 'Mina')
+      await account('a4', null)
+      await account('a5', null)
+      // Invites may share a login: only one account can redeem it.
+      await invite('inv1', 'mina')
+      await invite('inv2', 'mina')
+    })
+
+    it('lets an account go without a password only when it has an external login', async () => {
+      await account('a1', 'mina', null)
+      await expect(account('a2', null, null)).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'account_sign_in_check',
+      })
+      await expect(
+        sql`UPDATE account SET external_login = NULL WHERE id = 'a1'`.execute(db),
+      ).rejects.toMatchObject({ code: '23514', constraint: 'account_sign_in_check' })
+      // The argon2id check from 0003 still holds for a password that is set.
+      await expect(account('a3', null, 'plain')).rejects.toMatchObject({ code: '23514' })
+    })
+
+    it('gives the API role no way to change a login', async () => {
+      const { rows } = await sql<{ table: string; column: string }>`
+        SELECT table_name AS table, column_name AS column FROM information_schema.column_privileges
+        WHERE table_name IN ('account', 'invite') AND grantee = 'sixteenbit_app'
+          AND privilege_type = 'UPDATE'
+        ORDER BY table_name, column_name
+      `.execute(db)
+      expect(rows).toEqual([{ table: 'invite', column: 'expires_at' }])
     })
   })
 })

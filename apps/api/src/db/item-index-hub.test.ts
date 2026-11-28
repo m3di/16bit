@@ -113,7 +113,7 @@ describe('0017_item_index_hub up, down and up again', () => {
     const parallel0016 = await parallel()
     expect(parallel0016.every((f) => f.parallel === 'u')).toBe(true)
 
-    expect(await migrateToLatest(db)).toEqual(['0017_item_index_hub'])
+    expect(await migrateToLatest(db)).toEqual(['0017_item_index_hub', '0018_external_login'])
     const rows = await db
       .selectFrom('item_index')
       .select(['item_id', 'hub_id'])
@@ -135,7 +135,7 @@ describe('0017_item_index_hub up, down and up again', () => {
     expect(await visible('ed1')).toEqual(['i1:one', 'i3:three'])
     expect(await visible('out')).toEqual([])
 
-    expect(await migrateToLatest(db)).toEqual(['0017_item_index_hub'])
+    expect(await migrateToLatest(db)).toEqual(['0017_item_index_hub', '0018_external_login'])
     expect(await visible('ed2')).toEqual(['i2:two'])
   })
 })

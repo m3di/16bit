@@ -26,6 +26,8 @@ const STATUS: Record<ApiErrorCode, number> = {
   stale: 409,
   invalid_time_zone: 422,
   timeout: 503,
+  invalid_template: 422,
+  login_taken: 409,
   internal: 500,
 }
 

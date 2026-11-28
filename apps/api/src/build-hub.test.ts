@@ -204,7 +204,7 @@ describe('ensureBuildHub', () => {
       .where('id', '=', OWNER)
       .executeTakeFirstOrThrow()
     expect(account.email).toBe(DEV_OWNER.email)
-    expect(await verifyPassword(DEV_PASSWORD, account.password_hash)).toBe(true)
+    expect(await verifyPassword(DEV_PASSWORD, account.password_hash ?? '')).toBe(true)
     const attributes = await db
       .selectFrom('folder_attribute')
       .select(['attribute_id', 'position', 'required'])
