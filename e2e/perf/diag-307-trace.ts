@@ -11,7 +11,11 @@ interface Ev {
   dur?: number
   pid: number
   tid: number
-  args?: { name?: string; data?: { url?: string; functionName?: string } }
+  args?: {
+    name?: string
+    elementCount?: number
+    data?: { url?: string; functionName?: string; reason?: string; nodeName?: string; elementCount?: number }
+  }
 }
 
 function find(dir: string): string[] {
@@ -36,6 +40,16 @@ for (const file of process.argv.slice(2).flatMap((d) => find(d))) {
   const tasks = onMain.filter(
     (e) => (e.name === 'ThreadControllerImpl::RunTask' || e.name === 'RunTask') && (e.dur ?? 0) > 30_000,
   )
+  const reasons = new Map<string, number>()
+  for (const e of events)
+    if (e.name === 'StyleRecalcInvalidationTracking' || e.name === 'StyleInvalidatorInvalidationTracking') {
+      const k = `${e.name.replace('InvalidationTracking', '')} ${e.args?.data?.reason ?? ''} ${e.args?.data?.nodeName ?? ''}`
+      reasons.set(k, (reasons.get(k) ?? 0) + 1)
+    }
+  console.log(
+    '  invalidations: ' +
+      [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, n]) => `${k} x${String(n)}`).join('; '),
+  )
   console.log(`== ${file}: ${String(tasks.length)} main-thread tasks over 30 ms`)
   const t0 = onMain.reduce((m, e) => Math.min(m, e.ts), Infinity)
   for (const task of tasks) {
@@ -51,6 +65,10 @@ for (const file of process.argv.slice(2).flatMap((d) => find(d))) {
           : e.name
       byName.set(label, (byName.get(label) ?? 0) + (e.dur ?? 0))
     }
+    const styled = inside
+      .filter((e) => e.name === 'UpdateLayoutTree')
+      .reduce((n, e) => n + (e.args?.elementCount ?? e.args?.data?.elementCount ?? 0), 0)
+    byName.set(`elements styled ${String(styled)}`, 0)
     const top = [...byName.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 14)

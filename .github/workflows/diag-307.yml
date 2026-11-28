@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2]
     services:
       db:
         image: postgres:18.7-alpine3.24
@@ -61,9 +61,9 @@ jobs:
           MIGRATION_DATABASE_URL: postgres://sixteenbit:sixteenbit@127.0.0.1:5432/sixteenbit
       - run: nproc && (vmstat -t 1 > /tmp/vmstat.txt &) && (top -b -d 1 -w 200 | grep -A 12 '^top' > /tmp/top.txt &)
       # As in CI: every spec, then the budgets.
-      - run: pnpm e2e || true
+      - run: pnpm e2e --project setup || true
       # Then the scroll budget alone, repeated.
-      - run: pnpm e2e --project budgets --no-deps -g "scrolling 50,000" --repeat-each 25 --output test-results-repeat || true
+      - run: pnpm e2e --project budgets --no-deps -g "scrolling 50,000" --repeat-each 6 --output test-results-repeat || true
       - if: ${{ always() }}
         run: node e2e/perf/diag-307-trace.ts e2e/test-results e2e/test-results-repeat
       - if: ${{ always() }}

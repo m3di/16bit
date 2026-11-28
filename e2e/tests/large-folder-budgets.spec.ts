@@ -128,7 +128,7 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
   if (tracing)
     await browser.startTracing(page, {
       path: testInfo.outputPath(`trace-307-${String(testInfo.repeatEachIndex)}.json`),
-      categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8', 'v8.execute', 'blink.user_timing', 'loading', 'toplevel', 'disabled-by-default-v8.gc'],
+      categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8', 'v8.execute', 'blink.user_timing', 'loading', 'toplevel', 'disabled-by-default-v8.gc', 'disabled-by-default-devtools.timeline.invalidationTracking'],
     })
   // A browser that does not report long tasks would pass this test with none seen.
   expect(
@@ -208,6 +208,13 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
   if (process.env['DIAG_307']) {
     const diag = await page.evaluate(() => (window as unknown as { diag: string[] }).diag)
     const res = await page.evaluate(() => performance.getEntriesByType('resource').filter((r) => r.name.includes('/query')).map((r) => `query @${r.startTime.toFixed(0)}-${r.responseEnd.toFixed(0)} ${String((r as PerformanceResourceTiming).encodedBodySize)} B`))
+    const counts = await page.evaluate(() => {
+      const rows = document.querySelectorAll('[data-virtual] tbody tr[data-index]')
+      const inRows = document.querySelectorAll('[data-virtual] tbody tr[data-index] *').length
+      const rules = [...document.styleSheets].reduce((n, sh) => { try { return n + sh.cssRules.length } catch { return n } }, 0)
+      return `elements: document ${String(document.querySelectorAll('*').length)}, ${String(rows.length)} rows with ${String(inRows)} inside; css rules ${String(rules)}`
+    })
+    res.push(counts)
     test.info().annotations.push({ type: 'diag307', description: [...diag, ...res].join('\n    ') })
   }
   test.info().annotations.push({
