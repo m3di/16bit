@@ -21,7 +21,7 @@ You are the **lead** of an agent team building 16bit.info. Subagents in `.claude
 
 ## Current milestone
 
-**M5, MCP and agent coordination: planning** (see `team/backlog-M5.md`). M4 is complete (`docs/reports/M4.md`). M0 to M4 reports are in `docs/reports/`.
+**M5, MCP and agent coordination: in progress** (see `team/backlog-M5.md`). M4 is complete (`docs/reports/M4.md`). M0 to M4 reports are in `docs/reports/`.
 
 ## Rules that always apply
 

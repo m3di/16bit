@@ -30,9 +30,9 @@ The initial plan for M5. Each new entry becomes a GitHub issue once the maintain
   - The unscheduled follow-ups stay unscheduled.
 - The maintainer looked at the parts with no mockup and asked only for a plus icon on "New item" (#315, in progress).
 
-## Questions for the maintainer
+## Decisions (were open questions)
 
-Each question gives a proposal. **Decide** marks a choice the plan can't make alone.
+**Decided by the maintainer on 2026-11-28, all as proposed** (PR #317). They are recorded as D86 onward in #205's PR. Each **Decide** below was a choice the plan couldn't make alone.
 
 **Q1. The #205 batch (D67, D69 to D72).** **Decide:** accept #205's five flagged proposals as written:
 - neighbours: the route, depth at most 2, the node cap of 100 by default and 500 at most, and `hidden` counted but never named;
