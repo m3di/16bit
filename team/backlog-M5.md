@@ -17,6 +17,8 @@ The initial plan for M5. Each new entry becomes a GitHub issue once the maintain
   - `/changes`.
 - Comments arrive in M6, not M5. So in M5 the hub can hold a task and its state, but not a discussion (Q6).
 
+**Changes after the third review (#317):** the API has no general rate limiter, so Q3 lists only the limits that exist; the team scripts check `current_database()` is `sixteenbit_team`, and the dev-side `seed:build-hub` is removed (Q5). Optional points taken: the issues folder is mounted alone and read-only, `localhost:8090` is allowed, and the per-agent tools check is manual.
+
 **Changes after the second review (#317):** no marker header: the rate limiter skips the outer `/mcp` request instead (Q3, Q4); `team:up` builds from a clean worktree of `origin/main` and fails closed without a backup; every team script runs in the team stack's own container and refuses the dev database, issues are fetched on the host, and the maintainer owns `team` (Q5); agent `tools:` lists gain their own server and the helper runs from the repository root (Q7); `team:restore` is a deletion and needs the maintainer's yes (Q5); #208's issue body is corrected. Optional points taken: `MCP_ALLOWED_HOSTS`, the team stack's own passwords, and D86 noting the digest's optional `version`.
 
 **Changes after review (#317):** the SDK is v2, not v1 (Q3); the team hub gets its own stack and database, apart from the dev one (Q5); the backup dumps the whole team database (Q5); the Build hub has one Tasks folder with a Sprint relation, since items never move between folders and agents can't create folders or edit views (Q6, M5-03); per-role keys are hygiene, not a security boundary, and keys reach Claude Code through a `headersHelper` (Q7); `/mcp` refuses the trusted header and checks `Origin` and `Host` (Q3, Q4); named issues are held back for the exit run (Q8); dependencies fixed; the digest cites D83 and takes `tz` (Q2); answers are recorded as D86 onward (Q9). From the optional points: one rate-limit count per tool call (Q4); role servers declared in each agent file, not in `.mcp.json` (Q7); no `ALLOW_DEV_PASSWORD` on the team stack (Q5); wave 2 is ordered; GitHub issues are closed in one batch after a dry run (Q6).
@@ -70,8 +72,8 @@ The contracts and migrations stay one gated PR. The trusted-header sign-in itsel
   - A session cookie is refused with 401, since people use the UI. D49 still refuses both together.
   - The trusted identity header (D72, #213) is never accepted on `/mcp`, whatever the proxy allowlist says.
 - **Origin and Host:** `/mcp` checks them as the MCP spec asks. A request with a browser `Origin` that isn't the app's own is refused, and `Host` must be one the server is configured for, against DNS rebinding.
-- **Limits:** the same request size limit as HTTP. The rate limiter skips the outer `/mcp` request and counts each tool call's inner request, so a call is counted once with no marker header to forge. D83's in-flight count, the body limit and the deadline apply to the inner request as over HTTP.
-- **Host allowlist:** a setting, `MCP_ALLOWED_HOSTS`, which for the team stack includes `127.0.0.1:8090` (the container listens on 3000).
+- **Limits:** the API has no general rate limiter today, only the sign-in limiters and D83's in-flight count. Each tool call's inner request goes through the body limit, D83's count and the deadline exactly as over HTTP. A general rate limiter would be a new decision, and it would count the outer `/mcp` request.
+- **Host allowlist:** a setting, `MCP_ALLOWED_HOSTS`, which for the team stack includes `127.0.0.1:8090` and `localhost:8090` (the container listens on 3000).
 
 **Q4. The tool set (D22).** **Decide:** one tool per route, not one generic `call` tool.
 - **How a tool runs:** through its HTTP route in process (Fastify `inject`), so `can()`, row-level security, limits and error bodies are exactly the HTTP ones. "Mirrored" then stays true by construction.
@@ -94,8 +96,8 @@ The contracts and migrations stay one gated PR. The trusted-header sign-in itsel
   - its own database passwords, in gitignored `.env.team` (with `.env.team.example` in git), not the ones in `compose.yaml`;
   - no `ALLOW_DEV_PASSWORD`;
   - its containers keep the 2 CPU and 3 GB caps, and it stays light while idle.
-- **One way in:** every team script runs inside the team stack's own `migrate` container (`docker compose -p 16bit-team run --rm migrate …`), whose database URL comes from the team compose file. No team script reads `.env` or `MIGRATION_DATABASE_URL` from the host, and each one refuses to run unless its database is the team one (the `team` workspace marker). So nothing can write the team data into the dev database, or the other way round.
-- **GitHub issues** are fetched on the host with `gh issue list --json` into a file under `backups/`, which is mounted into the container. The image never needs `gh`.
+- **One way in:** every team script runs inside the team stack's own `migrate` container (`docker compose -p 16bit-team run --rm migrate …`), whose database URL comes from the team compose file. No team script reads `.env` or `MIGRATION_DATABASE_URL` from the host, and each one refuses to run unless `current_database()` is `sixteenbit_team`, the database name only the team stack uses (`POSTGRES_DB`). The dev-side `seed:build-hub` is removed, since the team hub no longer lives in the dev database; the Build hub for dev testing is the team seed's fixture. So nothing can write the team data into the dev database, or the other way round.
+- **GitHub issues** are fetched on the host with `gh issue list --json` into `backups/issues/`, and only that folder is mounted into the container, read-only. The image never needs `gh`.
 - **Owner:** the maintainer owns the `team` workspace. `pnpm team:owner <email>` creates that account in the team database, and the maintainer types its password at the prompt. `DEV_OWNER` is not created there.
 - **Backup:** `pnpm team:backup` writes `pg_dump -Fc` of the whole team database to `backups/` (gitignored, since it holds key hashes and sessions).
   - The lead runs it at the end of every sprint pass.
@@ -166,7 +168,7 @@ The contracts and migrations stay one gated PR. The trusted-header sign-in itsel
     - each tool's success and its main error statuses (404 hidden, 409, 412, 422);
     - a write's `clientMutationId` replays;
     - a viewer key refused on writes;
-    - one rate-limit count per call, and the outer `/mcp` request not counted;
+    - D83's in-flight count applies to `read_view` calls as it does over HTTP;
     - a request from the network can't reach a route's handler with headers the tool didn't build;
     - an `initialize` handshake as Claude Code sends it.
   - The README says how to point an MCP client at a local stack.
@@ -216,7 +218,7 @@ The digest marker moves to M5-02, so #208 no longer depends on the digest. The i
     - the team stack and the dev stack share no volume;
     - each team script refuses the dev database, and the dev scripts never reach the team one;
     - `team:up` refuses to rebuild when the backup fails;
-    - each subagent sees only its own role's server tools (checked by listing tools from one agent file).
+    - (manual, recorded in M5-04's PR, since it can't run in CI) each subagent sees only its own role's server tools.
 
 ## M5-04 Switch the team's workflow to the hub
 - **Role:** lead · **Depends on:** M5-03, M5-02
