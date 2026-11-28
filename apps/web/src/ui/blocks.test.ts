@@ -349,6 +349,29 @@ describe('block components', () => {
     expect(column).toContain('New item<span class="sr-only"> in In review</span>')
   })
 
+  it('GroupedList and BoardColumn lead "New item" with a hidden plus', async () => {
+    const list = await render(GroupedList, {
+      groups: backlog,
+      fields: backlogFields,
+      creatable: true,
+    })
+    const column = await render(BoardColumn, {
+      label: 'In review',
+      count: 0,
+      cards: [],
+      creatable: true,
+    })
+    for (const html of [list, column].map((h) => h.replace(/<!--.*?-->/g, ''))) {
+      const buttons = html.match(/<button[^>]*>(?:(?!<\/button>).)*New item.*?<\/button>/g) ?? []
+      expect(buttons.length).toBeGreaterThan(0)
+      for (const button of buttons) {
+        expect(button).toMatch(
+          /<span aria-hidden="true"[^>]*data-button-icon><svg[^>]*data-glyph="plus"[\s\S]*?<\/svg><\/span>New item/,
+        )
+      }
+    }
+  })
+
   it('BoardColumn shows its empty text in a dashed box and its count for screen readers', async () => {
     const html = await render(BoardColumn, {
       label: 'In review',

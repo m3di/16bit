@@ -11,6 +11,7 @@ import {
   PALETTE_COLORS,
   PaletteChip,
   PixelAvatar,
+  PlusGlyph,
   SizeMeter,
   StateBlock,
   StatusDot,
@@ -195,6 +196,30 @@ onScopeDispose(() => {
         <BaseButton variant="primary" disabled>Disabled</BaseButton>
         <BaseButton disabled>Disabled</BaseButton>
         <BaseButton variant="quiet" disabled>Disabled</BaseButton>
+      </div>
+      <p class="m-0 text-caption text-ink3">
+        A leading icon (the <code>icon</code> slot) is hidden from screen readers: "New item" is
+        named by its text alone.
+      </p>
+      <div class="flex flex-wrap items-center gap-2" data-kit-icon-buttons>
+        <BaseButton variant="primary"
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
+        <BaseButton
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
+        <BaseButton size="sm"
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
+        <BaseButton variant="quiet" size="sm"
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
+        <BaseButton variant="primary" disabled
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
+        <BaseButton variant="quiet" size="sm" disabled
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
       </div>
     </section>
 
@@ -392,7 +417,11 @@ onScopeDispose(() => {
         </div>
         <div class="rounded-card border border-line">
           <StateBlock state="empty" message="Items you add to this folder appear here.">
-            <template #action><BaseButton size="sm">New item</BaseButton></template>
+            <template #action
+              ><BaseButton size="sm"
+                ><template #icon><PlusGlyph /></template>New item</BaseButton
+              ></template
+            >
           </StateBlock>
         </div>
         <div class="rounded-card border border-line">
