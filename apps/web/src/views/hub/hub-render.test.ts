@@ -259,6 +259,26 @@ describe('FolderSidebar', () => {
     }
   })
 
+  it('shows a count only for a folder with items: an empty folder and an empty root show nothing', async () => {
+    const empty = {
+      ...description,
+      hub: { ...description.hub, itemCount: 2 },
+      folders: description.folders.map((f, i) => ({ ...f, itemCount: i === 0 ? 2 : 0 })),
+    }
+    const html = await render(FolderSidebar, {
+      workspaceId: 'w',
+      hubName: 'Build',
+      tree: { state: 'ready', data: folderTree(empty) },
+      folderId: 'bld',
+    })
+    const root = /<a [^>]*data-folder-root[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
+    expect(root).toContain('aria-label="Build, items in the hub itself"')
+    expect(root).not.toContain('data-folder-count')
+    expect(html.match(/data-folder-count/g)).toHaveLength(1)
+    expect(html).toMatch(/aria-label="2 items"[^>]*>2</)
+    expect(html).not.toMatch(/>0</)
+  })
+
   it('leaves the root count out when it cannot be told', async () => {
     const cut = { ...description, truncated: { ...description.truncated, folders: true } }
     const html = await render(FolderSidebar, {

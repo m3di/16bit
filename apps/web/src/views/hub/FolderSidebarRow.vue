@@ -11,8 +11,9 @@ const props = defineProps<{
   to: RouteLocationRaw
   label: string
   color: PaletteColor
+  /** Shown only when above 0, so an empty folder shows nothing, not "0" (issue 311). */
   count: number | null
-  /** A views-only folder (D76) holds no items: "Views only" in place of the count. */
+  /** A views-only folder (D76) holds no items and shows no count and no label. */
   viewsOnly?: boolean
   /** `aria-current` for the open folder. */
   current?: 'page' | 'location'
@@ -30,12 +31,12 @@ const emit = defineEmits<{ action: [key: SidebarActionKey] }>()
 
 const format = new Intl.NumberFormat('en')
 const countLabel = (n: number) => (n === 1 ? '1 item' : `${format.format(n)} items`)
-const rootLabel = () =>
-  [
-    props.label,
-    'items in the hub itself',
-    ...(props.count === null ? [] : [countLabel(props.count)]),
-  ].join(', ')
+const shownCount = () =>
+  !props.viewsOnly && props.count !== null && props.count > 0 ? props.count : null
+const rootLabel = () => {
+  const n = shownCount()
+  return [props.label, 'items in the hub itself', ...(n === null ? [] : [countLabel(n)])].join(', ')
+}
 </script>
 
 <template>
@@ -55,15 +56,12 @@ const rootLabel = () =>
     >
       <span aria-hidden="true" class="size-2 shrink-0" :style="{ background: paletteVar(color) }" />
       <span class="min-w-0 flex-1 truncate">{{ label }}</span>
-      <span v-if="viewsOnly" class="shrink-0 text-caption text-ink3" data-folder-views-only
-        >Views only</span
-      >
       <span
-        v-else-if="count !== null"
+        v-if="shownCount() !== null"
         class="text-caption text-ink3 tabular-nums"
-        :aria-label="countLabel(count)"
+        :aria-label="countLabel(shownCount() ?? 0)"
         data-folder-count
-        >{{ format.format(count) }}</span
+        >{{ format.format(shownCount() ?? 0) }}</span
       >
     </RouterLink>
     <!-- On hover or keyboard focus of the row; always on touch screens and at phone width. -->
