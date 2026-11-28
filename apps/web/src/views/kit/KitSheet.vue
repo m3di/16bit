@@ -378,9 +378,9 @@ onScopeDispose(() => {
         </ItemPanel>
       </div>
       <p class="m-0 text-caption text-ink3">
-        At desktop width the panel is as tall as the row beside it and scrolls on its own; it is
-        never taller than the viewport. At phone width it stacks under the row and grows with its
-        fields. Escape or the close button closes it.
+        From the lg width up the panel is as tall as the row beside it and scrolls on its own. Below
+        it, it opens as a full-screen sheet with its own scroll, and the page behind it is inert.
+        Escape or the close button closes it.
       </p>
     </section>
 

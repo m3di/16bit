@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onMounted, useTemplateRef, watch } from 'vue'
+import { onBeforeUnmount, onMounted, useId, useTemplateRef, watch } from 'vue'
+import { inertOutside, useSheet } from './sheet.ts'
 
 const {
   title,
   label = 'Item',
   keepFocus,
+  returnFocusTo = '',
 } = defineProps<{
   /** The item's display ID or name. */
   title: string
@@ -12,44 +14,122 @@ const {
   label?: string
   /**
    * Leaves focus where it is when the panel opens or shows another item, as when the arrow
-   * keys move the selection in the table beside it. By default focus moves to the panel.
+   * keys move the selection in the table beside it. By default focus moves to the panel. A
+   * sheet (below `lg`) covers the table, so it always takes focus.
    */
   keepFocus?: boolean
+  /**
+   * A selector for where focus goes when the sheet closes and what opened it is gone or was
+   * inside the panel, such as the selected row's link.
+   */
+  returnFocusTo?: string
+}>()
+
+defineSlots<{
+  default?(): unknown
+  /**
+   * What the page says about a write that failed. Shown only while the panel is a sheet: the
+   * page's own notice is then behind it and inert, so it can be neither seen nor heard.
+   */
+  notice?(): unknown
 }>()
 
 const emit = defineEmits<{ close: [] }>()
 
+const panel = useTemplateRef<HTMLElement>('panel')
 const heading = useTemplateRef<HTMLHeadingElement>('heading')
+const headingId = useId()
+// Registered first, so it has read the viewport before the panel's own mounted hook runs.
+const sheet = useSheet()
+
+// As a sheet the panel is modal: what it covers is inert, the page behind it does not scroll,
+// and focus goes back to where it was (the row that opened it) when it closes.
+let restoreInert: (() => void) | null = null
+let restoreScroll: (() => void) | null = null
+let returnTo: HTMLElement | null = null
+function setModal(on: boolean) {
+  restoreInert?.()
+  restoreInert = null
+  restoreScroll?.()
+  restoreScroll = null
+  const el = panel.value
+  if (!on || !el) return
+  restoreInert = inertOutside(el, document.body)
+  const root = document.documentElement
+  const before = root.style.overflow
+  root.style.overflow = 'hidden'
+  restoreScroll = () => {
+    root.style.overflow = before
+  }
+}
+
+/** The focused element, when it is outside the panel: where focus goes back to. */
+function opener(): HTMLElement | null {
+  const active = document.activeElement
+  if (typeof HTMLElement === 'undefined' || !(active instanceof HTMLElement)) return null
+  return panel.value?.contains(active) ? null : active
+}
 
 // Move focus to the panel when it opens or shows another item, so keyboard and phone users
-// land on it. At phone width it sits under the table, and focusing scrolls it into view.
+// land on it.
 const focus = () => {
-  if (!keepFocus) heading.value?.focus()
+  if (!keepFocus || sheet.value) heading.value?.focus()
 }
-onMounted(focus)
+onMounted(() => {
+  if (sheet.value) {
+    returnTo = opener()
+    setModal(true)
+  }
+  focus()
+})
 watch(() => title, focus, { flush: 'post' })
+// The window can cross `lg` while the panel is open. Becoming a sheet, it keeps what had focus
+// outside it (if anything did) to go back to; becoming a pane again, it forgets it.
+watch(sheet, (on) => {
+  returnTo = on ? (opener() ?? returnTo) : null
+  setModal(on)
+  if (on) focus()
+})
+onBeforeUnmount(() => {
+  const wasSheet = restoreInert !== null
+  setModal(false)
+  if (!wasSheet) return
+  const target = returnTo?.isConnected
+    ? returnTo
+    : returnFocusTo
+      ? document.querySelector<HTMLElement>(returnFocusTo)
+      : null
+  target?.focus()
+})
 
-// At desktop width the panel sits beside the table and adds nothing to the row's height (size
-// containment), so the row is as tall as the column beside it, which fills the viewport. Its
-// content scrolls on its own in a sticky box no taller than the viewport or the row, so a long
-// item never scrolls the page and the table stays in view. At phone width it stacks under the
-// table and the page scrolls as before. (A comment here, not in the template: one there would
-// make the template a fragment, and the class a screen passes would not reach the aside.)
+// From `lg` up the panel is a pane beside the content (D85): as tall as the content pane, adding
+// nothing to its height (size containment), with its content scrolling on its own, so a long
+// item never moves the table. Below `lg` it is a full-screen sheet over the page with its own
+// scroll, announced as a modal dialog inside the landmark (the `aside` stays, so it is found
+// the same way at every width). The title row stays at the top of the scroll, so Close is always
+// in reach. (A comment here, not in the template: one there would make the template a fragment,
+// and the class a screen passes would not reach the aside.)
 </script>
 
 <template>
   <aside
+    ref="panel"
     :aria-label="label"
-    class="box-border flex min-w-0 flex-col border-t border-line lg:border-t-0 lg:border-l lg:[contain:size]"
+    class="box-border flex min-w-0 flex-col bg-bg max-lg:fixed max-lg:inset-0 max-lg:z-20 lg:border-l lg:border-line lg:[contain:size]"
+    :data-sheet="sheet ? '' : undefined"
     data-item-panel
     @keydown.esc="emit('close')"
   >
     <div
-      class="box-border flex min-h-0 flex-col gap-5 px-4 py-5 sm:px-5 lg:sticky lg:top-0 lg:max-h-[min(100dvh,100%)] lg:overflow-y-auto"
+      class="relative box-border flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-y-contain px-4 pb-5 sm:px-5"
+      :role="sheet ? 'dialog' : undefined"
+      :aria-modal="sheet ? 'true' : undefined"
+      :aria-labelledby="sheet ? headingId : undefined"
       data-item-panel-scroll
     >
-      <div class="flex items-start justify-between gap-3">
+      <div class="sticky top-0 z-[1] flex items-start justify-between gap-3 bg-bg pt-5 pb-1">
         <h2
+          :id="headingId"
           ref="heading"
           tabindex="-1"
           class="m-0 min-w-0 font-display text-card-title font-medium break-words outline-none"
@@ -67,6 +147,7 @@ watch(() => title, focus, { flush: 'post' })
           </svg>
         </button>
       </div>
+      <div v-if="sheet && $slots.notice" data-sheet-notice><slot name="notice" /></div>
       <slot />
     </div>
   </aside>

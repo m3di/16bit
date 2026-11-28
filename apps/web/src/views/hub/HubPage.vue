@@ -374,6 +374,10 @@ const selectedItem = computed(() =>
 )
 
 const itemLink = (item: Item) => ({ query: { item: item.id } })
+// Where focus goes when the sheet closes and what opened it is gone: the selected row's link.
+const selectedLinkSelector = computed(() =>
+  itemId ? `[data-item-link][href$="item=${itemId.replace(/["\\]/g, '\\$&')}"]` : undefined,
+)
 // A click opens the panel with focus on it; the arrow keys in the table keep focus there, so
 // the reader can go on through the rows (DESIGN.md, virtual rows).
 const panelKeepsFocus = ref(false)
@@ -424,7 +428,7 @@ async function submitCreate(values: ItemValues) {
 </script>
 
 <template>
-  <AppShell>
+  <AppShell panes>
     <template #actions>
       <!-- Hub admins, owners and admins manage the hub in its settings. -->
       <RouterLink
@@ -466,8 +470,11 @@ async function submitCreate(values: ItemValues) {
       />
     </template>
 
-    <div class="flex flex-1 flex-wrap items-stretch">
-      <main class="box-border flex min-w-0 flex-[999_1_420px] flex-col gap-6 px-4 py-6 sm:px-7">
+    <div class="flex flex-1 items-stretch md:min-h-0">
+      <main
+        class="relative box-border flex min-w-0 flex-[999_1_420px] flex-col gap-6 px-4 py-6 sm:px-7 md:min-h-0 md:overflow-y-auto"
+        data-main-pane
+      >
         <HubState
           :workspace-id="workspaceId"
           :hub-id="hubId"
@@ -586,9 +593,20 @@ async function submitCreate(values: ItemValues) {
         v-if="creating && folder && !live.lost.value"
         title="New item"
         label="New item"
+        return-focus-to="[data-new-item-button]"
         class="flex-[1_1_320px]"
         @close="closePanel"
       >
+        <template v-if="notice" #notice>
+          <FormNotice data-notice>
+            {{ notice }}
+            <template #action>
+              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                >Dismiss</BaseButton
+              >
+            </template>
+          </FormNotice>
+        </template>
         <NewItemForm
           :key="createIn.folderId + JSON.stringify(createIn.values)"
           :columns="createColumns"
@@ -603,9 +621,20 @@ async function submitCreate(values: ItemValues) {
         v-else-if="itemId && panelItem && !live.lost.value"
         :title="selectedItem && description ? items.label(selectedItem) : 'Item'"
         :keep-focus="panelKeepsFocus"
+        :return-focus-to="selectedLinkSelector"
         class="flex-[1_1_320px]"
         @close="closePanel"
       >
+        <template v-if="notice" #notice>
+          <FormNotice data-notice>
+            {{ notice }}
+            <template #action>
+              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                >Dismiss</BaseButton
+              >
+            </template>
+          </FormNotice>
+        </template>
         <ItemPanelBody :item="panelItem" @retry="retryPanel">
           <template #default="{ item }">
             <RouterLink

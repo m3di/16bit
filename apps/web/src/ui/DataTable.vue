@@ -363,7 +363,7 @@ defineExpose({
   <div
     ref="box"
     class="relative min-w-0"
-    :class="virtual ? 'overflow-auto overscroll-contain' : 'overflow-x-auto'"
+    :class="virtual ? 'overflow-auto overscroll-y-contain' : 'overflow-x-auto'"
     :style="virtual ? { height: boxHeight } : undefined"
     :data-virtual="virtual ? '' : undefined"
   >

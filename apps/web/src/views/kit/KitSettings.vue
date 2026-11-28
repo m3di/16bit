@@ -117,7 +117,7 @@ function onDeleteHub() {
 
     <section class="flex flex-col gap-3">
       <h3 class="m-0 border-b border-line pb-2 text-body font-medium">SettingsLayout</h3>
-      <div class="overflow-hidden rounded-card border border-line [&>div]:min-h-0">
+      <div class="overflow-hidden rounded-card border border-line [&>div]:h-auto [&>div]:min-h-0">
         <SettingsLayout
           :trail="['Parcel Tracker', 'Engineering', 'Hub settings']"
           :back="{ label: 'Back to Engineering', to: '/kit' }"
@@ -154,7 +154,7 @@ function onDeleteHub() {
         <div
           v-for="s in layoutStates"
           :key="s"
-          class="overflow-hidden rounded-card border border-line [&>div]:min-h-0"
+          class="overflow-hidden rounded-card border border-line [&>div]:h-auto [&>div]:min-h-0"
         >
           <SettingsLayout
             :trail="['Parcel Tracker']"

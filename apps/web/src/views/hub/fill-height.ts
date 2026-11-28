@@ -47,16 +47,33 @@ export function layoutSources<T extends LaidOut>(element: T): T[] {
  * virtual table needs a definite height to scroll inside (D61). `null` until measured, so the
  * caller keeps a CSS fallback for the first render. Measured again when the window or anything
  * above the element changes size, never while the table scrolls.
+ *
+ * With `unless`, a media query, nothing is measured or observed while it matches (the height is
+ * `null`): from `md` up the hub page's layout sizes the area itself (D85). Crossing it is seen by
+ * the window's resize event.
  */
-export function useFillHeight(target: Ref<HTMLElement | null>, min: number): Ref<number | null> {
+export function useFillHeight(
+  target: Ref<HTMLElement | null>,
+  min: number,
+  { unless }: { unless?: string } = {},
+): Ref<number | null> {
   const height = ref<number | null>(null)
   let observer: ResizeObserver | undefined
   let frame = 0
+  const skipped = () =>
+    unless !== undefined &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia(unless).matches
 
   function measure() {
     frame = 0
     const el = target.value
     if (!el) return
+    if (skipped()) {
+      height.value = null
+      watch([])
+      return
+    }
     let below = 0
     for (let at = el.parentElement; at && at !== document.documentElement; at = at.parentElement) {
       const style = getComputedStyle(at)
