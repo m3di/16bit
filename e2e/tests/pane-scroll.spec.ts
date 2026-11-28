@@ -41,7 +41,9 @@ test('at desktop width, scrolling a root view scrolls the main pane and nothing 
   const main = mainPane(page)
   const heading = main.getByRole('heading', { level: 1 }).first()
   await expect(heading).toBeVisible()
+  await expect(main.locator('[data-block-state="loading"]')).toHaveCount(0)
   await expect.poll(async () => (await scrollState(main)).scrolls).toBe(true)
+  // The page itself has nothing to scroll.
   expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(
     DESKTOP.height,
   )
@@ -82,7 +84,8 @@ test('at desktop width, a single-table folder fills the main pane and only the t
   expect((await scrollState(table(page))).scrolls).toBe(true)
 
   const before = await chrome(page)
-  const header = await table(page).locator('thead').boundingBox()
+  const columnHeader = table(page).getByRole('columnheader').first()
+  const header = await columnHeader.boundingBox()
   await table(page).locator('tbody tr[data-index]').first().hover()
   await page.mouse.wheel(0, 1500)
   await expect.poll(async () => (await scrollState(table(page))).top).toBeGreaterThan(0)
@@ -90,7 +93,7 @@ test('at desktop width, a single-table folder fills the main pane and only the t
   expect((await scrollState(mainPane(page))).top).toBe(0)
   expect(await chrome(page)).toEqual(before)
   // The toolbar and the headers stay put.
-  expect(await table(page).locator('thead').boundingBox()).toEqual(header)
+  expect(await columnHeader.boundingBox()).toEqual(header)
 })
 
 test('nothing from the table up contains horizontal overscroll, so swipe-back still works', async ({
