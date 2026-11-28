@@ -6,6 +6,7 @@ import {
   BlockSection,
   BlockStatus,
   BaseButton,
+  PlusGlyph,
   BoardCard,
   BoardColumn,
   BoardView,
@@ -291,7 +292,11 @@ const blockStates: Exclude<DataBlockState, 'ready'>[] = [
         <BoardView :columns="board" creatable @open="opened = $event" @create="created = $event" />
       </BlockSection>
       <BlockSection title="Backlog">
-        <template #actions><BaseButton>New item</BaseButton></template>
+        <template #actions
+          ><BaseButton
+            ><template #icon><PlusGlyph /></template>New item</BaseButton
+          ></template
+        >
         <GroupedList
           :groups="backlog"
           :fields="backlogFields"

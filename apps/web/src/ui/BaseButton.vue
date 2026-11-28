@@ -18,6 +18,11 @@ const {
   disabled?: boolean
 }>()
 
+// The `icon` slot is a leading icon (PlusGlyph on "New item"). Its wrapper is aria-hidden, so
+// the button keeps its text as its accessible name. Without an icon the template takes the
+// v-else branch, so it renders no placeholder comment and the markup is as before.
+defineSlots<{ default?: () => unknown; icon?: () => unknown }>()
+
 const classes = computed(() => [
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-control border px-3 font-normal',
   'cursor-pointer disabled:cursor-not-allowed',
@@ -33,6 +38,12 @@ const classes = computed(() => [
 
 <template>
   <button :type="type" :disabled="disabled" :class="classes">
-    <slot />
+    <template v-if="$slots.icon">
+      <span aria-hidden="true" class="-mr-0.5 inline-flex shrink-0" data-button-icon>
+        <slot name="icon" />
+      </span>
+      <slot />
+    </template>
+    <slot v-else />
   </button>
 </template>
