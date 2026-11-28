@@ -115,6 +115,17 @@
   --text-shadow-*: initial;
 }
 
+/*
+ * A hoverable row whose fill bleeds past its text (issue 311): the text stays on the page's
+ * left edge and the hover fill reaches 8px beyond it on both sides, with the control radius.
+ * The row must stretch in a flex column (not `w-full`), so its width grows by the bleed.
+ */
+@utility row-bleed {
+  margin-inline: calc(var(--spacing) * -2);
+  padding-inline: calc(var(--spacing) * 2);
+  border-radius: var(--radius-control);
+}
+
 @layer base {
   html {
     background: var(--bg);

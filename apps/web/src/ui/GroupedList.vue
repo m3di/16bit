@@ -80,8 +80,10 @@ function summaryText(row: ListRow): string {
 function onClick(row: ListRow) {
   if (!row.to) emit('open', row.id)
 }
+// The hairline is on the list item, aligned with the text; the row bleeds past it (row-bleed),
+// so the hover fill has room around the text.
 const rowClass = computed(() => [
-  'flex w-full cursor-pointer items-center border-b border-line text-left text-ink hover:bg-surface',
+  'row-bleed flex cursor-pointer items-center text-left text-ink hover:bg-surface',
   variant === 'summary' ? 'min-h-9 gap-2.5' : 'min-h-[38px] flex-wrap gap-x-3.5 gap-y-1.5 py-1',
 ])
 </script>
@@ -117,7 +119,10 @@ const rowClass = computed(() => [
         <li
           v-for="row in group.rows"
           :key="row.id"
-          :class="variant === 'summary' && 'last:[&>*]:border-b-0'"
+          :class="[
+            'flex flex-col border-b border-line',
+            variant === 'summary' && 'last:border-b-0',
+          ]"
         >
           <component
             :is="row.to ? RouterLink : 'button'"

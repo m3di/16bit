@@ -203,11 +203,12 @@ describe('views-only folders and "Opens on" in the sidebar (D76)', () => {
       opensOnFolderId: description.hub.opensOnFolderId,
     })
 
-  it('shows "Views only" in place of a views-only folder’s count', async () => {
+  it('shows neither a count nor a label for a views-only folder (issue 311)', async () => {
     const html = await sidebar()
-    const home = html.slice(html.indexOf('>Home<'))
-    expect(home.slice(0, 400)).toContain('Views only')
-    expect(html.match(/Views only/g)).toHaveLength(1)
+    const home = /<a [^>]*href="\/w\/w\/hubs\/bld\/home"[^>]*>.*?<\/a>/s.exec(html)?.[0] ?? ''
+    expect(home).toContain('>Home<')
+    expect(home).not.toContain('data-folder-count')
+    expect(html).not.toContain('Views only')
   })
 
   it('links the hub root by name when the hub opens on another folder', async () => {

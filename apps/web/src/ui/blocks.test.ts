@@ -263,6 +263,22 @@ describe('block components', () => {
     expect(html).toContain('href="/w/x/items/r1"')
   })
 
+  it('GroupedList rows bleed their hover fill past the text, under a hairline that does not', async () => {
+    for (const variant of ['table', 'summary'] as const) {
+      const html = await render(GroupedList, { groups: backlog, fields: backlogFields, variant })
+      for (const li of html.match(/<li [^>]*>\s*<button [^>]*>/g) ?? []) {
+        const [item = [], row = []] = li.split('<button').map((part) => part.split(/[\s"]/))
+        // The hairline stays on the item, aligned with the text and the group heading.
+        expect(item).toContain('border-b')
+        expect(row).not.toContain('border-b')
+        // The row stretches with the bleed (no w-full) and fills on hover.
+        expect(row).toEqual(expect.arrayContaining(['row-bleed', 'hover:bg-surface']))
+        expect(row).not.toContain('w-full')
+      }
+      expect(html.match(/row-bleed/g)?.length).toBeGreaterThan(0)
+    }
+  })
+
   it('GroupedList summary joins fields after a dot', async () => {
     const html = await render(GroupedList, {
       variant: 'summary',
