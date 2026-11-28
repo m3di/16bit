@@ -120,8 +120,16 @@ interface Seen {
 
 test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 100 rows in the DOM', async ({
   page,
-}) => {
+  browser,
+}, testInfo) => {
   await open(page)
+  // DIAG 307 (temporary): a Chromium trace of the scrolling on every other repeat.
+  const tracing = !!process.env['DIAG_307'] && testInfo.repeatEachIndex % 2 === 1
+  if (tracing)
+    await browser.startTracing(page, {
+      path: testInfo.outputPath(`trace-307-${String(testInfo.repeatEachIndex)}.json`),
+      categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8', 'v8.execute', 'blink.user_timing', 'loading', 'toplevel', 'disabled-by-default-v8.gc'],
+    })
   // A browser that does not report long tasks would pass this test with none seen.
   expect(
     await page.evaluate(() => PerformanceObserver.supportedEntryTypes.includes('longtask')),
@@ -131,8 +139,23 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
     const seen: Seen = { longTasks: [], scripts: [] }
     new PerformanceObserver((list) => {
       // Raw durations: rounding first would let a 50.4 ms task pass as 50.
-      for (const entry of list.getEntries()) seen.longTasks.push(entry.duration)
+      for (const entry of list.getEntries()) {
+        seen.longTasks.push(entry.duration)
+        ;(window as unknown as { diag: string[] }).diag.push(`task @${entry.startTime.toFixed(0)} ${entry.duration.toFixed(1)} ms`)
+      }
     }).observe({ type: 'longtask' })
+    ;(window as unknown as { diag: string[] }).diag = []
+    new PerformanceObserver((list) => {
+      for (const f of list.getEntries() as unknown as (LongFrame & { startTime: number; renderStart: number; styleAndLayoutStart: number; blockingDuration: number; scripts: { duration: number; forcedStyleAndLayoutDuration: number; startTime: number; invoker: string }[] })[]) {
+        if (f.duration <= 40) continue
+        const script = f.scripts.reduce((a, s) => a + s.duration, 0)
+        const forced = f.scripts.reduce((a, s) => a + s.forcedStyleAndLayoutDuration, 0)
+        const firstScript = f.scripts[0]?.startTime ?? f.renderStart
+        ;(window as unknown as { diag: string[] }).diag.push(
+          `frame @${f.startTime.toFixed(0)} ${f.duration.toFixed(0)} ms blocking ${f.blockingDuration.toFixed(0)} | before scripts ${(firstScript - f.startTime).toFixed(0)} | scripts ${script.toFixed(0)} (forced layout ${forced.toFixed(0)}) | renderStart +${(f.renderStart ? f.renderStart - f.startTime : -1).toFixed(0)} | style+layout +${(f.styleAndLayoutStart ? f.styleAndLayoutStart - f.startTime : -1).toFixed(0)} | after style ${(f.styleAndLayoutStart ? f.startTime + f.duration - f.styleAndLayoutStart : -1).toFixed(0)} | ${f.scripts.map((s) => s.invoker + ' ' + s.duration.toFixed(0)).join(', ')}`,
+        )
+      }
+    }).observe({ type: 'long-animation-frame' })
     new PerformanceObserver((list) => {
       for (const frame of list.getEntries() as unknown as LongFrame[]) {
         if (frame.duration <= longTask) continue
@@ -181,6 +204,12 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
         })
       }),
   )
+  if (tracing) await browser.stopTracing()
+  if (process.env['DIAG_307']) {
+    const diag = await page.evaluate(() => (window as unknown as { diag: string[] }).diag)
+    const res = await page.evaluate(() => performance.getEntriesByType('resource').filter((r) => r.name.includes('/query')).map((r) => `query @${r.startTime.toFixed(0)}-${r.responseEnd.toFixed(0)} ${String((r as PerformanceResourceTiming).encodedBodySize)} B`))
+    test.info().annotations.push({ type: 'diag307', description: [...diag, ...res].join('\n    ') })
+  }
   test.info().annotations.push({
     type: 'scrolling',
     description: `long tasks: ${longTasks.length ? longTasks.map((ms) => ms.toFixed(0)).join(', ') + ' ms' : 'none'}; most rows in the DOM: ${String(mostRows)}`,
