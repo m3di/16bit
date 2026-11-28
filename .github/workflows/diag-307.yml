@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
     services:
       db:
         image: postgres:18.7-alpine3.24
@@ -63,7 +63,7 @@ jobs:
       # As in CI: every spec, then the budgets.
       - run: pnpm e2e || true
       # Then the scroll budget alone, repeated.
-      - run: pnpm e2e --project budgets --no-deps -g "scrolling 50,000" --repeat-each 12 --output test-results-repeat || true
+      - run: pnpm e2e --project budgets --no-deps -g "scrolling 50,000" --repeat-each 25 --output test-results-repeat || true
       - if: ${{ always() }}
         run: cp /tmp/vmstat.txt /tmp/top.txt e2e/test-results/ || true
       - if: ${{ always() }}
