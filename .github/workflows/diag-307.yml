@@ -65,6 +65,8 @@ jobs:
       # Then the scroll budget alone, repeated.
       - run: pnpm e2e --project budgets --no-deps -g "scrolling 50,000" --repeat-each 25 --output test-results-repeat || true
       - if: ${{ always() }}
+        run: node e2e/perf/diag-307-trace.ts e2e/test-results e2e/test-results-repeat
+      - if: ${{ always() }}
         run: cp /tmp/vmstat.txt /tmp/top.txt e2e/test-results/ || true
       - if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
