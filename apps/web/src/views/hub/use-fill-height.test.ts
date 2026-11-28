@@ -110,11 +110,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function use(target: El) {
+function use(target: El, options: { unless?: string } = {}) {
   let height: Ref<number | null> | undefined
   const Probe = defineComponent({
     setup() {
-      height = useFillHeight(shallowRef(target) as unknown as Ref<HTMLElement | null>, 320)
+      height = useFillHeight(shallowRef(target) as unknown as Ref<HTMLElement | null>, 320, options)
       return () => h('div')
     },
   })
@@ -176,6 +176,26 @@ describe('useFillHeight', () => {
     runFrames()
     expect(observer.watched.has(notice)).toBe(false)
     expect(height.value).toBe(900 - 154 - 24)
+  })
+
+  it('neither measures nor observes while `unless` matches, and starts again below it', () => {
+    let wide = true
+    vi.stubGlobal('window', { ...win, matchMedia: () => ({ matches: wide }) })
+    const { height, observer } = use(current.area, { unless: '(min-width: 48rem)' })
+    expect(height.value).toBeNull()
+    expect(observer.watched.size).toBe(0)
+
+    wide = false
+    for (const fn of listeners.get('resize') ?? []) fn()
+    runFrames()
+    expect(height.value).toBe(900 - 154 - 24)
+    expect(observer.watched.size).toBeGreaterThan(0)
+
+    wide = true
+    for (const fn of listeners.get('resize') ?? []) fn()
+    runFrames()
+    expect(height.value).toBeNull()
+    expect(observer.watched.size).toBe(0)
   })
 
   it('never goes below the minimum', () => {

@@ -86,7 +86,10 @@ describe('SettingsLayout', () => {
     )
     expectShell(html)
     expect(classesOf(html, 'data-content-pane')).toContain('md:overflow-y-auto')
-    expect(/<nav[^>]*class="([^"]*)"/.exec(html)?.[1]).toContain('md:sticky')
+    // Only from lg up: between md and about 836px the nav wraps above the content (#313).
+    const nav = /<nav[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(' ') ?? []
+    expect(nav).toContain('lg:sticky')
+    expect(nav).not.toContain('md:sticky')
   })
 })
 

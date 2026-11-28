@@ -113,7 +113,7 @@ watch(
 // render every row.
 const MIN_HEIGHT = 320
 const area = ref<HTMLElement | null>(null)
-const measured = useFillHeight(area, MIN_HEIGHT)
+const measured = useFillHeight(area, MIN_HEIGHT, { unless: '(min-width: 48rem)' })
 const areaHeight = computed(() =>
   measured.value === null
     ? `max(${String(MIN_HEIGHT)}px, calc(100dvh - 260px))`

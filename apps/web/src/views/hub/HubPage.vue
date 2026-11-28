@@ -592,6 +592,16 @@ async function submitCreate(values: ItemValues) {
         class="flex-[1_1_320px]"
         @close="closePanel"
       >
+        <template v-if="notice" #notice>
+          <FormNotice data-notice>
+            {{ notice }}
+            <template #action>
+              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                >Dismiss</BaseButton
+              >
+            </template>
+          </FormNotice>
+        </template>
         <NewItemForm
           :key="createIn.folderId + JSON.stringify(createIn.values)"
           :columns="createColumns"
@@ -609,6 +619,16 @@ async function submitCreate(values: ItemValues) {
         class="flex-[1_1_320px]"
         @close="closePanel"
       >
+        <template v-if="notice" #notice>
+          <FormNotice data-notice>
+            {{ notice }}
+            <template #action>
+              <BaseButton size="sm" variant="quiet" @click="items.dismissNotice()"
+                >Dismiss</BaseButton
+              >
+            </template>
+          </FormNotice>
+        </template>
         <ItemPanelBody :item="panelItem" @retry="retryPanel">
           <template #default="{ item }">
             <RouterLink

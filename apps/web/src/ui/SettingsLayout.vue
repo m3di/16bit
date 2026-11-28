@@ -92,7 +92,7 @@ const blocked = (s: typeof state) => s === 'not-found' || s === 'no-permission'
         <nav
           v-if="!blocked(state)"
           :aria-label="navLabel"
-          class="flex w-full flex-col gap-px md:sticky md:top-7 md:w-[180px] md:shrink-0"
+          class="flex w-full flex-col gap-px lg:sticky lg:top-7 md:w-[180px] md:shrink-0"
         >
           <RouterLink
             v-for="s in sections"

@@ -107,6 +107,46 @@ test('at phone width the item panel opens as a full-screen sheet over the table 
   await expect(link).toBeFocused()
 })
 
+test('between md and lg the item panel is the same sheet, over the top bar and the sidebar', async ({
+  page,
+}) => {
+  const TABLET = { width: 900, height: 800 }
+  await page.setViewportSize(TABLET)
+  await open(page, BUGS, 'Bugs')
+  await expectFillsViewport(page)
+  await page.locator('[data-item-link]').first().click()
+  const panel = page.locator('[data-item-panel]')
+  await expect(panel).toHaveAttribute('data-sheet', '')
+  expect(await panel.boundingBox()).toEqual({ x: 0, y: 0, ...TABLET })
+  await expect(page.getByRole('dialog', { name: /./ })).toHaveAttribute('aria-modal', 'true')
+  const inert = (selector: string) =>
+    page.locator(selector).evaluate((el) => el.closest('[inert]') !== null)
+  expect(await inert('[data-top-bar]')).toBe(true)
+  expect(await inert('[data-sidebar-pane]')).toBe(true)
+  expect(await inert('[data-item-panel]')).toBe(false)
+})
+
+test('narrowing the window below lg with the panel open turns it into a sheet that still hands focus back', async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP)
+  await open(page, BUGS, 'Bugs')
+  // Opened by the arrow keys, the panel leaves focus on the row (keepFocus).
+  await page.locator('[data-virtual] tbody tr[data-index="0"]').focus()
+  await page.keyboard.press('ArrowDown')
+  const row = page.locator('[data-virtual] tbody tr[data-index="1"]')
+  const panel = page.locator('[data-item-panel]')
+  await expect(panel).toBeVisible()
+  await expect(row).toBeFocused()
+  await expect(panel).not.toHaveAttribute('data-sheet')
+  await page.setViewportSize({ width: 900, height: 800 })
+  await expect(panel).toHaveAttribute('data-sheet', '')
+  await expect(panel.locator('h2')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveCount(0)
+  await expect(row).toBeFocused()
+})
+
 test('the table follows the window when it is resized', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await open(page, BUGS, 'Bugs')
