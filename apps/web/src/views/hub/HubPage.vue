@@ -21,6 +21,7 @@ import { useLiveHub } from '../../sync/live.ts'
 import {
   AppShell,
   BaseButton,
+  PlusGlyph,
   FormNotice,
   ItemPanel,
   NoViewYet,
@@ -552,7 +553,7 @@ async function submitCreate(values: ItemValues) {
                 :disabled="list.state !== 'ready'"
                 data-new-item-button
                 @click="startCreate()"
-                >New item</BaseButton
+                ><template #icon><PlusGlyph /></template>New item</BaseButton
               >
             </div>
 

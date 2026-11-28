@@ -92,7 +92,9 @@ Links are `--ink` text with a 1px `--line2` bottom border instead of an underlin
 
 Material Symbols, outlined, light weight, 18px. The package is added with the first component that needs an icon. The mockups use coloured squares in place of icons; replace those with icons only where an icon adds meaning.
 
-Until the first real icon lands, these glyphs are inline pixel SVGs in `currentColor`, not Material Symbols: "more" on RowActionsMenu (three 2px squares), "close" on BaseDialog (a thin X), the moon and sun on ThemeSwitch (`ThemeGlyph`, a 12 by 12 pixel grid), and the gear on the dashboard hub card's settings link (an 8 by 8 gear around a square hole, `crispEdges`). The Material Symbols package arrives with the first component that needs any other icon.
+Until the first real icon lands, these glyphs are inline pixel SVGs in `currentColor`, not Material Symbols: "more" on RowActionsMenu (three 2px squares), "close" on BaseDialog (a thin X), the moon and sun on ThemeSwitch (`ThemeGlyph`, a 12 by 12 pixel grid), the gear on the dashboard hub card's settings link (an 8 by 8 gear around a square hole, `crispEdges`), and the plus that leads every "New item" (`PlusGlyph`, 10 by 10 with 2px arms, `crispEdges`, issue 315). The Material Symbols package arrives with the first component that needs any other icon.
+
+A button with text and an icon puts the icon first, through BaseButton's `icon` slot: the slot's wrapper is `aria-hidden`, so the button is named by its text alone ("New item", "New item in Next up"), and the icon sits 6px before the text in the text's colour. Every "New item" has the plus: the folder toolbar, the folder's empty state, the per-group and per-column buttons, and a section's actions.
 
 ### Theme switch
 
@@ -111,7 +113,7 @@ One 28px quiet icon button in the brand bar (AppShell, AuthLayout, SettingsLayou
 
 | Component | Notes |
 |---|---|
-| Button | Primary (accent fill), outline, quiet. Heights 28 and 32px. |
+| Button | Primary (accent fill), outline, quiet. Heights 28 and 32px. An optional leading icon (`icon` slot), hidden from the name (see Icons). |
 | Input, Select | 32px, `--line3` border |
 | StatusDot | 6px dot plus label |
 | Avatar | 5 by 5 pixel sprite generated deterministically from the principal ID, in a palette tint |

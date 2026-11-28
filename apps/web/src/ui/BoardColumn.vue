@@ -2,6 +2,7 @@
 import { useId } from 'vue'
 import { countLabel, moreText, type BoardCardData } from './blocks.ts'
 import BaseButton from './BaseButton.vue'
+import PlusGlyph from './PlusGlyph.vue'
 import BoardCard from './BoardCard.vue'
 import { paletteVar, type PaletteColor } from './palette.ts'
 
@@ -77,7 +78,7 @@ const headingId = useId()
       class="-ml-3 self-start"
       @click="emit('create')"
     >
-      New item<span class="sr-only"> in {{ label }}</span>
+      <template #icon><PlusGlyph /></template>New item<span class="sr-only"> in {{ label }}</span>
     </BaseButton>
   </div>
 </template>

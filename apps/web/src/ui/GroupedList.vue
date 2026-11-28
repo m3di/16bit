@@ -14,6 +14,7 @@ import {
   type ListRow,
 } from './blocks.ts'
 import BaseButton from './BaseButton.vue'
+import PlusGlyph from './PlusGlyph.vue'
 import BlockStatus from './BlockStatus.vue'
 import FieldText from './FieldText.vue'
 import { paletteVar } from './palette.ts'
@@ -185,7 +186,9 @@ const rowClass = computed(() => [
       </p>
       <div v-if="creatable" class="py-1">
         <BaseButton variant="quiet" size="sm" class="-ml-3" @click="emit('create', group.id)">
-          New item<span v-if="group.label" class="sr-only"> in {{ group.label }}</span>
+          <template #icon><PlusGlyph /></template>New item<span v-if="group.label" class="sr-only">
+            in {{ group.label }}</span
+          >
         </BaseButton>
       </div>
     </div>

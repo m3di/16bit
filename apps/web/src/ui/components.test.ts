@@ -6,6 +6,7 @@ import BaseInput from './BaseInput.vue'
 import BaseSelect from './BaseSelect.vue'
 import FormNotice from './FormNotice.vue'
 import PixelAvatar from './PixelAvatar.vue'
+import PlusGlyph from './PlusGlyph.vue'
 import SizeMeter from './SizeMeter.vue'
 import StateBlock from './StateBlock.vue'
 import StatusDot from './StatusDot.vue'
@@ -17,6 +18,26 @@ describe('components', () => {
   it('Button is a native button that does not submit by default', async () => {
     const html = await render(BaseButton, {}, 'Save')
     expect(html).toMatch(/^<button type="button"/)
+    expect(html).not.toContain('data-button-icon')
+  })
+
+  it('Button puts a leading icon before its text, hidden from the accessible name', async () => {
+    const html = (
+      await renderToString(
+        createSSRApp({
+          render: () =>
+            h(BaseButton, null, { icon: () => h(PlusGlyph), default: () => 'New item' }),
+        }),
+      )
+    ).replace(/<!--.*?-->/g, '')
+    expect(html).toMatch(
+      /^<button type="button"[^>]*><span aria-hidden="true"[^>]*data-button-icon><svg aria-hidden="true" focusable="false"[^>]*data-glyph="plus"/,
+    )
+    // Everything outside aria-hidden is the name: the text alone.
+    const visibleText = html
+      .replace(/<span aria-hidden="true".*?<\/span>/, '')
+      .replace(/<[^>]+>/g, '')
+    expect(visibleText).toBe('New item')
   })
 
   it('Input ties its label, hint, and error to the input', async () => {

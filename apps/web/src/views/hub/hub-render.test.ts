@@ -170,6 +170,17 @@ describe('ItemsBlock', () => {
     expect(await block(ready(0), [])).toContain('New item')
   })
 
+  it('leads "New item" with a hidden plus and keeps its name', async () => {
+    const html = (await block(ready(0), [])).replace(/<!--.*?-->/g, '')
+    const button = /<button[^>]*>.*?<\/button>/.exec(html)?.[0] ?? ''
+    expect(button).toMatch(
+      /<span aria-hidden="true"[^>]*data-button-icon><svg[^>]*data-glyph="plus"/,
+    )
+    expect(button.replace(/<span aria-hidden="true".*?<\/span>/, '').replace(/<[^>]+>/g, '')).toBe(
+      'New item',
+    )
+  })
+
   it('offers no "New item" once the hub is read-only, and leaves the reason to the page', async () => {
     const html = await block(ready(0), [], true)
     expect(html).toContain('No items in this folder yet')

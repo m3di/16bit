@@ -3,7 +3,7 @@ import type { FolderAttributeDefinition, Item } from '@16bit/core'
 import { computed, ref, watch } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import type { RowWindows } from '../../ui/data-table.ts'
-import { BaseButton, DataTable, StateBlock, type TableColumn } from '../../ui/index.ts'
+import { BaseButton, DataTable, PlusGlyph, StateBlock, type TableColumn } from '../../ui/index.ts'
 import type { Load } from '../home/useDashboard.ts'
 import { useFillHeight } from './fill-height.ts'
 import { WINDOW_SIZE } from './folder-rows.ts'
@@ -170,7 +170,9 @@ const failedRanges = computed(() => {
       :message="readOnly || list.data.where ? '' : 'Items you add here show up in this table.'"
     >
       <template v-if="!readOnly && !list.data.where" #action>
-        <BaseButton size="sm" @click="emit('create')">New item</BaseButton>
+        <BaseButton size="sm" @click="emit('create')"
+          ><template #icon><PlusGlyph /></template>New item</BaseButton
+        >
       </template>
     </StateBlock>
     <div v-else class="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
