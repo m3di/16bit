@@ -124,7 +124,10 @@ test('scrolling 50,000 items has no main-thread task over 50 ms and keeps under 
 }, testInfo) => {
   await open(page)
   // DIAG 307 (temporary): a Chromium trace of the scrolling on every other repeat.
-  const tracing = !!process.env['DIAG_307'] && testInfo.repeatEachIndex % 2 === 1
+  const tracing = !!process.env['DIAG_307']
+  // DIAG 307 A/B: odd repeats stop the placeholder pulse animation.
+  if (tracing && testInfo.repeatEachIndex % 2 === 1)
+    await page.addStyleTag({ content: '[data-placeholder] .animate-pulse { animation: none !important; }' })
   if (tracing)
     await browser.startTracing(page, {
       path: testInfo.outputPath(`trace-307-${String(testInfo.repeatEachIndex)}.json`),

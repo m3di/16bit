@@ -50,6 +50,15 @@ for (const file of process.argv.slice(2).flatMap((d) => find(d))) {
     '  invalidations: ' +
       [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, n]) => `${k} x${String(n)}`).join('; '),
   )
+  const all = onMain
+    .filter((e) => e.name === 'ThreadControllerImpl::RunTask' && (e.dur ?? 0) > 8_000)
+    .map((e) => (e.dur ?? 0) / 1000)
+    .sort((a, b) => a - b)
+  const q = (f: number) => (all[Math.floor(f * (all.length - 1))] ?? 0).toFixed(1)
+  const variant = /repeat(\d+)/.exec(file)?.[1]
+  console.log(
+    `STATS ${Number(variant ?? 0) % 2 === 1 ? 'B-no-pulse' : 'A-baseline'} tasks>8ms ${String(all.length)} p50 ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} max ${q(1)} over30 ${String(all.filter((d) => d > 30).length)} over40 ${String(all.filter((d) => d > 40).length)}`,
+  )
   console.log(`== ${file}: ${String(tasks.length)} main-thread tasks over 30 ms`)
   const t0 = onMain.reduce((m, e) => Math.min(m, e.ts), Infinity)
   for (const task of tasks) {
