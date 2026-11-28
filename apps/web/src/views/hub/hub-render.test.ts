@@ -391,7 +391,13 @@ describe('DataTable and ItemPanel', () => {
     )
     const scroll = /<div class="([^"]*)" data-item-panel-scroll/.exec(html)?.[1]?.split(' ') ?? []
     expect(scroll).toEqual(
-      expect.arrayContaining(['min-h-0', 'flex-1', 'overflow-y-auto', 'overscroll-y-contain']),
+      expect.arrayContaining([
+        'relative',
+        'min-h-0',
+        'flex-1',
+        'overflow-y-auto',
+        'overscroll-y-contain',
+      ]),
     )
     expect(html).toMatch(/data-item-panel-scroll[^>]*>[\s\S]*BLD-4[\s\S]*Body/)
     // Without a browser there is no viewport to read: it renders as the pane.

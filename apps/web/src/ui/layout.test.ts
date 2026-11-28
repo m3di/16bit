@@ -30,9 +30,11 @@ const render = async (
 const classesOf = (html: string, attr: string) =>
   new RegExp(`<\\w+ class="([^"]*)"[^>]*${attr}`).exec(html)?.[1]?.split(' ') ?? []
 
+// Every pane scroller (and the shell) is `relative`, so absolutely placed `sr-only` text inside
+// it is clipped by it instead of growing the document past the viewport (QA on #313).
 const expectShell = (html: string) => {
   expect(classesOf(html, 'data-app-shell')).toEqual(
-    expect.arrayContaining(['min-h-dvh', 'md:h-dvh', 'md:overflow-hidden']),
+    expect.arrayContaining(['relative', 'min-h-dvh', 'md:h-dvh', 'md:overflow-hidden']),
   )
   expect(classesOf(html, 'data-top-bar')).toEqual(
     expect.arrayContaining(['sticky', 'top-0', 'shrink-0', 'bg-bg']),
@@ -44,10 +46,10 @@ describe('AppShell', () => {
     const html = await render(AppShell, {}, { sidebar: () => 'Folders', default: () => 'Main' })
     expectShell(html)
     expect(classesOf(html, 'data-sidebar-pane')).toEqual(
-      expect.arrayContaining(['md:w-[208px]', 'md:overflow-y-auto']),
+      expect.arrayContaining(['relative', 'md:w-[208px]', 'md:overflow-y-auto']),
     )
     expect(classesOf(html, 'data-content-pane')).toEqual(
-      expect.arrayContaining(['md:min-h-0', 'md:overflow-y-auto']),
+      expect.arrayContaining(['relative', 'md:min-h-0', 'md:overflow-y-auto']),
     )
   })
 
@@ -55,7 +57,9 @@ describe('AppShell', () => {
     const html = await render(AppShell, {}, { default: () => 'Main' })
     expectShell(html)
     expect(html).not.toContain('data-sidebar-pane')
-    expect(classesOf(html, 'data-content-pane')).toContain('md:overflow-y-auto')
+    expect(classesOf(html, 'data-content-pane')).toEqual(
+      expect.arrayContaining(['relative', 'md:overflow-y-auto']),
+    )
   })
 
   it('only clips the content when the page lays out its own panes', async () => {
@@ -85,7 +89,9 @@ describe('SettingsLayout', () => {
       { default: () => 'Content' },
     )
     expectShell(html)
-    expect(classesOf(html, 'data-content-pane')).toContain('md:overflow-y-auto')
+    expect(classesOf(html, 'data-content-pane')).toEqual(
+      expect.arrayContaining(['relative', 'md:overflow-y-auto']),
+    )
     // Only from lg up: between md and about 836px the nav wraps above the content (#313).
     const nav = /<nav[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(' ') ?? []
     expect(nav).toContain('lg:sticky')

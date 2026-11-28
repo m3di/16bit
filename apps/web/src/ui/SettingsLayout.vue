@@ -62,7 +62,10 @@ const blocked = (s: typeof state) => s === 'not-found' || s === 'no-permission'
 <template>
   <!-- From `md` up the top bar stays put and the content scrolls under it, as in AppShell (D85).
        The section navigation is short, so it stays in place at the top of that scroll. -->
-  <div class="flex min-h-dvh flex-col bg-bg text-ink md:h-dvh md:overflow-hidden" data-app-shell>
+  <div
+    class="relative flex min-h-dvh flex-col bg-bg text-ink md:h-dvh md:overflow-hidden"
+    data-app-shell
+  >
     <header
       class="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2 sm:px-7"
       data-top-bar
@@ -85,7 +88,10 @@ const blocked = (s: typeof state) => s === 'not-found' || s === 'no-permission'
     </header>
 
     <!-- Section navigation beside the content; at phone width it stacks above it. -->
-    <div class="flex min-w-0 flex-1 flex-col md:min-h-0 md:overflow-y-auto" data-content-pane>
+    <div
+      class="relative flex min-w-0 flex-1 flex-col md:min-h-0 md:overflow-y-auto"
+      data-content-pane
+    >
       <div
         class="mx-auto box-border flex w-full max-w-[1280px] flex-wrap items-start gap-10 px-4 py-7 sm:px-7"
       >

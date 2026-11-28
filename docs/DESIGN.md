@@ -209,6 +209,7 @@ The maintainer's rule (D85): when looks and function trade off, pick function an
 - A folder showing its table: the items area fills the rest of the main pane and the table is the only scroller there; the title, toolbar and column headers stay put. No empty space under it and no second scrollbar. On a very short window the area stays at least 320px high and the main pane scrolls.
 - A root view with many blocks: the main pane scrolls, and blocks keep their natural height (lists are already capped with "+N more").
 - No scroller nested inside a scroller, except wide tables scrolling sideways.
+- Every pane scroller, and the shell itself, is `relative`. Absolutely placed `sr-only` text then has the pane as its containing block, so the pane clips it; without that it grows the document and the whole shell scrolls (QA on #313).
 - Nothing sets `overscroll-behavior-x` to `contain` or `none`, so a two-finger swipe goes back from any part of the page. Scroll boxes that must not hand their scroll on to the page use `overscroll-y-contain`.
 
 **Below `md`** (phones) the page scrolls as one, with the top bar sticky. The sidebar stacks above the content (see Responsiveness), the items area reaches the bottom of the viewport with the table scrolling inside it (issue 232), and the item panel opens as a full-screen sheet with its own scroll. Independent panes on a phone make things worse.

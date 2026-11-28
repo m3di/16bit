@@ -85,6 +85,22 @@ describe('ItemPanel as a sheet', () => {
     expect(overflow().style.overflow).toBe('')
   })
 
+  it('falls back to returnFocusTo when nothing outside it had focus', async () => {
+    const link = { focus: vi.fn() }
+    const querySelector = vi.fn(() => link)
+    vi.stubGlobal('document', {
+      body: null,
+      activeElement: null,
+      documentElement: { style: { overflow: '' } },
+      querySelector,
+    })
+    const { unmount } = mount(ItemPanel, { title: 'BLD-4', returnFocusTo: '[data-item-link]' })
+    await nextTick()
+    unmount()
+    expect(querySelector).toHaveBeenCalledWith('[data-item-link]')
+    expect(link.focus).toHaveBeenCalledOnce()
+  })
+
   it('leaves the notice to the page once it is a pane again', async () => {
     const { root } = mount(WithNotice, {})
     await nextTick()

@@ -6,6 +6,7 @@ const {
   title,
   label = 'Item',
   keepFocus,
+  returnFocusTo = '',
 } = defineProps<{
   /** The item's display ID or name. */
   title: string
@@ -17,6 +18,11 @@ const {
    * sheet (below `lg`) covers the table, so it always takes focus.
    */
   keepFocus?: boolean
+  /**
+   * A selector for where focus goes when the sheet closes and what opened it is gone or was
+   * inside the panel, such as the selected row's link.
+   */
+  returnFocusTo?: string
 }>()
 
 defineSlots<{
@@ -87,7 +93,13 @@ watch(sheet, (on) => {
 onBeforeUnmount(() => {
   const wasSheet = restoreInert !== null
   setModal(false)
-  if (wasSheet && returnTo?.isConnected) returnTo.focus()
+  if (!wasSheet) return
+  const target = returnTo?.isConnected
+    ? returnTo
+    : returnFocusTo
+      ? document.querySelector<HTMLElement>(returnFocusTo)
+      : null
+  target?.focus()
 })
 
 // From `lg` up the panel is a pane beside the content (D85): as tall as the content pane, adding
@@ -109,7 +121,7 @@ onBeforeUnmount(() => {
     @keydown.esc="emit('close')"
   >
     <div
-      class="box-border flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-y-contain px-4 pb-5 sm:px-5"
+      class="relative box-border flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-y-contain px-4 pb-5 sm:px-5"
       :role="sheet ? 'dialog' : undefined"
       :aria-modal="sheet ? 'true' : undefined"
       :aria-labelledby="sheet ? headingId : undefined"
